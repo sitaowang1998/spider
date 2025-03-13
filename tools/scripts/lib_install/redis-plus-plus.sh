@@ -46,7 +46,11 @@ if [ ${EUID:-$(id -u)} -ne 0 ] ; then
 fi
 
 # Get number of cpu cores
-num_cpus=$(grep -c ^processor /proc/cpuinfo)
+if [ "$(uname -s)" == "Darwin" ]; then
+  num_cpus=$(sysctl -n hw.ncpu)
+else
+  num_cpus=$(grep -c ^processor /proc/cpuinfo)
+fi
 
 # Download
 mkdir -p $temp_dir
