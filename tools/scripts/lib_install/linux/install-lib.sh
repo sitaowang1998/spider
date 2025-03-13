@@ -25,3 +25,5 @@ lib_install_scripts_dir=$script_dir/..
 "$lib_install_scripts_dir"/mariadb-connector-cpp.sh 1.1.5
 "$lib_install_scripts_dir"/boost.sh 1.86.0
 "$lib_install_scripts_dir"/msgpack.sh 7.0.0
+"$lib_install_scripts_dir"/hiredis.sh 1.2.0
+"$lib_install_scripts_dir"/redis-plus-plus.sh 1.3.13 # redis-plus-plus depends on hiredis
