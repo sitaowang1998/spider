@@ -62,10 +62,8 @@ if [ ! -e ${extracted_dir} ] ; then
 fi
 
 # Build
+# Cmake in v1.2.0 does not support static library. Use make instead.
 cd ${extracted_dir}
-mkdir -p cmake-build-release
-cd cmake-build-release
-cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON ../
 make -j${num_cpus}
 
 # Check if checkinstall is installed
