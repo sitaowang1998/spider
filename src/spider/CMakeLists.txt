@@ -3,6 +3,7 @@ set(SPIDER_CORE_SOURCES
     storage/mysql/MySqlConnection.cpp
     storage/mysql/MySqlStorage.cpp
     storage/redis/RedisConnection.cpp
+    storage/redis/RedisStorage.cpp
     worker/FunctionManager.cpp
     worker/FunctionNameManager.cpp
     io/msgpack_message.cpp
@@ -31,6 +32,8 @@ set(SPIDER_CORE_HEADERS
     storage/mysql/MySqlStorage.hpp
     storage/mysql/MySqlJobSubmissionBatch.hpp
     storage/redis/RedisConnection.hpp
+    storage/redis/RedisJobSubmissionBatch.hpp
+    storage/redis/RedisStorage.hpp
     storage/JobSubmissionBatch.hpp
     worker/FunctionManager.hpp
     worker/FunctionNameManager.hpp
