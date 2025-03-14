@@ -53,7 +53,6 @@ public:
             std::string const& key,
             std::string* value
     ) -> StorageErr override;
-    [[nodiscard]] auto get_url() const -> std::string const& override;
 };
 
 class RedisMetadataStorage : public MetadataStorage {
@@ -147,7 +146,6 @@ public:
             boost::uuids::uuid id,
             std::string const& state
     ) -> StorageErr override;
-    [[nodiscard]] auto get_url() const -> std::string const& override;
 };
 
 }  // namespace spider::core
