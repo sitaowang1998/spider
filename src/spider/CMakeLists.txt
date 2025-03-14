@@ -1,6 +1,8 @@
 # set variable as CACHE INTERNAL to access it from other scope
 set(SPIDER_CORE_SOURCES
     storage/mysql/MySqlConnection.cpp
+    storage/mysql/MySqlStorageFactory.cpp
+    storage/mysql/MySqlJobSubmissionBatch.cpp
     storage/mysql/MySqlStorage.cpp
     storage/redis/RedisConnection.cpp
     storage/redis/RedisStorage.cpp
@@ -29,12 +31,14 @@ set(SPIDER_CORE_HEADERS
     storage/StorageConnection.hpp
     storage/mysql/mysql_stmt.hpp
     storage/mysql/MySqlConnection.hpp
+    storage/mysql/MySqlStorageFactory.hpp
     storage/mysql/MySqlStorage.hpp
     storage/mysql/MySqlJobSubmissionBatch.hpp
     storage/redis/RedisConnection.hpp
     storage/redis/RedisJobSubmissionBatch.hpp
     storage/redis/RedisStorage.hpp
     storage/JobSubmissionBatch.hpp
+    storage/StorageFactory.hpp
     worker/FunctionManager.hpp
     worker/FunctionNameManager.hpp
     CACHE INTERNAL
@@ -97,6 +101,7 @@ target_link_libraries(
         Boost::program_options
         Boost::system
         ${CMAKE_DL_LIBS}
+        fmt::fmt
         spdlog::spdlog
 )
 
@@ -113,6 +118,7 @@ target_link_libraries(
         Boost::program_options
         Boost::system
         ${CMAKE_DL_LIBS}
+        fmt::fmt
         spdlog::spdlog
 )
 add_dependencies(spider_worker spider_task_executor)
@@ -138,6 +144,7 @@ target_link_libraries(
         Boost::headers
         Boost::program_options
         absl::flat_hash_map
+        fmt::fmt
         spdlog::spdlog
 )
 
