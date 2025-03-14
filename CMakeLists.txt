@@ -133,6 +133,21 @@ else()
     endif()
 endif()
 
+# Find and setup redis++
+if(SPIDER_USER_STATIC_LIBS)
+    set(redis++_USE_STATIC_LIBS ON)
+endif()
+find_package(redis++ 1.3.13 REQUIRED)
+if(redis++_FOUND)
+    message(STATUS "Found redis++ ${redis++_VERSION}")
+else()
+    if(SPIDER_USER_STATIC_LIBS)
+        message(FATAL_ERROR "Could not find static libraries for redis++")
+    else()
+        message(FATAL_ERROR "Could not find libraries for redis++")
+    endif()
+endif()
+
 # Find and setup MariaDBClient library
 if(SPIDER_USE_STATIC_LIBS)
     # NOTE: We can't statically link to MariaDBClient since it's GPL

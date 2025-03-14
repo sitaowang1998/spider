@@ -46,6 +46,7 @@ target_link_libraries(
         absl::flat_hash_map
         MariaDBClientCpp::MariaDBClientCpp
         msgpack-cxx
+        redis++::redis++
 )
 target_link_libraries(spider_core PRIVATE fmt::fmt)
 
