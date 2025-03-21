@@ -74,19 +74,37 @@ auto FifoPolicy::schedule_next(
         std::string const& worker_addr
 ) -> std::optional<boost::uuids::uuid> {
     if (m_tasks.empty()) {
+        auto start_time = std::chrono::system_clock::now();
         fetch_tasks();
         if (m_tasks.empty()) {
             return std::nullopt;
         }
+        auto end_time = std::chrono::system_clock::now();
+        std::cerr << fmt::format(
+                "Fetch task from {} to {}\n",
+                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
+                        .count()
+        );
     }
     auto const reverse_begin = std::reverse_iterator(m_tasks.end());
     auto const reverse_end = std::reverse_iterator(m_tasks.begin());
+    auto start_time = std::chrono::system_clock::now();
     auto const it = std::find_if(reverse_begin, reverse_end, [&](core::Task const& task) {
         return task_locality_satisfied(task, worker_addr);
     });
     if (it == reverse_end) {
         return std::nullopt;
     }
+    auto end_time = std::chrono::system_clock::now();
+    std::cerr << fmt::format(
+            "Task locality from {} to {}\n",
+            std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
+                    .count()
+    );
     boost::uuids::uuid const task_id = it->get_id();
     for (core::TaskInput const& input : it->get_inputs()) {
         std::optional<boost::uuids::uuid> const data_id = input.get_data_id();
@@ -115,7 +133,8 @@ auto FifoPolicy::fetch_tasks() -> void {
             = [&](boost::uuids::uuid const task_id) -> std::chrono::system_clock::time_point {
         boost::uuids::uuid job_id;
         if (false == m_metadata_store->get_task_job_id(*m_conn, task_id, &job_id).success()) {
-            throw std::runtime_error(fmt::format("Task with id {} not exists.", to_string(task_id))
+            throw std::runtime_error(
+                    fmt::format("Task with id {} not exists.", to_string(task_id))
             );
         }
         if (job_metadata_map.contains(job_id)) {

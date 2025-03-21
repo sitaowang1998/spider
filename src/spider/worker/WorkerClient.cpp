@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <spdlog/spdlog.h>
 
 #include "../core/Driver.hpp"
@@ -118,6 +119,7 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         }
         boost::uuids::uuid const task_id = response.get_task_id();
 
+        auto start_time = std::chrono::system_clock::now();
         std::variant<std::unique_ptr<core::StorageConnection>, core::StorageErr> conn_result
                 = m_storage_factory->provide_storage_connection();
         if (std::holds_alternative<core::StorageErr>(conn_result)) {
@@ -131,6 +133,12 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
 
         core::TaskInstance const instance{task_id};
         core::StorageErr const err = m_metadata_store->create_task_instance(*conn, instance);
+        auto end_time = std::chrono::system_clock::now();
+        std::cerr << fmt::format("[Worker] create_task_instance: {} {} from {} to {}\n",
+            to_string(task_id), to_string(instance.id),
+            std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+        );
         if (!err.success()) {
             return std::nullopt;
         }

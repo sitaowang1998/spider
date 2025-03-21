@@ -248,6 +248,7 @@ auto task_loop(
 
         {
             // Keep the scope of RAII storage connection
+            auto start_time = std::chrono::system_clock::now();
             std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
                     conn_result = storage_factory->provide_storage_connection();
             if (std::holds_alternative<spider::core::StorageErr>(conn_result)) {
@@ -266,6 +267,14 @@ auto task_loop(
                 spdlog::error("Failed to fetch task detail: {}", err.description);
                 continue;
             }
+            auto end_time = std::chrono::system_clock::now();
+            std::cerr << fmt::format(
+                    "[Worker] Fetch task {} {} from {} to {}\n",
+                    to_string(task_id),
+                    to_string(task.get_id()),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+            );
 
             // Set up arguments
             optional_args_buffers = get_args_buffers(task);
@@ -280,6 +289,7 @@ auto task_loop(
         }
         std::vector<msgpack::sbuffer> const& args_buffers = optional_args_buffers.value();
 
+        auto start_time = std::chrono::system_clock::now();
         // Execute task
         spider::worker::TaskExecutor executor{
                 context,
@@ -293,6 +303,14 @@ auto task_loop(
 
         context.run();
         executor.wait();
+        auto end_time = std::chrono::system_clock::now();
+        std::cerr << fmt::format(
+                "[Worker] Execute task {} {} from {} to {}\n",
+                to_string(task_id),
+                to_string(task.get_id()),
+                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+        );
 
         std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
                 conn_result = storage_factory->provide_storage_connection();
@@ -351,6 +369,7 @@ auto task_loop(
         std::vector<spider::core::TaskOutput> const& outputs = optional_outputs.value();
         // Submit result
         spdlog::debug("Submitting result for task {}", boost::uuids::to_string(task_id));
+        start_time = std::chrono::system_clock::now();
         for (int i = 0; i < cRetryCount; ++i) {
             err = metadata_store->task_finish(*conn, instance, outputs);
             if (err.success()) {
@@ -365,6 +384,14 @@ auto task_loop(
                 break;
             }
         }
+        end_time = std::chrono::system_clock::now();
+        std::cerr << fmt::format(
+                "[Worker] Submit task {} {} from {} to {}\n",
+                to_string(task_id),
+                to_string(task.get_id()),
+                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+        );
         fail_task_id = std::nullopt;
         if (!err.success()) {
             spdlog::error("Submit task {} fails: {}", task.get_function_name(), err.description);

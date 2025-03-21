@@ -117,6 +117,7 @@ auto deserialize_message(msgpack::sbuffer const& buffer) -> std::optional<Schedu
 
 auto SchedulerServer::process_message(boost::asio::ip::tcp::socket socket
 ) -> boost::asio::awaitable<void> {
+    auto start_time = std::chrono::system_clock::now();
     // NOLINTBEGIN(clang-analyzer-core.CallAndMessage)
     std::optional<msgpack::sbuffer> const& optional_message_buffer
             = co_await core::receive_message_async(socket);
@@ -171,6 +172,15 @@ auto SchedulerServer::process_message(boost::asio::ip::tcp::socket socket
                 boost::uuids::to_string(request.get_worker_id()),
                 request.get_worker_addr()
         );
+    }
+    if (task_id.has_value()) {
+        auto end_time = std::chrono::system_clock::now();
+        std::cerr << "[Scheduler] Schedule task " << boost::uuids::to_string(task_id.value())
+                  << " worker " << boost::uuids::to_string(request.get_worker_id())
+                  << " at " << request.get_worker_addr()
+                  << " from " << std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
+                  << " to " << std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+                  << std::endl;
     }
     co_return;
 }
