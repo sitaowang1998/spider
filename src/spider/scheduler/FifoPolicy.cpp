@@ -1,6 +1,7 @@
 #include "FifoPolicy.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -30,21 +31,29 @@ auto FifoPolicy::schedule_next(
         boost::uuids::uuid const /*worker_id*/,
         std::string const& worker_addr
 ) -> std::optional<boost::uuids::uuid> {
-    if (m_tasks.empty()) {
-        auto start_time = std::chrono::system_clock::now();
-        fetch_tasks();
-        if (m_tasks.empty()) {
-            return std::nullopt;
-        }
-        auto end_time = std::chrono::system_clock::now();
-        std::cerr << fmt::format(
-                "Fetch task from {} to {}\n",
-                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
-                        .count(),
-                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
-                        .count()
-        );
+    std::optional<boost::uuids::uuid> const next_task = pop_next_task(worker_addr);
+    if (next_task.has_value()) {
+        return next_task;
     }
+    size_t const num_tasks = m_tasks.size();
+    auto const start_time = std::chrono::system_clock::now();
+    fetch_tasks();
+    auto const end_time = std::chrono::system_clock::now();
+    std::cerr << fmt::format(
+            "Fetch task from {} to {}\n",
+            std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
+                    .count()
+    );
+    if (m_tasks.size() == num_tasks) {
+        return std::nullopt;
+    }
+    return pop_next_task(worker_addr);
+}
+
+auto FifoPolicy::pop_next_task(std::string const& worker_addr
+) -> std::optional<boost::uuids::uuid> {
     auto const reverse_begin = std::reverse_iterator(m_tasks.end());
     auto const reverse_end = std::reverse_iterator(m_tasks.begin());
     auto const it

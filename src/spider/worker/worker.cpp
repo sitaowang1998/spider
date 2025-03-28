@@ -272,8 +272,13 @@ auto task_loop(
                     "[Worker] Fetch task {} {} from {} to {}\n",
                     to_string(task_id),
                     to_string(task.get_id()),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                            start_time.time_since_epoch()
+                    )
+                            .count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch(
+                                                                          ))
+                            .count()
             );
 
             // Set up arguments
@@ -308,8 +313,10 @@ auto task_loop(
                 "[Worker] Execute task {} {} from {} to {}\n",
                 to_string(task_id),
                 to_string(task.get_id()),
-                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
-                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
+                        .count()
         );
 
         std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
@@ -389,8 +396,10 @@ auto task_loop(
                 "[Worker] Submit task {} {} from {} to {}\n",
                 to_string(task_id),
                 to_string(task.get_id()),
-                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
-                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count()
+                std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch())
+                        .count()
         );
         fail_task_id = std::nullopt;
         if (!err.success()) {
