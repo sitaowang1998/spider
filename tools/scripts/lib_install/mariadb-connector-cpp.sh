@@ -61,8 +61,14 @@ git checkout "${version}"
 # Build
 mkdir build
 cd build
-# Setting USE_SYSTEM_INSTALLED_LIB mess up the install prefix, so set it manually
-cmake -DUSE_SYSTEM_INSTALLED_LIB=ON -DCMAKE_INSTALL_LIBDIR=/usr/local -DINSTALL_LAYOUT=RPM ..
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  # macOS
+  cmake -DCMAKE_INSTALL_LIBDIR=/usr/local -DINSTALL_LAYOUT=RPM ..
+else
+  # On Ubuntu, use system installed libmariadb-dev
+  # Setting USE_SYSTEM_INSTALLED_LIB mess up the install prefix, so set it manually
+  cmake -DUSE_SYSTEM_INSTALLED_LIB=ON -DCMAKE_INSTALL_LIBDIR=/usr/local -DINSTALL_LAYOUT=RPM ..
+fi
 make -j${num_cpus}
 
 # Install
@@ -70,4 +76,4 @@ install_command_prefix="${privileged_command_prefix}"
 ${install_command_prefix} make install
 
 # Clean up
-rm -rf $temp_dir
+${privileged_command_prefix} rm -rf $temp_dir

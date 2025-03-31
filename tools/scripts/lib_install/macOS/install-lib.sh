@@ -11,7 +11,6 @@ brew install \
   boost \
   fmt \
   spdlog \
-  mariadb-connector-c\
   msgpack-cxx
 
 script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
