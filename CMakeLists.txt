@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(SPIDER_BUILD_TESTING "Build Spider tests" ON)
+option(SPIDER_BUILD_STDL "Build Spider STDL compiler" ON)
 
 # Enable exporting compile commands
 set(CMAKE_EXPORT_COMPILE_COMMANDS
@@ -190,6 +191,13 @@ add_subdirectory(
 find_package(Threads REQUIRED)
 
 add_subdirectory(src/spider)
+
+if(SPIDER_BUILD_STDL)
+    find_package(antlr4-runtime REQUIRED)
+    message(STATUS "Found ANTLR4 runtime ${antlr-runtime_VERSION}")
+
+    add_subdirectory(src/stdl)
+endif()
 
 if(SPIDER_ENABLE_TESTS)
     add_subdirectory(tests)
