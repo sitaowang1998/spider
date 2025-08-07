@@ -42,6 +42,16 @@ class TaskGraph:
         else:
             self.output_tasks.add(task.task_id)
 
+    def merge_task_graph(self, task_graph: "TaskGraph") -> None:
+        """
+        Merges a task graph into this task graph.
+        :param task_graph: The task graph to be merged into this task graph.
+        """
+        self.tasks.update(task_graph.tasks)
+        self.dependencies.extend(task_graph.dependencies)
+        self.input_tasks.update(task_graph.input_tasks)
+        self.output_tasks.update(task_graph.output_tasks)
+
     def get_parents(self, task_id: TaskId) -> list[Task]:
         """
         Gets parent tasks of task.
