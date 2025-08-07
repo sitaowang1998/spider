@@ -31,7 +31,15 @@ class Driver:
         :param inputs: Task functions and task graphs to group.
         :return: The new task graph.
         """
-        return TaskGraph()
+        task_graph = TaskGraph()
+        for task in inputs:
+            if isinstance(task, TaskGraph):
+                task_graph._impl.merge(task._impl)
+                task_graph._impl.reset_task_ids()
+            else:
+                pass
+
+        return task_graph
 
     def chain(self, inputs: list[TaskFunction | TaskGraph]) -> TaskGraph:
         """

@@ -8,4 +8,4 @@ class TaskGraph:
 
     def __init__(self) -> None:
         """Creates an empty TaskGraph."""
-        self._graph = core.taskgraph.TaskGraph()
+        self._impl = core.taskgraph.TaskGraph()
