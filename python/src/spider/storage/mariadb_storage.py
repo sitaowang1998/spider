@@ -66,6 +66,37 @@ VALUES
   (?, ?, ?)"""
 
 
+GetJobStatus = """
+SELECT
+  `state`
+FROM
+  `jobs`
+WHERE
+  `id` = ?"""
+
+GetOutputTasks = """
+SELECT
+  `task_id`
+FROM
+  `output_tasks`
+WHERE
+  `job_id` = ?
+ORDER BY
+  `position`"""
+
+GetTaskOutputs = """
+SELECT
+  `type`,
+  `value`,
+  `data_id`
+FROM
+  `task_outputs`
+WHERE
+  `task_id` = ?
+ORDER BY
+  `position`"""
+
+
 class MariaDBStorage(Storage):
     """MariaDB Storage class."""
 
@@ -192,6 +223,68 @@ class MariaDBStorage(Storage):
                     )
                 self._conn.commit()
                 return [core.Job(job_id) for job_id in job_ids]
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def get_job_status(self, job: core.Job) -> core.JobStatus:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(GetJobStatus, (job.job_id.bytes,))
+                row = cursor.fetchone()
+                if row is None:
+                    msg = f"No job found with id {job.job_id}"
+                    raise StorageError(msg)
+                status_str = row[0]
+                match status_str:
+                    case "running":
+                        status = core.JobStatus.Running
+                    case "success":
+                        status = core.JobStatus.Succeeded
+                    case "fail":
+                        status = core.JobStatus.Failed
+                    case "cancel":
+                        status = core.JobStatus.Cancelled
+                    case _:
+                        msg = "Unknown job status"
+                        raise StorageError(msg)
+                self._conn.commit()
+                return status
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def get_job_results(self, job: core.Job) -> list[core.TaskOutput] | None:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(GetOutputTasks, (job.job_id.bytes,))
+                task_ids = [task_id for (task_id,) in cursor.fetchall()]
+
+                results = []
+                for task_id in task_ids:
+                    cursor.execute(GetTaskOutputs, (task_id,))
+                    for output_type, value, data_id in cursor.fetchall():
+                        if value is not None:
+                            results.append(
+                                core.TaskOutput(
+                                    type=output_type,
+                                    value=core.TaskOutputValue(value),
+                                )
+                            )
+                        elif data_id is not None:
+                            results.append(
+                                core.TaskOutput(
+                                    type=output_type,
+                                    value=core.TaskOutputData(data_id),
+                                )
+                            )
+                        else:
+                            self._conn.commit()
+                            return None
+                self._conn.commit()
+                return results
         except mariadb.Error as e:
             self._conn.rollback()
             raise StorageError(str(e)) from e
