@@ -96,6 +96,47 @@ WHERE
 ORDER BY
   `position`"""
 
+InsertData = """
+INSERT INTO
+  `data` (`id`, `value`, `hard_locality`)
+VALUES
+  (?, ?, ?)"""
+
+InsertDataLocality = """
+INSERT INTO
+  `data_locality` (`id`, `address`)
+VALUES
+  (?, ?)"""
+
+InsertDataRefDriver = """
+INSERT INTO
+  `data_ref_driver` (`id`, `driver_id`)
+VALUES
+  (?, ?)"""
+
+GetData = """
+SELECT
+  `value`,
+  `hard_locality`
+FROM
+  `data`
+WHERE
+  `id` = ?"""
+
+GetDataLocality = """
+SELECT
+  `address`
+FROM
+  `data_locality`
+WHERE
+  `id` = ?"""
+
+InsertDriver = """
+INSERT INTO
+  `drivers` (`id`)
+VALUES
+  (?)"""
+
 
 class MariaDBStorage(Storage):
     """MariaDB Storage class."""
@@ -193,7 +234,9 @@ class MariaDBStorage(Storage):
                         task_ids[graph_index][task_index].bytes,
                         position,
                         task_input.type,
-                        task_input.value.bytes,
+                        task_input.value.id.bytes
+                        if isinstance(task_input.value, core.Data)
+                        else task_input.value.bytes,
                     )
                     for graph_index, task_graph in enumerate(task_graphs)
                     for task_index, task in enumerate(task_graph.tasks)
@@ -296,10 +339,11 @@ class MariaDBStorage(Storage):
                                 )
                             )
                         elif data_id is not None:
+                            data = self.get_data(core.DataId(data_id))
                             results.append(
                                 core.TaskOutput(
                                     type=output_type,
-                                    value=core.TaskOutputData(data_id),
+                                    value=data,
                                 )
                             )
                         else:
@@ -307,6 +351,58 @@ class MariaDBStorage(Storage):
                             return None
                 self._conn.commit()
                 return results
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def create_driver_data(self, driver_id: core.DriverId, data: core.Data) -> None:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(
+                    InsertData,
+                    (data.id.bytes, data.value, data.hard_locality),
+                )
+                if data.localities:
+                    cursor.executemany(
+                        InsertDataLocality,
+                        [(data.id.bytes, locality.address) for locality in data.localities],
+                    )
+                cursor.execute(
+                    InsertDataRefDriver,
+                    (data.id.bytes, driver_id.bytes),
+                )
+                self._conn.commit()
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def get_data(self, data_id: core.DataId) -> core.Data:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(GetData, (data_id.bytes,))
+                row = cursor.fetchone()
+                if row is None:
+                    msg = f"No data found with id {data_id}"
+                    raise StorageError(msg)
+                value, hard_locality = row
+                data = core.Data(id=data_id, value=value, hard_locality=hard_locality)
+                cursor.execute(GetDataLocality, (data_id.bytes,))
+                for (address,) in cursor.fetchall():
+                    data.localities.append(core.DataLocality(address))
+                self._conn.commit()
+                return data
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def create_driver(self, driver_id: core.DriverId) -> None:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(InsertDriver, (driver_id.bytes,))
+                self._conn.commit()
         except mariadb.Error as e:
             self._conn.rollback()
             raise StorageError(str(e)) from e

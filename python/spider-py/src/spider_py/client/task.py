@@ -7,7 +7,7 @@ from typing import get_args, get_origin
 
 from spider_py import core
 from spider_py.client.data import Data
-from spider_py.core import TaskInput, TaskOutput, TaskOutputData, TaskOutputValue
+from spider_py.core import TaskInput, TaskOutput, TaskOutputValue
 from spider_py.type import to_tdl_type_str
 
 
@@ -72,13 +72,13 @@ def _process_return(task: core.Task, signature: inspect.Signature) -> None:
         for r in args:
             tdl_type_str = to_tdl_type_str(r)
             if r is Data:
-                task.task_outputs.append(TaskOutput(tdl_type_str, TaskOutputData()))
+                task.task_outputs.append(TaskOutput(tdl_type_str, core.DataId()))
             else:
                 task.task_outputs.append(TaskOutput(tdl_type_str, TaskOutputValue()))
     else:
         tdl_type_str = to_tdl_type_str(returns)
         if returns is Data:
-            task.task_outputs.append(TaskOutput(tdl_type_str, TaskOutputData()))
+            task.task_outputs.append(TaskOutput(tdl_type_str, core.DataId()))
         else:
             task.task_outputs.append(TaskOutput(tdl_type_str, TaskOutputValue()))
 

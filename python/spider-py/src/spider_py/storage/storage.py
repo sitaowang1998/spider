@@ -47,3 +47,29 @@ class Storage(ABC):
         :return: List of task outputs or None if the job has no results.
         :raises StorageError: If the storage operations fail.
         """
+
+    @abstractmethod
+    def create_driver_data(self, driver_id: core.DriverId, data: core.Data) -> None:
+        """
+        Creates data from a driver in the storage.
+        :param driver_id: The driver id.
+        :param data: Data to create.
+        :raises StorageError: If the storage operations fail.
+        """
+
+    @abstractmethod
+    def get_data(self, data_id: core.DataId) -> core.Data:
+        """
+        Gets data from the storage.
+        :param data_id:
+        :return: The Data object associated with `data_id`.
+        :raises StorageError: If the storage operations fail.
+        """
+
+    @abstractmethod
+    def create_driver(self, driver_id: core.DriverId) -> None:
+        """
+        Creates a driver in the storage.
+        :param driver_id:
+        :raises StorageError: If the storage operations fail.
+        """
