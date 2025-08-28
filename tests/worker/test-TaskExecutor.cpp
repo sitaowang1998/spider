@@ -62,6 +62,19 @@ auto get_libraries() -> std::vector<std::string> {
     return {lib_path.string()};
 }
 
+template <typename... Args>
+auto pack_args(Args&&... args) -> std::vector<msgpack::sbuffer> {
+    std::vector<msgpack::sbuffer> packed_args;
+    packed_args.reserve(sizeof...(args));
+    auto pack_args = [&packed_args](auto&& arg) {
+        msgpack::sbuffer buffer;
+        msgpack::pack(buffer, std::forward<decltype(arg)>(arg));
+        packed_args.emplace_back(std::move(buffer));
+    };
+    (pack_args(std::forward<Args>(args)), ...);
+    return packed_args;
+}
+
 TEMPLATE_LIST_TEST_CASE(
         "Task execute success",
         "[worker][storage]",
@@ -80,11 +93,11 @@ TEMPLATE_LIST_TEST_CASE(
             context,
             "sum_test",
             gen(),
+            spider::core::TaskLanguage::Cpp,
             spider::test::get_storage_url<TestType>(),
             get_libraries(),
             environment_variable,
-            2,
-            3
+            pack_args(2, 3)
     };
     context.run();
     executor.wait();
@@ -112,10 +125,11 @@ TEMPLATE_LIST_TEST_CASE(
             context,
             "sum_test",
             gen(),
+            spider::core::TaskLanguage::Cpp,
             spider::test::get_storage_url<TestType>(),
             get_libraries(),
             environment_variable,
-            2
+            pack_args(2)
     };
     context.run();
     executor.wait();
@@ -142,10 +156,11 @@ TEMPLATE_LIST_TEST_CASE(
             context,
             "error_test",
             gen(),
+            spider::core::TaskLanguage::Cpp,
             spider::test::get_storage_url<TestType>(),
             get_libraries(),
             environment_variable,
-            2
+            pack_args(2)
     };
     context.run();
     executor.wait();
@@ -204,10 +219,11 @@ TEMPLATE_LIST_TEST_CASE(
             context,
             "data_test",
             task_id,
+            spider::core::TaskLanguage::Cpp,
             spider::test::get_storage_url<TestType>(),
             get_libraries(),
             environment_variable,
-            data.get_id()
+            pack_args(data.get_id())
     };
     context.run();
     executor.wait();
@@ -247,11 +263,11 @@ TEMPLATE_LIST_TEST_CASE(
             context,
             "join_string_test",
             gen(),
+            spider::core::TaskLanguage::Cpp,
             spider::test::get_storage_url<TestType>(),
             get_libraries(),
             environment_variable,
-            input_1,
-            input_2
+            pack_args(input_1, input_2)
     };
     context.run();
     executor.wait();
