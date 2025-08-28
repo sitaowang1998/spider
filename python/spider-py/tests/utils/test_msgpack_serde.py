@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import msgpack
+import pydantic
 
 import spider_py
 from spider_py.utils.msgpack_serde import msgpack_decoder, msgpack_encoder
@@ -36,6 +37,21 @@ class User:
     address: Address
 
 
+class Chapter(pydantic.BaseModel):
+    """A simple chapter class for testing"""
+
+    title: str
+    start_page: int
+    end_page: int
+
+
+class Book(pydantic.BaseModel):
+    """A simple book class for testing"""
+
+    title: str
+    chapters: list[Chapter]
+
+
 class TestMsgpackSerde:
     """Test class for msgpack serialization and deserialization."""
 
@@ -52,7 +68,18 @@ class TestMsgpackSerde:
             [[spider_py.Int8(1), spider_py.Int8(2)], [spider_py.Int8(3), spider_py.Int8(4)]]
         )
 
-    def test_class(self) -> None:
-        """Tests serialization and deserialization of a custom class."""
+    def test_dataclass(self) -> None:
+        """Tests serialization and deserialization of a custom dataclass."""
         user = User(id=1, name="Alice", address=Address(city="Wonderland", zipcode="12345"))
         compare_serde(user)
+
+    def test_pydantic(self) -> None:
+        """Tests serialization and deserialization of a custom pydantic model."""
+        book = Book(
+            title="Book",
+            chapters=[
+                Chapter(title="One", start_page=1, end_page=2),
+                Chapter(title="Two", start_page=3, end_page=4),
+            ],
+        )
+        compare_serde(book)

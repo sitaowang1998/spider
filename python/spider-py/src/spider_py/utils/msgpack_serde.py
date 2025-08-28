@@ -4,6 +4,8 @@ from dataclasses import fields, is_dataclass
 from types import GenericAlias
 from typing import cast, get_args, get_origin
 
+import pydantic
+
 
 def msgpack_encoder(obj: object) -> list[object] | object:
     """
@@ -14,6 +16,8 @@ def msgpack_encoder(obj: object) -> list[object] | object:
     """
     if is_dataclass(obj):
         return {f.name: getattr(obj, f.name) for f in fields(obj)}
+    if isinstance(obj, pydantic.BaseModel):
+        return obj.model_dump()
     if isinstance(obj, list):
         return [msgpack_encoder(item) for item in obj]
     if isinstance(obj, dict):
@@ -21,31 +25,43 @@ def msgpack_encoder(obj: object) -> list[object] | object:
     return obj
 
 
-def _decode_class(cls: type, data: object) -> object:
+def _decode_pydantic(cls: type, data: object) -> object:
     """
     Decodes data into an instance of a `cls`.
-    This function only works for non-container classes (not lists or dicts).
+    This function only works for pydantic models.
+    :param cls: Pydantic model to decode.
+    :param data: Data to decode.
+    :return: Instance of `cls`.
+    :raises TypeError: If `data` is not an instance of `cls`.
+    """
+    msg = f"Cannot create instance of {cls} with {data!r}"
+    if not isinstance(data, dict):
+        raise TypeError(msg)
+    return cls(**data)
+
+
+def _decode_dataclass(cls: type, data: object) -> object:
+    """
+    Decodes data into an instance of a `cls`.
+    This function only works for dataclasses.
     :param cls: Class to deserialize into.
     :param data: Data to decode.
     :return: Instance of `cls`.
-    :raise: TypeError if `data` is not compatible with `cls`.
+    :raises TypeError: if `data` is not compatible with `cls`.
     """
     msg = f"Cannot create instance of {cls} with {data!r}"
-    if is_dataclass(cls):
-        if not isinstance(data, dict):
+    if not isinstance(data, dict):
+        raise TypeError(msg)
+    args = {}
+    parameters = {f.name: f for f in fields(cls)}
+    for name, value in data.items():
+        if name not in parameters:
             raise TypeError(msg)
-        args = {}
-        parameters = {f.name: f for f in fields(cls)}
-        for name, value in data.items():
-            if name not in parameters:
-                raise TypeError(msg)
-            arg_cls = parameters[name].type
-            if not isinstance(arg_cls, type) and not isinstance(arg_cls, GenericAlias):
-                raise TypeError(msg)
-            args[name] = msgpack_decoder(arg_cls, value)
-        return cls(**args)
-
-    return cls(data)
+        arg_cls = parameters[name].type
+        if not isinstance(arg_cls, type) and not isinstance(arg_cls, GenericAlias):
+            raise TypeError(msg)
+        args[name] = msgpack_decoder(arg_cls, value)
+    return cls(**args)
 
 
 def msgpack_decoder(cls: type | GenericAlias, data: object) -> object:
@@ -62,7 +78,13 @@ def msgpack_decoder(cls: type | GenericAlias, data: object) -> object:
     origin = get_origin(cls)
     if origin is None:
         # If `cls` does not have an origin, it is a concrete type.
-        return _decode_class(cast("type", cls), data)
+        cls_type = cast("type", cls)
+        if is_dataclass(cls_type):
+            return _decode_dataclass(cls_type, data)
+        if issubclass(cls_type, pydantic.BaseModel):
+            return _decode_pydantic(cls_type, data)
+        # Fall back to initialize the type directly with data.
+        return cls_type(data)  # type: ignore[call-arg]
 
     if origin is list:
         (key_type,) = get_args(cls)
