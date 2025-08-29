@@ -101,7 +101,7 @@ tasks:
     cmds:
       - "uv run pytest -m \"storage and not integration\""
 
-  spider-py-integration-tests:
+  spider-py-integration:
     deps:
       - task: ":build:cpp-target"
         vars:

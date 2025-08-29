@@ -55,9 +55,10 @@ pull requests, and daily. Currently, it only runs unit tests that don't require 
 
 You can use the following tasks to run integration tests.
 
-| Task                   | Description                     |
-|------------------------|---------------------------------|
-| `test:cpp-integration` | Runs all C++ integration tests. |
+| Task                         | Description                           |
+|------------------------------|---------------------------------------|
+| `test:cpp-integration`       | Runs all C++ integration tests.       |
+| `test:spider-py-integration` | Runs all spider-py integration tests. |
 
 
 [gh-workflow-unit-tests]: https://github.com/y-scope/spider/blob/main/.github/workflows/unit-tests.yaml
