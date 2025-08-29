@@ -1,7 +1,7 @@
 """Tests for client data module."""
 
 import pytest
-from test_driver import driver  # noqa: F401
+from .test_driver import driver  # noqa: F401
 
 from spider_py import Data, Driver
 
