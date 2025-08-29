@@ -83,8 +83,7 @@ def driver() -> spider_py.Driver:
     Fixture to create a spider driver.
     :return: A spider driver.
     """
-    driver = spider_py.Driver(g_storage_url)
-    return driver
+    return spider_py.Driver(g_storage_url)
 
 
 g_sleep_time = 5
