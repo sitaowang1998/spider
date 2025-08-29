@@ -19,9 +19,9 @@ VALUES
 
 InsertTask = """
 INSERT INTO
-  `tasks` (`id`, `job_id`, `func_name`, `state`, `timeout`, `max_retry`)
+  `tasks` (`id`, `job_id`, `func_name`, `language`, `state`, `timeout`, `max_retry`)
 VALUES
-  (?, ?, ?, ?, ?, ?)"""
+  (?, ?, ?, ?, ?, ?, ?)"""
 
 InsertTaskInputOutput = """
 INSERT INTO
@@ -186,6 +186,7 @@ class MariaDBStorage(Storage):
                             task_ids[graph_index][task_index].bytes,
                             job_id.bytes,
                             task.function_name,
+                            "python",
                             get_state_str(task.state),
                             task.timeout,
                             task.max_retries,

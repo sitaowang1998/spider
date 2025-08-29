@@ -12,6 +12,7 @@ from spider_py.client.job import Job
 from spider_py.client.task_graph import TaskGraph
 from spider_py.storage import MariaDBStorage, parse_jdbc_url
 from spider_py.type import to_tdl_type_str
+from spider_py.utils import msgpack_encoder
 
 
 class Driver:
@@ -49,8 +50,11 @@ class Driver:
         for task_graph, task_args in zip(graphs, args, strict=True):
             graph = deepcopy(task_graph._impl)
             arg_index = 0
+            for task in graph.tasks:
+                task.state = core.TaskState.Pending
             for task_id in graph.input_tasks:
                 task = graph.tasks[task_id]
+                task.state = core.TaskState.Ready
                 for task_input in task.task_inputs:
                     if arg_index >= len(task_args):
                         raise ValueError(msg)
@@ -60,13 +64,14 @@ class Driver:
                         task_input.value = arg._impl.id
                     else:
                         task_input.type = to_tdl_type_str(type(arg))
-                        task_input.value = core.TaskInputValue(msgpack.packb(arg))
+                        serialized_value = msgpack_encoder(arg)
+                        task_input.value = core.TaskInputValue(msgpack.packb(serialized_value))
                     arg_index += 1
             if arg_index != len(task_args):
                 raise ValueError(msg)
             task_graphs.append(graph)
 
-        jobs = self._storage.submit_jobs(self._driver_id, [graph._impl for graph in graphs])
+        jobs = self._storage.submit_jobs(self._driver_id, task_graphs)
         return [Job(job, self._storage) for job in jobs]
 
     def create_data(self, data: Data) -> None:
