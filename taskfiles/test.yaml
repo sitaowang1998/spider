@@ -83,7 +83,7 @@ tasks:
       # Don't create __pycache__ directories in the source tree.
       PYTHONDONTWRITEBYTECODE: "1"
     cmds:
-      - "uv run pytest"
+      - "uv run pytest -m \"not integration\""
 
   spider-py-non-storage-unit-tests:
     dir: "{{.G_SRC_PYTHON_DIR}}"
@@ -91,7 +91,7 @@ tasks:
       # Don't create __pycache__ directories in the source tree.
       PYTHONDONTWRITEBYTECODE: "1"
     cmds:
-      - "uv run pytest -m \"not storage\""
+      - "uv run pytest -m \"not storage and not integration\""
 
   spider-py-storage-unit-tests:
     dir: "{{.G_SRC_PYTHON_DIR}}"
@@ -99,4 +99,19 @@ tasks:
       # Don't create __pycache__ directories in the source tree.
       PYTHONDONTWRITEBYTECODE: "1"
     cmds:
-      - "uv run pytest -m \"storage\""
+      - "uv run pytest -m \"storage and not integration\""
+
+  spider-py-integration-tests:
+    deps:
+      - task: ":build:cpp-target"
+        vars:
+          TARGETS: [
+            "spider_worker",
+            "spider_scheduler"]
+    dir: "{{.G_SRC_PYTHON_DIR}}"
+    env:
+      # Don't create __pycache__ directories in the source tree.
+      PYTHONDONTWRITEBYTECODE: "1"
+      SPIDER_DIR: "{{.G_BUILD_SPIDER_DIR}}/src/spider"
+    cmds:
+      - "uv run pytest -m \"integration\""
