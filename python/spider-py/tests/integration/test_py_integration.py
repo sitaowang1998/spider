@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 import spider_py
-from .samples import add, swap, data_size, User, Name, count_name_length
-from spider_py import group, Int8, chain
+from spider_py import chain, group, Int8, Int64
+
+from .samples import add, count_name_length, data_size, Name, swap, User
 from .utils import g_scheduler_port
 
 g_storage_url = "jdbc:mariadb://127.0.0.1:3306/spider-storage?user=spider&password=password"
@@ -31,7 +32,7 @@ def start_scheduler_worker(
     spider_dir_str = os.getenv("SPIDER_DIR")
     if spider_dir_str is None:
         msg = "SPIDER_DIR environment variable is not set"
-        raise EnvironmentError(msg)
+        raise OSError(msg)
     spider_dir = Path(spider_dir_str).resolve()
     scheduler_cmds = [
         str(spider_dir / "spider_scheduler"),
@@ -100,7 +101,7 @@ class TestPyIntegration:
         (job,) = driver.submit_jobs([group([add])], [(Int8(1), Int8(2))])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == 3
+        assert job.get_results() == Int8(3)
 
     def test_multiple_jobs(self, driver: spider_py.Driver) -> None:
         """Tests multiple job submission and execution."""
@@ -111,7 +112,7 @@ class TestPyIntegration:
         time.sleep(g_sleep_time)
         for i, job in enumerate(jobs):
             assert job.get_status() == spider_py.JobStatus.Succeeded
-            assert job.get_results() == 3 + i * 4
+            assert job.get_results() == Int8(3 + i * 4)
 
     def test_complex_job(self, driver: spider_py.Driver) -> None:
         """Tests a more complex task graph execution."""
@@ -120,16 +121,16 @@ class TestPyIntegration:
         )
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == (7, 3)
+        assert job.get_results() == (Int8(7), Int8(3))
 
     def test_data_job(self, driver: spider_py.Driver) -> None:
         """Tests a job with data input and output."""
-        data = spider_py.Data("test_data".encode())
+        data = spider_py.Data(b"test_data")
         driver.create_data(data)
         (job,) = driver.submit_jobs([group([data_size])], [(data,)])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == len("test_data")
+        assert job.get_results() == Int64(len("test_data"))
 
     def test_dataclass_job(self, driver: spider_py.Driver) -> None:
         """Tests a job with dataclass input and output."""
@@ -137,4 +138,4 @@ class TestPyIntegration:
         (job,) = driver.submit_jobs([group([count_name_length])], [(user,)])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == len(user.name.first) + len(user.name.last) + 1
+        assert job.get_results() == Int64(len(user.name.first) + len(user.name.last) + 1)

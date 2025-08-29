@@ -56,4 +56,4 @@ def get_request_body(message: bytes) -> list[object]:
     if TaskExecutorRequestType.Arguments != message_header:
         msg = f"Message header is not an `Arguments`: {message_header}"
         raise InvalidRequestTypeError(msg)
-    return cast(list[object], data[1])
+    return cast("list[object]", data[1])

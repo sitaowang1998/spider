@@ -1,10 +1,11 @@
 """Tests for client job module."""
 
 import pytest
-from .test_driver import driver  # noqa: F401
-from .test_task_graph import double, swap
 
 from spider_py import chain, Driver, group, Int8, JobStatus
+
+from .test_driver import driver  # noqa: F401
+from .test_task_graph import double, swap
 
 
 class TestJob:
