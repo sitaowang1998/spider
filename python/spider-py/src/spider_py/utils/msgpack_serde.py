@@ -13,7 +13,7 @@ def msgpack_encoder(obj: object) -> list[object] | object:
     :return: List of field values.
     """
     if is_dataclass(obj):
-        return {f.name: getattr(obj, f.name) for f in fields(obj)}
+        return {f.name: msgpack_encoder(getattr(obj, f.name)) for f in fields(obj)}
     if isinstance(obj, list):
         return [msgpack_encoder(item) for item in obj]
     if isinstance(obj, dict):
