@@ -257,7 +257,7 @@ wheels = [
 
 [[package]]
 name = "spider-py"
-version = "0.0.1"
+version = "0.0.0b0"
 source = { editable = "." }
 dependencies = [
     { name = "lark" },
