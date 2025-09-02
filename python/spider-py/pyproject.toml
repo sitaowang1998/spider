@@ -53,6 +53,7 @@ markers = [
   "integration: mark test as an integration test",
   "storage: mark unit tests needing storage",
 ]
+pythonpath = "src"
 testpaths = ["tests"]
 
 [tool.ruff]
