@@ -47,7 +47,7 @@ class Driver:
         if not graphs:
             return []
         task_graphs = []
-        for task_graph, task_args in zip(graphs, args, strict=True):
+        for task_graph, task_args in zip(graphs, args):
             graph = deepcopy(task_graph._impl)
             arg_index = 0
             for task in graph.tasks:
