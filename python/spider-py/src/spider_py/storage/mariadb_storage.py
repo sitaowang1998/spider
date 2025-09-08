@@ -326,6 +326,7 @@ class MariaDBStorage(Storage):
                     msg = f"Unknown job status '{status_str}' for job id {job.job_id}"
                     raise StorageError(msg)
                 status = _StrToJobStateMap[status_str]
+                cursor.fetchall()  # Consume remaining results
                 self._conn.commit()
                 return status
         except mariadb.Error as e:
