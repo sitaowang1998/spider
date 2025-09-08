@@ -3,7 +3,7 @@ name = "spider-py"
 version = "0.0.1"
 description = "A distributed task execution framework."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [
   { name = "Sitao Wang", email = "sitao.wang@yscope.com" },
   { name = "Zhihao Lin", email = "lin.zhihao@yscope.com" },

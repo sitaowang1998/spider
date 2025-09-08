@@ -1,6 +1,8 @@
 """MariaDB Storage module."""
 
-from collections.abc import Sequence
+from __future__ import annotations
+
+from typing import get_args, TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import mariadb
@@ -8,8 +10,12 @@ from typing_extensions import override
 
 from spider_py import core
 from spider_py.core import get_state_str
-from spider_py.storage.jdbc_url import JdbcParameters
 from spider_py.storage.storage import Storage, StorageError
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from spider_py.storage.jdbc_url import JdbcParameters
 
 InsertJob = """
 INSERT INTO
@@ -143,6 +149,13 @@ INSERT INTO
 VALUES
   (?)"""
 
+_StrToJobStateMap = {
+    "running": core.JobStatus.Running,
+    "success": core.JobStatus.Succeeded,
+    "fail": core.JobStatus.Failed,
+    "cancel": core.JobStatus.Cancelled,
+}
+
 
 class MariaDBStorage(Storage):
     """MariaDB Storage class."""
@@ -192,7 +205,7 @@ class MariaDBStorage(Storage):
                             task.max_retries,
                         )
                         for graph_index, (job_id, task_graph) in enumerate(
-                            zip(job_ids, task_graphs, strict=True)
+                            zip(job_ids, task_graphs)
                         )
                         for task_index, task in enumerate(task_graph.tasks)
                     ],
@@ -212,7 +225,7 @@ class MariaDBStorage(Storage):
                     [
                         (job_id.bytes, task_ids[graph_index][task_index].bytes, position)
                         for graph_index, (job_id, task_graph) in enumerate(
-                            zip(job_ids, task_graphs, strict=True)
+                            zip(job_ids, task_graphs)
                         )
                         for position, task_index in enumerate(task_graph.input_tasks)
                     ],
@@ -222,7 +235,7 @@ class MariaDBStorage(Storage):
                     [
                         (job_id.bytes, task_ids[graph_index][task_index].bytes, position)
                         for graph_index, (job_id, task_graph) in enumerate(
-                            zip(job_ids, task_graphs, strict=True)
+                            zip(job_ids, task_graphs)
                         )
                         for position, task_index in enumerate(task_graph.output_tasks)
                     ],
@@ -248,7 +261,7 @@ class MariaDBStorage(Storage):
                     for graph_index, task_graph in enumerate(task_graphs)
                     for task_index, task in enumerate(task_graph.tasks)
                     for position, task_input in enumerate(task.task_inputs)
-                    if isinstance(task_input.value, core.TaskInputData)
+                    if isinstance(task_input.value, get_args(core.TaskInputData))
                 ]
                 if input_data_params:
                     cursor.executemany(
@@ -309,18 +322,10 @@ class MariaDBStorage(Storage):
                     msg = f"No job found with id {job.job_id}"
                     raise StorageError(msg)
                 status_str = row[0]
-                match status_str:
-                    case "running":
-                        status = core.JobStatus.Running
-                    case "success":
-                        status = core.JobStatus.Succeeded
-                    case "fail":
-                        status = core.JobStatus.Failed
-                    case "cancel":
-                        status = core.JobStatus.Cancelled
-                    case _:
-                        msg = "Unknown job status"
-                        raise StorageError(msg)
+                if status_str not in _StrToJobStateMap:
+                    msg = f"Unknown job status '{status_str}' for job id {job.job_id}"
+                    raise StorageError(msg)
+                status = _StrToJobStateMap[status_str]
                 self._conn.commit()
                 return status
         except mariadb.Error as e:
