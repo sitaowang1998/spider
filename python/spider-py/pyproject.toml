@@ -37,7 +37,7 @@ requires = ["hatchling>=1.18.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/spdier_py"]
+packages = ["src/spider_py"]
 
 [tool.mypy]
 strict = true
