@@ -12,7 +12,7 @@ import msgpack
 
 from spider_py import client, storage
 from spider_py.task_executor.task_executor_message import get_request_body, TaskExecutorResponseType
-from spider_py.utils import msgpack_decoder, msgpack_encoder
+from spider_py.utils import from_serializable, to_serializable
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -77,9 +77,9 @@ def parse_arguments(
                 msg = f"Argument {i} for spider.Data is not bytes."
                 raise TypeError(msg)
             core_data = store.get_data(UUID(bytes=arg))
-            parsed_args.append(client.Data._from_impl(core_data))
+            parsed_args.append(client.Data(core_data))
         else:
-            parsed_args.append(msgpack_decoder(cls, arg))
+            parsed_args.append(from_serializable(cls, arg))
     return parsed_args
 
 
@@ -94,13 +94,13 @@ def parse_results(results: object) -> list[object]:
     if isinstance(results, tuple):
         for result in results:
             if isinstance(result, client.Data):
-                response_messages.append(result._impl.id)
+                response_messages.append(result.id.bytes)
             else:
-                response_messages.append(msgpack_encoder(result))
-    if isinstance(results, client.Data):
-        response_messages.append(results._impl.id)
+                response_messages.append(to_serializable(result))
+    elif isinstance(results, client.Data):
+        response_messages.append(results.id.bytes)
     else:
-        response_messages.append(msgpack_encoder(results))
+        response_messages.append(to_serializable(results))
     return response_messages
 
 
@@ -116,8 +116,8 @@ def main() -> None:
     task_id = UUID(task_id)
     libs = args.libs
     storage_url = args.storage_url
-    input_pipe = args.input_pipe
-    output_pipe = args.output_pipe
+    input_pipe_fd = args.input_pipe
+    output_pipe_fd = args.output_pipe
 
     logger.debug("Function to run: %s", func)
 
@@ -125,45 +125,50 @@ def main() -> None:
     storage_params = storage.parse_jdbc_url(storage_url)
     store = storage.MariaDBStorage(storage_params)
 
-    input_pipe = fdopen(input_pipe, "rb")
-    output_pipe = fdopen(output_pipe, "wb")
-    input_message = receive_message(input_pipe)
-    arguments = get_request_body(input_message)
-    logger.debug("Args buffer parsed")
+    with fdopen(input_pipe_fd, "rb") as input_pipe, fdopen(output_pipe_fd, "wb") as output_pipe:
+        input_message = receive_message(input_pipe)
+        arguments = get_request_body(input_message)
+        logger.debug("Args buffer parsed")
 
-    # Get the function to run
-    function_name = func.replace(".")[-1] if "." in func else func
-    function = None
-    for lib in libs:
-        module = importlib.import_module(lib)
-        if hasattr(module, function_name):
-            function = getattr(module, function_name)
-            break
-    if function is None:
-        msg = f"Function {function_name} not found in provided libraries."
-        raise ValueError(msg)
+        # Get the function to run
+        function_name = func.split(".")[-1] if "." in func else func
+        function = None
+        for lib in libs:
+            module = importlib.import_module(lib)
+            if hasattr(module, function_name):
+                function = getattr(module, function_name)
+                break
+        if function is None:
+            msg = f"Function {function_name} not found in provided libraries."
+            raise ValueError(msg)
 
-    signature = inspect.signature(function)
-    if len(signature.parameters) != len(arguments) + 1:
-        msg = (
-            f"Function {function_name} expects {len(signature.parameters) - 1} "
-            f"arguments, but {len(arguments)} were provided."
-        )
-        raise ValueError(msg)
-    task_context = client.TaskContext(task_id, store)
-    arguments = [
-        task_context,
-        *parse_arguments(store, list(signature.parameters.values())[1:], arguments),
-    ]
-    results = function(*arguments)
-    logger.debug("Function %s executed", function_name)
+        signature = inspect.signature(function)
+        if len(signature.parameters) != len(arguments) + 1:
+            msg = (
+                f"Function {function_name} expects {len(signature.parameters) - 1} "
+                f"arguments, but {len(arguments)} were provided."
+            )
+            raise ValueError(msg)
+        task_context = client.TaskContext(task_id, store)
+        arguments = [
+            task_context,
+            *parse_arguments(store, list(signature.parameters.values())[1:], arguments),
+        ]
+        try:
+            results = function(*arguments)
+            logger.debug("Function %s executed", function_name)
+            responses = parse_results(results)
+        except Exception as e:
+            logger.exception("Function %s failed", function_name)
+            responses = [
+                TaskExecutorResponseType.Error,
+                {"type": e.__class__.__name__, "message": str(e)},
+            ]
 
-    responses = parse_results(results)
-    packed_responses = msgpack.packb(responses)
-    output_pipe.write(f"{len(packed_responses):0{HeaderSize}d}".encode())
-    output_pipe.write(packed_responses)
-    output_pipe.flush()
-    output_pipe.close()
+        packed_responses = msgpack.packb(responses)
+        output_pipe.write(f"{len(packed_responses):0{HeaderSize}d}".encode())
+        output_pipe.write(packed_responses)
+        output_pipe.flush()
 
 
 if __name__ == "__main__":
