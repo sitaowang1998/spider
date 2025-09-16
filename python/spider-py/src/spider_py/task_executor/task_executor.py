@@ -120,23 +120,26 @@ def parse_task_execution_results(results: object) -> list[object]:
     return response_messages
 
 
+FunctionNameSize = 2
+
+
 def get_function(function_name: str) -> Callable[..., object] | None:
     """
     Gets a function by its full name
-    :param function_name: module.qualname of the function.
+    :param function_name: module-qualname of the function.
     :return: The function found.
     :return: None if the `function_name` does not exist in `module`.
     :return: None if the attribute matching the `function_name` is not a function.
     """
-    attrs = function_name.split(".")
-    if len(attrs) <= 1:
+    names = function_name.split("-")
+    if len(names) != FunctionNameSize:
         return None
-    module_name = attrs[0]
+    module_name = names[0]
     try:
         obj = importlib.import_module(module_name)
     except ModuleNotFoundError:
         return None
-    for attr in attrs[1:]:
+    for attr in names[1].split("."):
         if not hasattr(obj, attr):
             return None
         obj = getattr(obj, attr)
