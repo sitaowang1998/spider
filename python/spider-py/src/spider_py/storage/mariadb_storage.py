@@ -383,7 +383,7 @@ class MariaDBStorage(Storage):
         jobs: Sequence[core.Job],
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, bytes, str, str, float, int]]:
+    ) -> list[tuple[bytes, bytes, str, str, str, float, int]]:
         """
         Generates parameters for inserting tasks into the database.
         :param jobs: The jobs.
