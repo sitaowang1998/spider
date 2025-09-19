@@ -51,8 +51,6 @@ def start_scheduler_worker(
         "127.0.0.1",
         "--storage_url",
         storage_url,
-        "--py-libs",
-        "tests.integration.samples",
     ]
     worker_process = subprocess.Popen(worker_cmds)
     return scheduler_process, worker_process
