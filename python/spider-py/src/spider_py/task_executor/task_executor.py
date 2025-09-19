@@ -30,9 +30,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--func", type=str, required=True, help="Name of the function to execute.")
     parser.add_argument(
-        "--libs", nargs="+", type=str, required=True, help="List of libraries to load."
-    )
-    parser.add_argument(
         "--storage_url", type=str, required=True, help="JDBC URL for the storage backend."
     )
     parser.add_argument("--task_id", type=str, required=True, help="Task UUID.")
@@ -66,8 +63,9 @@ def parse_task_arguments(
 ) -> list[object]:
     """
     Parses arguments for the function to be executed.
-    Note that `params` does not include the `TaskContext` parameter, and must be the same length as
-    `arguments`.
+
+    NOTE: `params` does not include the `TaskContext` parameter, and must be the same length as
+    `arguments`. The caller is responsible for the size check.
     :param storage: Storage instance to use to get Data.
     :param params: A list of parameters in the function signature.
     :param arguments: A list of arguments to parse.
@@ -147,7 +145,7 @@ def main() -> None:
         # Get the function to run
         function = locate(function_name)
         if function is None or not inspect.isfunction(function):
-            msg = f"Function {function_name} not found in provided libraries."
+            msg = f"{function_name} cannot be found in the current Python execution environment."
             raise ValueError(msg)
 
         signature = inspect.signature(function)
