@@ -2,10 +2,12 @@
 
 #include <unistd.h>
 
+#include <array>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -36,7 +38,8 @@ TaskExecutor::TaskExecutor(
         std::vector<std::string> const& libs,
         absl::flat_hash_map<
                 boost::process::v2::environment::key,
-                boost::process::v2::environment::value> const& environment,
+                boost::process::v2::environment::value
+        > const& environment,
         std::vector<msgpack::sbuffer> const& args_buffers
 )
         : m_read_pipe(context),
@@ -55,9 +58,11 @@ TaskExecutor::TaskExecutor(
             std::to_string(output_pipe_write_end),
             "--storage_url",
             storage_url,
-            "--libs"
     };
-    process_args.insert(process_args.end(), libs.begin(), libs.end());
+    if (false == libs.empty()) {
+        process_args.emplace_back("--libs");
+        process_args.insert(process_args.end(), libs.cbegin(), libs.cend());
+    }
     boost::filesystem::path exe;
     switch (language) {
         case core::TaskLanguage::Cpp: {
@@ -68,13 +73,14 @@ TaskExecutor::TaskExecutor(
             break;
         }
         case core::TaskLanguage::Python: {
-            exe = boost::process::v2::environment::find_executable("python", environment);
-            std::vector extra_args{"-m", "spider_py.task_executor.task_executor"};
-            process_args.insert(process_args.begin(), extra_args.begin(), extra_args.end());
+            exe = boost::process::v2::environment::find_executable(
+                    "spider-py-task-executor",
+                    environment
+            );
             break;
         }
         default: {
-            spdlog::error("Unsupported language");
+            spdlog::error("Unsupported task language.");
             return;
         }
     }
@@ -97,7 +103,7 @@ TaskExecutor::TaskExecutor(
     boost::asio::co_spawn(context, process_output_handler(), boost::asio::detached);
 
     // Send args
-    msgpack::sbuffer const args_request = core::create_args_request(args_buffers);
+    auto const args_request = core::create_args_request(args_buffers);
     send_message(m_write_pipe, args_request);
 }
 

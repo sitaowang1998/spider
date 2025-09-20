@@ -51,8 +51,6 @@ def start_scheduler_worker(
         "127.0.0.1",
         "--storage_url",
         storage_url,
-        "--py-libs",
-        "tests.integration.samples",
     ]
     worker_process = subprocess.Popen(worker_cmds)
     return scheduler_process, worker_process
@@ -124,7 +122,7 @@ class TestPyIntegration:
 
     def test_data_job(self, driver: spider_py.Driver) -> None:
         """Tests a job with data input and output."""
-        data = spider_py.Data(b"test_data")
+        data = spider_py.Data.from_value(b"test_data")
         driver.create_data(data)
         (job,) = driver.submit_jobs([group([data_size])], [(data,)])
         time.sleep(g_sleep_time)
