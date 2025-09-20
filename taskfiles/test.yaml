@@ -113,5 +113,6 @@ tasks:
       # Don't create __pycache__ directories in the source tree.
       PYTHONDONTWRITEBYTECODE: "1"
       SPIDER_DIR: "{{.G_BUILD_SPIDER_DIR}}/src/spider"
+      PYTHONPATH: "{{.G_SRC_PYTHON_DIR}}:$PYTHONPATH"
     cmds:
       - "uv run pytest -m \"integration\""
