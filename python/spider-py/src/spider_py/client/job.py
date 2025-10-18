@@ -1,5 +1,7 @@
 """Spider job module."""
 
+from __future__ import annotations
+
 import msgpack
 
 from spider_py import core
@@ -51,7 +53,10 @@ def _deserialize_outputs(outputs: list[core.TaskOutput]) -> tuple[object, ...] |
     results = []
     for output in outputs:
         if isinstance(output.value, core.TaskOutputValue):
-            cls = parse_tdl_type(output.type).native_type()
+            output_type = output.type
+            if isinstance(output_type, bytes):
+                output_type = output_type.decode("utf-8")
+            cls = parse_tdl_type(output_type).native_type()
             unpacked = msgpack.unpackb(output.value, raw=False, strict_map_key=False)
             results.append(from_serializable(cls, unpacked))
         elif isinstance(output.value, core.Data):
