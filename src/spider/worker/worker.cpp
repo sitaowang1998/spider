@@ -106,21 +106,28 @@ auto get_environment_variable() -> absl::flat_hash_map<
         boost::process::v2::environment::key,
         boost::process::v2::environment::value
 > {
-    boost::filesystem::path const executable_dir = boost::dll::program_location().parent_path();
-
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
-    char const* path_env_str = std::getenv("PATH");
-    std::string path_env = nullptr == path_env_str ? "" : path_env_str;
-    path_env.append(":");
-    path_env.append(executable_dir.string());
-
+    auto curr_env = boost::process::v2::environment::current();
     absl::flat_hash_map<
             boost::process::v2::environment::key,
             boost::process::v2::environment::value
     >
             environment_variables;
 
-    environment_variables.emplace("PATH", path_env);
+    for (auto const& entry : curr_env) {
+        environment_variables.emplace(entry.key(), entry.value());
+    }
+
+    boost::filesystem::path const executable_dir = boost::dll::program_location().parent_path();
+
+    auto const path_env_it = environment_variables.find("PATH");
+    if (environment_variables.end() != path_env_it) {
+        std::string path_env = path_env_it->second.string();
+        path_env.append(":");
+        path_env.append(executable_dir.string());
+        environment_variables["PATH"] = boost::process::v2::environment::value(path_env);
+    } else {
+        environment_variables.emplace("PATH", executable_dir.string());
+    }
 
     return environment_variables;
 }
@@ -391,18 +398,33 @@ auto task_loop(
         }
 
         // Execute task
-        spider::worker::TaskExecutor executor{
-                context,
-                task.get_function_name(),
-                task.get_id(),
-                language,
-                storage_url,
-                spider::core::TaskLanguage::Cpp == language ? libs : std::vector<std::string>{},
-                environment,
-                arg_buffers
-        };
+        std::unique_ptr<spider::worker::TaskExecutor> executor = nullptr;
+        if (spider::core::TaskLanguage::Cpp == language) {
+            executor = spider::worker::TaskExecutor::spawn_cpp_executor(
+                    context,
+                    task.get_function_name(),
+                    task.get_id(),
+                    storage_url,
+                    libs,
+                    environment,
+                    arg_buffers
+            );
+        } else if (spider::core::TaskLanguage::Python == language) {
+            executor = spider::worker::TaskExecutor::spawn_python_executor(
+                    context,
+                    task.get_function_name(),
+                    task.get_id(),
+                    storage_url,
+                    environment,
+                    arg_buffers
+            );
+        } else {
+            spdlog::error("Unsupported task language.");
+            fail_task_id = task.get_id();
+            continue;
+        }
 
-        pid_t const pid = executor.get_pid();
+        pid_t const pid = executor->get_pid();
         spider::core::ChildPid::set_pid(pid);
         // Double check if stop token is set to avoid any missing signal
         if (spider::core::StopFlag::is_stop_requested()) {
@@ -411,11 +433,11 @@ auto task_loop(
         }
 
         context.run();
-        executor.wait();
+        executor->wait();
 
         spider::core::ChildPid::set_pid(0);
 
-        if (handle_executor_result(storage_factory, metadata_store, instance, task, executor)) {
+        if (handle_executor_result(storage_factory, metadata_store, instance, task, *executor)) {
             fail_task_id = std::nullopt;
         } else {
             fail_task_id = task.get_id();
