@@ -98,7 +98,7 @@ class TestPyIntegration:
         (job,) = driver.submit_jobs([group([add])], [(Int8(1), Int8(2))])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == Int8(3)
+        assert job.get_results() == (Int8(3),)
 
     def test_multiple_jobs(self, driver: spider_py.Driver) -> None:
         """Tests multiple job submission and execution."""
@@ -109,7 +109,7 @@ class TestPyIntegration:
         time.sleep(g_sleep_time)
         for i, job in enumerate(jobs):
             assert job.get_status() == spider_py.JobStatus.Succeeded
-            assert job.get_results() == Int8(3 + i * 4)
+            assert job.get_results() == (Int8(3 + i * 4),)
 
     def test_complex_job(self, driver: spider_py.Driver) -> None:
         """Tests a more complex task graph execution."""
@@ -127,7 +127,7 @@ class TestPyIntegration:
         (job,) = driver.submit_jobs([group([data_size])], [(data,)])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == Int64(len("test_data"))
+        assert job.get_results() == (Int64(len("test_data")),)
 
     def test_dataclass_job(self, driver: spider_py.Driver) -> None:
         """Tests a job with dataclass input and output."""
@@ -135,4 +135,4 @@ class TestPyIntegration:
         (job,) = driver.submit_jobs([group([count_name_length])], [(user,)])
         time.sleep(g_sleep_time)
         assert job.get_status() == spider_py.JobStatus.Succeeded
-        assert job.get_results() == Int64(len(user.name.first) + len(user.name.last) + 1)
+        assert job.get_results() == (Int64(len(user.name.first) + len(user.name.last) + 1),)
