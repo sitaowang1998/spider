@@ -1,5 +1,7 @@
 """Spider job module."""
 
+from __future__ import annotations
+
 import msgpack
 
 from spider_py import core
@@ -41,17 +43,19 @@ class Job:
         return _deserialize_outputs(self._impl.results)
 
 
-def _deserialize_outputs(outputs: list[core.TaskOutput]) -> tuple[object, ...] | object:
+def _deserialize_outputs(outputs: list[core.TaskOutput]) -> tuple[object, ...]:
     """
     Deserializes a list of `core.TaskOutput` objects into their corresponding Python values.
     :param outputs:
-    :return: A tuple of deserialized values if `outputs` contains more than one element.
-    :return: A single value if `outputs` contains only one element.
+    :return: A tuple of deserialized values.
     """
     results = []
     for output in outputs:
         if isinstance(output.value, core.TaskOutputValue):
-            cls = parse_tdl_type(output.type).native_type()
+            type_name = output.type
+            if isinstance(type_name, bytes):
+                type_name = type_name.decode("utf-8")
+            cls = parse_tdl_type(type_name).native_type()
             unpacked = msgpack.unpackb(output.value, raw=False, strict_map_key=False)
             results.append(from_serializable(cls, unpacked))
         elif isinstance(output.value, core.Data):
@@ -59,6 +63,4 @@ def _deserialize_outputs(outputs: list[core.TaskOutput]) -> tuple[object, ...] |
         else:
             msg = "Unsupported output type."
             raise StorageError(msg)
-    if len(results) == 1:
-        return results[0]
     return tuple(results)
