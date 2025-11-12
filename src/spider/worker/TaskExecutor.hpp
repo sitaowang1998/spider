@@ -32,7 +32,7 @@ enum class TaskExecutorState : std::uint8_t {
 
 class TaskExecutor {
 public:
-    static auto spawn_cpp_executor(
+    [[nodiscard]] static auto spawn_cpp_executor(
             boost::asio::io_context& context,
             std::string const& func_name,
             boost::uuids::uuid task_id,
@@ -45,7 +45,7 @@ public:
             std::vector<msgpack::sbuffer> const& args_buffers
     ) -> std::unique_ptr<TaskExecutor>;
 
-    static auto spawn_python_executor(
+    [[nodiscard]] static auto spawn_python_executor(
             boost::asio::io_context& context,
             std::string const& func_name,
             boost::uuids::uuid task_id,
@@ -87,8 +87,14 @@ public:
     [[nodiscard]] auto get_error() const -> std::tuple<core::FunctionInvokeError, std::string>;
 
 private:
-    // Private constructor
-    explicit TaskExecutor(boost::asio::io_context& context);
+    // Constructors
+    explicit TaskExecutor(
+            boost::asio::io_context& context,
+            int read_pipe_fd,
+            int write_pipe_fd,
+            std::unique_ptr<Process> process,
+            std::vector<msgpack::sbuffer> const& args_buffers
+    );
 
     auto process_output_handler() -> boost::asio::awaitable<void>;
 
@@ -97,7 +103,7 @@ private:
     TaskExecutorState m_state = TaskExecutorState::Running;
 
     // Use `std::unique_ptr` to work around requirement of default constructor
-    std::unique_ptr<Process> m_process = nullptr;
+    std::unique_ptr<Process> m_process;
     boost::asio::readable_pipe m_read_pipe;
     boost::asio::writable_pipe m_write_pipe;
 
