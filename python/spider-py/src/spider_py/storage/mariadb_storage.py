@@ -1,20 +1,14 @@
 """MariaDB Storage module."""
 
-from __future__ import annotations
-
-from typing import get_args, TYPE_CHECKING
+from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 import mariadb
 from typing_extensions import override
 
 from spider_py import core
+from spider_py.storage.jdbc_url import JdbcParameters
 from spider_py.storage.storage import Storage, StorageError
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from spider_py.storage.jdbc_url import JdbcParameters
 
 InsertJob = """
 INSERT INTO
@@ -548,7 +542,7 @@ class MariaDBStorage(Storage):
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
-                    if not isinstance(task_input.value, get_args(core.TaskInputData)):
+                    if not isinstance(task_input.value, core.TaskInputData):
                         continue
                     value = task_input.value
                     data = value.id.bytes if isinstance(value, core.Data) else value.bytes
@@ -645,8 +639,7 @@ class MariaDBStorage(Storage):
         if status_str not in _StrToJobStatusMap:
             msg = f"Unknown job status: {status_str}."
             raise StorageError(msg)
-        # Old version of mariadb (1.0.11) requires a fetchall after a fetchone to drain the result
-        # set even if it is already empty.
+        # Uses fetchall after a fetchone to drain the result set even if it is already empty.
         cursor.fetchall()
         return _StrToJobStatusMap[status_str]
 
