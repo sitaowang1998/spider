@@ -1,16 +1,24 @@
+#:tombi schema.strict = false
+
 [project]
-name = "spider-py"
-version = "0.0.1"
+name = "yscope-spider-py"
+version = "0.1.0"
 description = "A distributed task execution framework."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
   { name = "Sitao Wang", email = "sitao.wang@yscope.com" },
   { name = "Zhihao Lin", email = "lin.zhihao@yscope.com" },
 ]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Typing :: Typed",
+]
 dependencies = [
   "lark>=1.2.2",
-  "mariadb>=1.1.13",
+  "mariadb>=1.1.14",
   "msgpack-types>=0.5.0",
 ]
 
@@ -20,13 +28,23 @@ spider-py-task-executor = "spider_py.task_executor.task_executor:main"
 [dependency-groups]
 dev = [
   "mypy>=1.12.0",
-  "pytest>=8.4.1",
+  "pytest>=9.0.0",
   "ruff>=0.4.4",
 ]
 
 [build-system]
 requires = ["hatchling>=1.18.0"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = [
+  ".python-version",
+  "tests",
+  "uv.lock",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spider_py"]
 
 [tool.mypy]
 strict = true
@@ -39,7 +57,8 @@ show_error_context = true
 module = ["mariadb.*"]
 ignore_missing_imports = true
 
-[tool.pytest.ini_options]
+[tool.pytest]
+minversion = "9.0"
 markers = [
   "integration: Mark test as an integration test",
   "storage: Mark unit tests as needing external storage service",

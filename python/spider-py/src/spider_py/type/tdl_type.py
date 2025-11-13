@@ -105,6 +105,18 @@ class BoolType(TdlType):
         return bool
 
 
+class BytesType(TdlType):
+    """TDL bytes type."""
+
+    @override
+    def type_str(self) -> str:
+        return "bytes"
+
+    @override
+    def native_type(self) -> type | GenericAlias:
+        return bytes
+
+
 class ClassType(TdlType):
     """TDL Custom class type."""
 

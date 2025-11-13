@@ -1,12 +1,17 @@
 """Test converting TDL type to native type."""
 
-from types import GenericAlias
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import pytest
 
 import spider_py
 from spider_py.type.tdl_parse import parse_tdl_type
 from spider_py.type.utils import get_class_name
+
+if TYPE_CHECKING:
+    from types import GenericAlias
 
 
 def _string_to_native(s: str) -> type | GenericAlias:
@@ -24,6 +29,7 @@ class TestToNativeType:
     def test_to_primitive_native_type(self) -> None:
         """Test converting primitive TDL type to native type."""
         assert _string_to_native("bool") is bool
+        assert _string_to_native("bytes") is bytes
         assert _string_to_native("double") is spider_py.Double
         assert _string_to_native("float") is spider_py.Float
         assert _string_to_native("int8") is spider_py.Int8
@@ -43,6 +49,7 @@ class TestToNativeType:
         """Test converting list TDL type to native type."""
         assert _string_to_native("List<int8>") == list[spider_py.Int8]
         assert _string_to_native("List<List<int8>>") == list[list[spider_py.Int8]]
+        assert _string_to_native("List<bytes>") == list[bytes]
 
     def test_to_map_type(self) -> None:
         """Test converting map TDL type to native type."""
