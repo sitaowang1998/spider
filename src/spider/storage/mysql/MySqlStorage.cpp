@@ -523,8 +523,7 @@ auto collect_channels(TaskGraph const& task_graph, ChannelMap& channels)
             if (!channel_id.has_value()) {
                 continue;
             }
-            if (!add_channel_producer(channels, channel_id.value(), output.get_type(), task_id))
-            {
+            if (!add_channel_producer(channels, channel_id.value(), output.get_type(), task_id)) {
                 ChannelInfo const& info = channels.at(channel_id.value());
                 return fmt::format(
                         "Channel {} has conflicting types: {} vs {}",
@@ -544,10 +543,7 @@ auto collect_channels(TaskGraph const& task_graph, ChannelMap& channels)
             {
                 continue;
             }
-            if (!add_channel_consumer(
-                        channels, channel_id.value(), input.get_type(), task_id
-                ))
-            {
+            if (!add_channel_consumer(channels, channel_id.value(), input.get_type(), task_id)) {
                 ChannelInfo const& info = channels.at(channel_id.value());
                 return fmt::format(
                         "Channel {} has conflicting types: {} vs {}",
