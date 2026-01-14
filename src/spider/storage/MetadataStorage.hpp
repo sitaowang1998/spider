@@ -1,6 +1,8 @@
 #ifndef SPIDER_STORAGE_METADATASTORAGE_HPP
 #define SPIDER_STORAGE_METADATASTORAGE_HPP
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -132,6 +134,15 @@ public:
     virtual auto
     get_scheduler_addr(StorageConnection& conn, boost::uuids::uuid id, std::string* addr, int* port)
             -> StorageErr
+            = 0;
+
+    virtual auto dequeue_channel_item(
+            StorageConnection& conn,
+            boost::uuids::uuid channel_id,
+            boost::uuids::uuid consumer_task_id,
+            std::optional<ChannelItem>* item,
+            bool* drained
+    ) -> StorageErr
             = 0;
 };
 }  // namespace spider::core

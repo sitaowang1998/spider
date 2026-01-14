@@ -7,7 +7,17 @@ import msgpack
 import pytest
 
 from spider_py import chain, group, Int8, TaskContext
-from spider_py.core import Data, DriverId, Job, JobStatus, TaskInputValue
+from spider_py.core import (
+    Data,
+    DriverId,
+    Job,
+    JobStatus,
+    Task,
+    TaskGraph,
+    TaskInput,
+    TaskInputValue,
+    TaskOutput,
+)
 from spider_py.storage import MariaDBStorage, parse_jdbc_url, StorageError
 
 MariaDBTestUrl = "jdbc:mariadb://127.0.0.1:3306/spider-storage?user=spider&password=password"
@@ -69,6 +79,25 @@ class TestMariaDBStorage:
         for i, task_index in enumerate(graph.input_task_indices):
             task = graph.tasks[task_index]
             task.task_inputs[0].value = TaskInputValue(msgpack.packb(i))
+
+        driver_id = uuid4()
+        jobs = mariadb_storage.submit_jobs(driver_id, [graph])
+        assert len(jobs) == 1
+
+    @pytest.mark.storage
+    def test_channel_submission(self, mariadb_storage: MariaDBStorage) -> None:
+        """Tests channel rows are created during job submission."""
+        channel_id = uuid4()
+        graph = TaskGraph()
+        producer = Task(function_name="producer")
+        producer.task_outputs.append(TaskOutput(type="int", channel_id=channel_id))
+        producer.task_outputs.append(TaskOutput(type="int", channel_id=channel_id))
+        consumer = Task(function_name="consumer")
+        consumer.task_inputs.append(TaskInput(type="int", value=None, channel_id=channel_id))
+        graph.add_task(producer)
+        graph.add_task(consumer)
+        graph.input_task_indices = [0, 1]
+        graph.output_task_indices = [0, 1]
 
         driver_id = uuid4()
         jobs = mariadb_storage.submit_jobs(driver_id, [graph])

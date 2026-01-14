@@ -171,6 +171,9 @@ auto task_input_equal(core::TaskInput const& input_1, core::TaskInput const& inp
     if (input_1.get_data_id() != input_2.get_data_id()) {
         return false;
     }
+    if (input_1.get_channel_id() != input_2.get_channel_id()) {
+        return false;
+    }
     if (input_1.get_type() != input_2.get_type()) {
         return false;
     }
@@ -182,6 +185,9 @@ auto task_output_equal(core::TaskOutput const& output_1, core::TaskOutput const&
         return false;
     }
     if (output_1.get_value() != output_2.get_value()) {
+        return false;
+    }
+    if (output_1.get_channel_id() != output_2.get_channel_id()) {
         return false;
     }
     if (output_1.get_type() != output_2.get_type()) {

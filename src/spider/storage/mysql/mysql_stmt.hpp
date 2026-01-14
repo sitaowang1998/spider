@@ -48,6 +48,34 @@ std::string const cCreateTaskTable = R"(CREATE TABLE IF NOT EXISTS tasks (
     PRIMARY KEY (`id`)
 ))";
 
+std::string const cCreateChannelTable = R"(CREATE TABLE IF NOT EXISTS `channels` (
+    `id` BINARY(16) NOT NULL,
+    `job_id` BINARY(16) NOT NULL,
+    `type` VARCHAR(999) NOT NULL,
+    `sender_closed` BOOL DEFAULT FALSE,
+    CONSTRAINT `channel_job_id` FOREIGN KEY (`job_id`) REFERENCES `jobs` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    INDEX (`job_id`),
+    PRIMARY KEY (`id`)
+))";
+
+std::string const cCreateChannelProducerTable = R"(CREATE TABLE IF NOT EXISTS `channel_producers` (
+    `channel_id` BINARY(16) NOT NULL,
+    `task_id` BINARY(16) NOT NULL,
+    CONSTRAINT `channel_producer_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT `channel_producer_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    INDEX (`task_id`),
+    PRIMARY KEY (`channel_id`, `task_id`)
+))";
+
+std::string const cCreateChannelConsumerTable = R"(CREATE TABLE IF NOT EXISTS `channel_consumers` (
+    `channel_id` BINARY(16) NOT NULL,
+    `task_id` BINARY(16) NOT NULL,
+    CONSTRAINT `channel_consumer_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT `channel_consumer_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    INDEX (`task_id`),
+    PRIMARY KEY (`channel_id`, `task_id`)
+))";
+
 std::string const cCreateInputTaskTable = R"(CREATE TABLE IF NOT EXISTS input_tasks (
     `job_id` BINARY(16) NOT NULL,
     `task_id` BINARY(16) NOT NULL,
@@ -76,9 +104,12 @@ std::string const cCreateTaskInputTable = R"(CREATE TABLE IF NOT EXISTS `task_in
     `output_task_position` INT UNSIGNED,
     `value` VARBINARY(999), -- Use VARBINARY for all types of values
     `data_id` BINARY(16),
+    `channel_id` BINARY(16),
     CONSTRAINT `input_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
     CONSTRAINT `input_task_output_match` FOREIGN KEY (`output_task_id`, `output_task_position`) REFERENCES task_outputs (`task_id`, `position`) ON UPDATE NO ACTION ON DELETE SET NULL,
     CONSTRAINT `input_data_id` FOREIGN KEY (`data_id`) REFERENCES `data` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION,
+    CONSTRAINT `input_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
+    INDEX (`channel_id`),
     PRIMARY KEY (`task_id`, `position`)
 ))";
 
@@ -88,8 +119,11 @@ std::string const cCreateTaskOutputTable = R"(CREATE TABLE IF NOT EXISTS `task_o
     `type` VARCHAR(999) NOT NULL,
     `value` VARBINARY(999),
     `data_id` BINARY(16),
+    `channel_id` BINARY(16),
     CONSTRAINT `output_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
     CONSTRAINT `output_data_id` FOREIGN KEY (`data_id`) REFERENCES `data` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION,
+    CONSTRAINT `output_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
+    INDEX (`channel_id`),
     PRIMARY KEY (`task_id`, `position`)
 ))";
 
@@ -126,6 +160,23 @@ std::string const cCreateDataTable = R"(CREATE TABLE IF NOT EXISTS `data` (
     `hard_locality` BOOL DEFAULT FALSE,
     `persisted` BOOL DEFAULT FALSE,
     PRIMARY KEY (`id`)
+))";
+
+std::string const cCreateChannelItemTable = R"(CREATE TABLE IF NOT EXISTS `channel_items` (
+    `channel_id` BINARY(16) NOT NULL,
+    `producer_task_id` BINARY(16) NOT NULL,
+    `item_index` INT UNSIGNED NOT NULL,
+    `value` VARBINARY(999),
+    `data_id` BINARY(16),
+    `delivered_to_task_id` BINARY(16),
+    `creation_time` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT `channel_item_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT `channel_item_producer_task_id` FOREIGN KEY (`producer_task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT `channel_item_data_id` FOREIGN KEY (`data_id`) REFERENCES `data` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
+    CONSTRAINT `channel_item_delivered_to_task_id` FOREIGN KEY (`delivered_to_task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
+    INDEX (`channel_id`),
+    INDEX (`delivered_to_task_id`),
+    PRIMARY KEY (`channel_id`, `producer_task_id`, `item_index`)
 ))";
 
 std::string const cCreateDataLocalityTable = R"(CREATE TABLE IF NOT EXISTS `data_locality` (
@@ -168,12 +219,16 @@ std::string const cCreateTaskKVDataTable = R"(CREATE TABLE IF NOT EXISTS `task_k
     CONSTRAINT `kv_data_task_id` FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 ))";
 
-std::array<std::string const, 17> const cCreateStorage = {
+std::array<std::string const, 21> const cCreateStorage = {
         cCreateDriverTable,  // drivers table must be created before data_ref_driver
         cCreateSchedulerTable,
         cCreateJobTable,  // jobs table must be created before task
         cCreateTaskTable,  // tasks table must be created before data_ref_task
-        cCreateDataTable,  // data table must be created before task_outputs
+        cCreateChannelTable,  // channels table must be created before channel members/items
+        cCreateChannelProducerTable,
+        cCreateChannelConsumerTable,
+        cCreateDataTable,  // data table must be created before task_outputs/channel_items
+        cCreateChannelItemTable,
         cCreateDataLocalityTable,
         cCreateDataRefDriverTable,
         cCreateDataRefTaskTable,
@@ -194,17 +249,29 @@ std::string const cInsertJob = R"(INSERT INTO `jobs` (`id`, `client_id`) VALUES 
 std::string const cInsertTask
         = R"(INSERT INTO `tasks` (`id`, `job_id`, `func_name`, `language`, `state`, `timeout`, `max_retry`) VALUES (?, ?, ?, ?, ?, ?, ?))";
 
+std::string const cInsertChannel
+        = R"(INSERT INTO `channels` (`id`, `job_id`, `type`) VALUES (?, ?, ?))";
+
+std::string const cInsertChannelProducer
+        = R"(INSERT INTO `channel_producers` (`channel_id`, `task_id`) VALUES (?, ?))";
+
+std::string const cInsertChannelConsumer
+        = R"(INSERT INTO `channel_consumers` (`channel_id`, `task_id`) VALUES (?, ?))";
+
 std::string const cInsertTaskInputOutput
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`) VALUES (?, ?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`, `channel_id`) VALUES (?, ?, ?, ?, ?, ?))";
 
 std::string const cInsertTaskInputData
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `data_id`) VALUES (?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `data_id`, `channel_id`) VALUES (?, ?, ?, ?, ?))";
 
 std::string const cInsertTaskInputValue
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `value`) VALUES (?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `value`, `channel_id`) VALUES (?, ?, ?, ?, ?))";
 
 std::string const cInsertTaskOutput
-        = R"(INSERT INTO `task_outputs` (`task_id`, `position`, `type`) VALUES (?, ?, ?))";
+        = R"(INSERT INTO `task_outputs` (`task_id`, `position`, `type`, `channel_id`) VALUES (?, ?, ?, ?))";
+
+std::string const cInsertTaskInputChannel
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `channel_id`) VALUES (?, ?, ?, ?))";
 
 std::string const cInsertTaskDependency
         = R"(INSERT INTO `task_dependencies` (parent, child) VALUES (?, ?))";

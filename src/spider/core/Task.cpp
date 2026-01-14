@@ -31,6 +31,13 @@ auto Task::get_arg_buffers() const -> std::optional<std::vector<msgpack::sbuffer
             msgpack::pack(arg_buffers.back(), data_id);
             continue;
         }
+        std::optional<boost::uuids::uuid> const optional_channel_id = input.get_channel_id();
+        if (optional_channel_id.has_value()) {
+            boost::uuids::uuid const channel_id = optional_channel_id.value();
+            arg_buffers.emplace_back();
+            msgpack::pack(arg_buffers.back(), channel_id);
+            continue;
+        }
         spdlog::error(
                 "Task {} {} input {} has no value or data id",
                 m_function_name,

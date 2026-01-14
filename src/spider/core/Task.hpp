@@ -44,11 +44,17 @@ public:
         return m_data_id;
     }
 
+    [[nodiscard]] auto get_channel_id() const -> std::optional<boost::uuids::uuid> {
+        return m_channel_id;
+    }
+
     [[nodiscard]] auto get_type() const -> std::string { return m_type; }
 
     void set_value(std::string const& value) { m_value = value; }
 
     void set_data_id(boost::uuids::uuid data_id) { m_data_id = data_id; }
+
+    void set_channel_id(boost::uuids::uuid channel_id) { m_channel_id = channel_id; }
 
     void
     set_output(boost::uuids::uuid const output_task_id, std::uint8_t const output_task_position) {
@@ -59,6 +65,7 @@ private:
     std::optional<std::tuple<boost::uuids::uuid, std::uint8_t>> m_task_output;
     std::optional<std::string> m_value;
     std::optional<boost::uuids::uuid> m_data_id;
+    std::optional<boost::uuids::uuid> m_channel_id;
     std::string m_type;
 };
 
@@ -80,16 +87,32 @@ public:
         return m_data_id;
     }
 
+    [[nodiscard]] auto get_channel_id() const -> std::optional<boost::uuids::uuid> {
+        return m_channel_id;
+    }
+
     [[nodiscard]] auto get_type() const -> std::string { return m_type; }
 
     void set_value(std::string const& value) { m_value = value; }
 
     void set_data_id(boost::uuids::uuid data_id) { m_data_id = data_id; }
 
+    void set_channel_id(boost::uuids::uuid channel_id) { m_channel_id = channel_id; }
+
 private:
     std::optional<std::string> m_value;
     std::optional<boost::uuids::uuid> m_data_id;
+    std::optional<boost::uuids::uuid> m_channel_id;
     std::string m_type;
+};
+
+struct ChannelItem {
+    boost::uuids::uuid channel_id;
+    boost::uuids::uuid producer_task_id;
+    std::uint32_t item_index{};
+    std::optional<std::string> value;
+    std::optional<boost::uuids::uuid> data_id;
+    std::optional<boost::uuids::uuid> delivered_to_task_id;
 };
 
 struct TaskInstance {

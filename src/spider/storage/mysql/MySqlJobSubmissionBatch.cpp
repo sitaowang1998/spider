@@ -14,8 +14,20 @@ namespace spider::core {
 MySqlJobSubmissionBatch::MySqlJobSubmissionBatch(StorageConnection& conn)
         : m_job_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(mysql::cInsertJob)},
           m_task_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(mysql::cInsertTask)},
+          m_channel_stmt{
+                  static_cast<MySqlConnection&>(conn)->prepareStatement(mysql::cInsertChannel)
+          },
+          m_channel_producer_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(
+                  mysql::cInsertChannelProducer
+          )},
+          m_channel_consumer_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(
+                  mysql::cInsertChannelConsumer
+          )},
           m_task_input_output_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(
                   mysql::cInsertTaskInputOutput
+          )},
+          m_task_input_channel_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(
+                  mysql::cInsertTaskInputChannel
           )},
           m_task_input_value_stmt{static_cast<MySqlConnection&>(conn)->prepareStatement(
                   mysql::cInsertTaskInputValue
@@ -42,8 +54,12 @@ auto MySqlJobSubmissionBatch::submit_batch(StorageConnection& conn) -> StorageEr
     try {
         m_job_stmt->executeBatch();
         m_task_stmt->executeBatch();
+        m_channel_stmt->executeBatch();
+        m_channel_producer_stmt->executeBatch();
+        m_channel_consumer_stmt->executeBatch();
         m_task_output_stmt->executeBatch();  // Update task outputs in case of input reference
         m_task_input_output_stmt->executeBatch();
+        m_task_input_channel_stmt->executeBatch();
         m_task_input_value_stmt->executeBatch();
         m_task_input_data_stmt->executeBatch();
         m_task_dependency_stmt->executeBatch();

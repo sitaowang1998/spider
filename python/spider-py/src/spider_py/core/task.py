@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from spider_py.core.data import Data, DataId
 
-TaskId = UUID
+if TYPE_CHECKING:
+    from spider_py.core.ids import ChannelId, TaskId
 
 
 @dataclass
@@ -29,6 +31,7 @@ class TaskInput:
 
     type: str
     value: TaskInputData | TaskInputOutput | TaskInputValue | None
+    channel_id: ChannelId | None = None
 
 
 TaskOutputValue = bytes
@@ -40,7 +43,8 @@ class TaskOutput:
     """Represents a task output"""
 
     type: str
-    value: TaskOutputData | TaskOutputValue
+    value: TaskOutputData | TaskOutputValue | None = None
+    channel_id: ChannelId | None = None
 
 
 class TaskState(IntEnum):
