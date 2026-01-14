@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <optional>
+#include <set>
+#include <string>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -600,6 +603,114 @@ TEMPLATE_LIST_TEST_CASE(
     // Clean up
     REQUIRE(storage->remove_job(*conn, job_id).success());
     REQUIRE(storage->remove_driver(*conn, scheduler_id).success());
+}
+
+TEMPLATE_LIST_TEST_CASE(
+        "Channel storage create/enqueue/dequeue",
+        "[storage]",
+        spider::test::StorageFactoryTypeList
+) {
+    std::unique_ptr<spider::core::StorageFactory> storage_factory
+            = spider::test::create_storage_factory<TestType>();
+    std::unique_ptr<spider::core::MetadataStorage> metadata_storage
+            = storage_factory->provide_metadata_storage();
+
+    std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
+            conn_result = storage_factory->provide_storage_connection();
+    REQUIRE(std::holds_alternative<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+    auto conn = std::move(std::get<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+
+    boost::uuids::random_generator gen;
+    boost::uuids::uuid const job_id = gen();
+    boost::uuids::uuid const client_id = gen();
+    boost::uuids::uuid const channel_id = gen();
+
+    spider::core::Task producer{"producer"};
+    spider::core::TaskOutput producer_output_one{"int"};
+    producer_output_one.set_channel_id(channel_id);
+    producer.add_output(producer_output_one);
+    spider::core::TaskOutput producer_output_two{"int"};
+    producer_output_two.set_channel_id(channel_id);
+    producer.add_output(producer_output_two);
+
+    spider::core::Task consumer{"consumer"};
+    spider::core::TaskInput consumer_input{"int"};
+    consumer_input.set_channel_id(channel_id);
+    consumer.add_input(consumer_input);
+
+    spider::core::TaskGraph graph;
+    graph.add_task(producer);
+    graph.add_task(consumer);
+    graph.add_input_task(producer.get_id());
+    graph.add_input_task(consumer.get_id());
+    graph.add_output_task(consumer.get_id());
+    graph.add_output_task(producer.get_id());
+
+    REQUIRE(metadata_storage->add_job(*conn, job_id, client_id, graph).success());
+
+    spider::core::TaskInstance producer_instance{producer.get_id()};
+    REQUIRE(metadata_storage->create_task_instance(*conn, producer_instance).success());
+
+    std::vector<spider::core::TaskOutput> outputs;
+    spider::core::TaskOutput first_output{std::string{"one"}, "int"};
+    first_output.set_channel_id(channel_id);
+    outputs.push_back(first_output);
+    spider::core::TaskOutput second_output{std::string{"two"}, "int"};
+    second_output.set_channel_id(channel_id);
+    outputs.push_back(second_output);
+    REQUIRE(metadata_storage->task_finish(*conn, producer_instance, outputs).success());
+
+    std::optional<spider::core::ChannelItem> first_item;
+    bool drained = false;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer.get_id(),
+                            &first_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(first_item.has_value());
+    REQUIRE(!drained);
+
+    std::optional<spider::core::ChannelItem> second_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer.get_id(),
+                            &second_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(second_item.has_value());
+    REQUIRE(!drained);
+
+    std::optional<spider::core::ChannelItem> third_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer.get_id(),
+                            &third_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(!third_item.has_value());
+    REQUIRE(drained);
+
+    std::set<std::string> values;
+    values.insert(first_item->value.value_or(""));
+    values.insert(second_item->value.value_or(""));
+    REQUIRE(values.size() == 2);
+    REQUIRE(values.contains("one"));
+    REQUIRE(values.contains("two"));
+
+    REQUIRE(first_item->producer_task_id == producer.get_id());
+    REQUIRE(second_item->producer_task_id == producer.get_id());
+
+    REQUIRE(metadata_storage->remove_job(*conn, job_id).success());
 }
 }  // namespace
 
