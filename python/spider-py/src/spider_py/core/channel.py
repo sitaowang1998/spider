@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
 
 from spider_py.core.data import DataId
-from spider_py.core.task import TaskId
-
-ChannelId = UUID
+from spider_py.core.ids import ChannelId, TaskId
 
 
 @dataclass(frozen=True)

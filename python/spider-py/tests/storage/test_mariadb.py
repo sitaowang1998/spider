@@ -7,7 +7,17 @@ import msgpack
 import pytest
 
 from spider_py import chain, group, Int8, TaskContext
-from spider_py.core import Data, DriverId, Job, JobStatus, TaskInputValue
+from spider_py.core import (
+    Data,
+    DriverId,
+    Job,
+    JobStatus,
+    Task,
+    TaskGraph,
+    TaskInput,
+    TaskInputValue,
+    TaskOutput,
+)
 from spider_py.storage import MariaDBStorage, parse_jdbc_url, StorageError
 
 MariaDBTestUrl = "jdbc:mariadb://127.0.0.1:3306/spider-storage?user=spider&password=password"
@@ -73,6 +83,47 @@ class TestMariaDBStorage:
         driver_id = uuid4()
         jobs = mariadb_storage.submit_jobs(driver_id, [graph])
         assert len(jobs) == 1
+
+    @pytest.mark.storage
+    def test_channel_submission(self, mariadb_storage: MariaDBStorage) -> None:
+        """Tests channel rows are created during job submission."""
+        channel_id = uuid4()
+        graph = TaskGraph()
+        producer = Task(function_name="producer")
+        producer.task_outputs.append(
+            TaskOutput(type="int", value=b"", channel_id=channel_id)
+        )
+        producer.task_outputs.append(
+            TaskOutput(type="int", value=b"", channel_id=channel_id)
+        )
+        consumer = Task(function_name="consumer")
+        consumer.task_inputs.append(TaskInput(type="int", value=None, channel_id=channel_id))
+        graph.add_task(producer)
+        graph.add_task(consumer)
+        graph.input_task_indices = [0, 1]
+        graph.output_task_indices = [0, 1]
+
+        driver_id = uuid4()
+        jobs = mariadb_storage.submit_jobs(driver_id, [graph])
+        job_id = jobs[0].job_id
+
+        with mariadb_storage._conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM `channels` WHERE `id` = ? AND `job_id` = ?",
+                (channel_id.bytes, job_id.bytes),
+            )
+            assert cursor.fetchone()[0] == 1
+            cursor.execute(
+                "SELECT COUNT(*) FROM `channel_producers` WHERE `channel_id` = ?",
+                (channel_id.bytes,),
+            )
+            assert cursor.fetchone()[0] == 1
+            cursor.execute(
+                "SELECT COUNT(*) FROM `channel_consumers` WHERE `channel_id` = ?",
+                (channel_id.bytes,),
+            )
+            assert cursor.fetchone()[0] == 1
+        mariadb_storage._conn.commit()
 
     @pytest.mark.storage
     def test_running_job_status(self, mariadb_storage: MariaDBStorage, submit_job: Job) -> None:

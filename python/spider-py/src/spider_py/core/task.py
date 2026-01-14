@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from spider_py.core.channel import ChannelId
 from spider_py.core.data import Data, DataId
-
-TaskId = UUID
+from spider_py.core.ids import ChannelId, TaskId
 
 
 @dataclass
