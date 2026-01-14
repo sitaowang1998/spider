@@ -86,3 +86,17 @@ class Storage(ABC):
         :param driver_id:
         :raises StorageError: If the storage operations fail.
         """
+
+    @abstractmethod
+    def dequeue_channel_item(
+        self,
+        channel_id: core.ChannelId,
+        consumer_task_id: core.TaskId,
+    ) -> tuple[core.ChannelItem | None, bool]:
+        """
+        Dequeues one item from the channel for the given consumer.
+        :param channel_id:
+        :param consumer_task_id:
+        :return: A channel item if available, otherwise None, plus a drained flag.
+        :raises StorageError: If the storage operations fail.
+        """

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from uuid import UUID, uuid4
 
+from spider_py.core.channel import ChannelId
 from spider_py.core.data import Data, DataId
 
 TaskId = UUID
@@ -29,6 +30,7 @@ class TaskInput:
 
     type: str
     value: TaskInputData | TaskInputOutput | TaskInputValue | None
+    channel_id: ChannelId | None = None
 
 
 TaskOutputValue = bytes
@@ -41,6 +43,7 @@ class TaskOutput:
 
     type: str
     value: TaskOutputData | TaskOutputValue
+    channel_id: ChannelId | None = None
 
 
 class TaskState(IntEnum):

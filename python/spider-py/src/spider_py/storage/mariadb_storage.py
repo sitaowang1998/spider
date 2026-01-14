@@ -24,27 +24,33 @@ VALUES
 
 InsertTaskInputOutput = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`)
+  `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`, `channel_id`)
 VALUES
-  (?, ?, ?, ?, ?)"""
+  (?, ?, ?, ?, ?, ?)"""
 
 InsertTaskInputData = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `data_id`)
+  `task_inputs` (`task_id`, `position`, `type`, `data_id`, `channel_id`)
 VALUES
-  (?, ?, ?, ?)"""
+  (?, ?, ?, ?, ?)"""
 
 InsertTaskInputValue = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `value`)
+  `task_inputs` (`task_id`, `position`, `type`, `value`, `channel_id`)
 VALUES
-  (?, ?, ?, ?)"""
+  (?, ?, ?, ?, ?)"""
 
 InsertTaskOutput = """
 INSERT INTO
-  `task_outputs` (`task_id`, `position`, `type`)
+  `task_outputs` (`task_id`, `position`, `type`, `channel_id`)
 VALUES
-  (?, ?, ?)"""
+  (?, ?, ?, ?)"""
+
+InsertTaskInputChannel = """
+INSERT INTO
+  `task_inputs` (`task_id`, `position`, `type`, `channel_id`)
+VALUES
+  (?, ?, ?, ?)"""
 
 InsertTaskDependency = """
 INSERT INTO
@@ -63,6 +69,24 @@ INSERT INTO
   `output_tasks` (`job_id`, `task_id`, `position`)
 VALUES
   (?, ?, ?)"""
+
+InsertChannel = """
+INSERT INTO
+  `channels` (`id`, `job_id`, `type`)
+VALUES
+  (?, ?, ?)"""
+
+InsertChannelProducer = """
+INSERT INTO
+  `channel_producers` (`channel_id`, `task_id`)
+VALUES
+  (?, ?)"""
+
+InsertChannelConsumer = """
+INSERT INTO
+  `channel_consumers` (`channel_id`, `task_id`)
+VALUES
+  (?, ?)"""
 
 
 GetJobStatus = """
@@ -142,6 +166,29 @@ INSERT INTO
 VALUES
   (?)"""
 
+SelectChannelItemForUpdate = """
+SELECT
+  `producer_task_id`,
+  `item_index`,
+  `value`,
+  `data_id`
+FROM
+  `channel_items`
+WHERE
+  `channel_id` = ? AND `delivered_to_task_id` IS NULL
+ORDER BY
+  `item_index`
+LIMIT 1 FOR UPDATE"""
+
+UpdateChannelItemDelivery = """
+UPDATE
+  `channel_items`
+SET
+  `delivered_to_task_id` = ?
+WHERE
+  `channel_id` = ? AND `producer_task_id` = ? AND `item_index` = ?
+  AND `delivered_to_task_id` IS NULL"""
+
 _StrToJobStatusMap = {
     "running": core.JobStatus.Running,
     "success": core.JobStatus.Succeeded,
@@ -190,6 +237,9 @@ class MariaDBStorage(Storage):
             for task_graph in task_graphs:
                 jobs.append(core.Job(uuid4()))
                 task_ids.append([uuid4() for _ in task_graph.tasks])
+            channel_params, channel_producer_params, channel_consumer_params = (
+                self._gen_channel_insertion_params(jobs, task_ids, task_graphs)
+            )
 
             with self._conn.cursor() as cursor:
                 # Insert jobs table
@@ -199,6 +249,14 @@ class MariaDBStorage(Storage):
                     InsertTask,
                     self._gen_task_insertion_params(jobs, task_ids, task_graphs),
                 )
+
+                # Insert channels tables
+                if channel_params:
+                    cursor.executemany(InsertChannel, channel_params)
+                if channel_producer_params:
+                    cursor.executemany(InsertChannelProducer, channel_producer_params)
+                if channel_consumer_params:
+                    cursor.executemany(InsertChannelConsumer, channel_consumer_params)
 
                 # Insert task dependencies table
                 dep_params = self._gen_task_dependency_insertion_params(task_ids, task_graphs)
@@ -246,6 +304,16 @@ class MariaDBStorage(Storage):
                         input_value_params,
                     )
 
+                # Insert task input channels table
+                input_channel_params = self._gen_task_input_channel_insertion_params(
+                    task_ids, task_graphs
+                )
+                if input_channel_params:
+                    cursor.executemany(
+                        InsertTaskInputChannel,
+                        input_channel_params,
+                    )
+
                 # Insert task input outputs table
                 input_output_params = self._gen_task_input_output_ref_insertion_params(
                     task_ids, task_graphs
@@ -261,6 +329,9 @@ class MariaDBStorage(Storage):
         except mariadb.Error as e:
             self._conn.rollback()
             raise StorageError(str(e)) from e
+        except StorageError:
+            self._conn.rollback()
+            raise
 
     @override
     def get_job_status(self, job: core.Job) -> core.JobStatus:
@@ -344,6 +415,55 @@ class MariaDBStorage(Storage):
             with self._conn.cursor() as cursor:
                 cursor.execute(InsertDriver, (driver_id.bytes,))
                 self._conn.commit()
+        except mariadb.Error as e:
+            self._conn.rollback()
+            raise StorageError(str(e)) from e
+
+    @override
+    def dequeue_channel_item(
+        self,
+        channel_id: core.ChannelId,
+        consumer_task_id: core.TaskId,
+    ) -> tuple[core.ChannelItem | None, bool]:
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute(SelectChannelItemForUpdate, (channel_id.bytes,))
+                row = cursor.fetchone()
+                if row is None:
+                    cursor.execute(
+                        "SELECT `sender_closed` FROM `channels` WHERE `id` = ?",
+                        (channel_id.bytes,),
+                    )
+                    closed_row = cursor.fetchone()
+                    if closed_row is None:
+                        msg = f"Channel {channel_id} not found."
+                        raise StorageError(msg)
+                    drained = bool(closed_row[0])
+                    self._conn.commit()
+                    return None, drained
+                producer_task_id_bytes, item_index, value, data_id = row
+                cursor.execute(
+                    UpdateChannelItemDelivery,
+                    (
+                        consumer_task_id.bytes,
+                        channel_id.bytes,
+                        producer_task_id_bytes,
+                        item_index,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    self._conn.commit()
+                    return None, False
+                item = core.ChannelItem(
+                    channel_id=channel_id,
+                    producer_task_id=UUID(bytes=producer_task_id_bytes),
+                    item_index=item_index,
+                    value=value,
+                    data_id=UUID(bytes=data_id) if data_id is not None else None,
+                    delivered_to_task_id=consumer_task_id,
+                )
+                self._conn.commit()
+                return item, False
         except mariadb.Error as e:
             self._conn.rollback()
             raise StorageError(str(e)) from e
@@ -499,10 +619,67 @@ class MariaDBStorage(Storage):
         return output_task_params
 
     @staticmethod
+    def _gen_channel_insertion_params(
+        jobs: Sequence[core.Job],
+        task_ids: Sequence[Sequence[UUID]],
+        task_graphs: Sequence[core.TaskGraph],
+    ) -> tuple[list[tuple[bytes, bytes, str]], list[tuple[bytes, bytes]], list[tuple[bytes, bytes]]]:
+        """
+        Generates parameters for inserting channels and channel memberships.
+        :param jobs: The jobs.
+        :param task_ids: The task IDs. Must be the same length as `jobs`.
+        :param task_graphs: The task graphs. Must be the same length as `jobs`.
+        :return: A tuple containing channel params, producer params, and consumer params.
+        """
+        channel_params: list[tuple[bytes, bytes, str]] = []
+        channel_producer_params: list[tuple[bytes, bytes]] = []
+        channel_consumer_params: list[tuple[bytes, bytes]] = []
+        if len(jobs) != len(task_graphs):
+            msg = "The lengths of `jobs` and `task_graphs` must match."
+            raise ValueError(msg)
+        for graph_index, (job, task_graph) in enumerate(zip(jobs, task_graphs, strict=True)):
+            channel_info: dict[UUID, dict[str, set[bytes]]] = {}
+            for task_index, task in enumerate(task_graph.tasks):
+                task_id_bytes = task_ids[graph_index][task_index].bytes
+                for task_output in task.task_outputs:
+                    if task_output.channel_id is None:
+                        continue
+                    entry = channel_info.setdefault(
+                        task_output.channel_id,
+                        {"type": task_output.type, "producers": set(), "consumers": set()},
+                    )
+                    if entry["type"] != task_output.type:
+                        msg = f"Channel {task_output.channel_id} has conflicting types."
+                        raise StorageError(msg)
+                    entry["producers"].add(task_id_bytes)
+                for task_input in task.task_inputs:
+                    if task_input.channel_id is None:
+                        continue
+                    if task_input.value is not None:
+                        continue
+                    entry = channel_info.setdefault(
+                        task_input.channel_id,
+                        {"type": task_input.type, "producers": set(), "consumers": set()},
+                    )
+                    if entry["type"] != task_input.type:
+                        msg = f"Channel {task_input.channel_id} has conflicting types."
+                        raise StorageError(msg)
+                    entry["consumers"].add(task_id_bytes)
+            for channel_id, info in channel_info.items():
+                channel_params.append((channel_id.bytes, job.job_id.bytes, info["type"]))
+                channel_producer_params.extend(
+                    (channel_id.bytes, task_id_bytes) for task_id_bytes in info["producers"]
+                )
+                channel_consumer_params.extend(
+                    (channel_id.bytes, task_id_bytes) for task_id_bytes in info["consumers"]
+                )
+        return channel_params, channel_producer_params, channel_consumer_params
+
+    @staticmethod
     def _gen_task_output_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str]]:
+    ) -> list[tuple[bytes, int, str, bytes | None]]:
         """
         Generates parameters for inserting task outputs into the database.
         :param task_ids: The task IDs.
@@ -517,8 +694,16 @@ class MariaDBStorage(Storage):
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_output in enumerate(task.task_outputs):
+                    channel_id = (
+                        task_output.channel_id.bytes if task_output.channel_id is not None else None
+                    )
                     output_params.append(
-                        (task_ids[graph_index][task_index].bytes, position, task_output.type)
+                        (
+                            task_ids[graph_index][task_index].bytes,
+                            position,
+                            task_output.type,
+                            channel_id,
+                        )
                     )
         return output_params
 
@@ -526,7 +711,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_data_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes]]:
+    ) -> list[tuple[bytes, int, str, bytes, bytes | None]]:
         """
         Generates parameters for inserting task input data into the database.
         :param task_ids: The task IDs.
@@ -552,6 +737,7 @@ class MariaDBStorage(Storage):
                             position,
                             task_input.type,
                             data,
+                            None,
                         )
                     )
         return input_data_params
@@ -560,7 +746,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_value_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes]]:
+    ) -> list[tuple[bytes, int, str, bytes, bytes | None]]:
         """
         Generates parameters for inserting task input values into the database.
         :param task_ids: The task IDs.
@@ -583,15 +769,50 @@ class MariaDBStorage(Storage):
                                 position,
                                 task_input.type,
                                 task_input.value,
+                                None,
                             )
                         )
         return input_value_params
 
     @staticmethod
+    def _gen_task_input_channel_insertion_params(
+        task_ids: Sequence[Sequence[UUID]],
+        task_graphs: Sequence[core.TaskGraph],
+    ) -> list[tuple[bytes, int, str, bytes]]:
+        """
+        Generates parameters for inserting task input channels into the database.
+        :param task_ids: The task IDs. Must be the same length as `task_graphs`.
+        :param task_graphs: The task graphs.
+        :return: A list of tuples containing the parameters for each task input channel. Each tuple
+            contains:
+            - Task ID.
+            - Positional index of the input.
+            - Type of the input.
+            - Channel ID.
+        """
+        input_channel_params = []
+        for graph_index, task_graph in enumerate(task_graphs):
+            for task_index, task in enumerate(task_graph.tasks):
+                for position, task_input in enumerate(task.task_inputs):
+                    if task_input.channel_id is None:
+                        continue
+                    if task_input.value is not None:
+                        continue
+                    input_channel_params.append(
+                        (
+                            task_ids[graph_index][task_index].bytes,
+                            position,
+                            task_input.type,
+                            task_input.channel_id.bytes,
+                        )
+                    )
+        return input_channel_params
+
+    @staticmethod
     def _gen_task_input_output_ref_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes, int]]:
+    ) -> list[tuple[bytes, int, str, bytes, int, bytes | None]]:
         """
         Generates parameters for inserting task input output refs into the database.
         :param task_ids: The task IDs.
@@ -607,15 +828,17 @@ class MariaDBStorage(Storage):
         input_output_params = []
         for graph_index, task_graph in enumerate(task_graphs):
             for input_output_ref in task_graph.task_input_output_refs:
+                task_input = task_graph.tasks[input_output_ref.input_task_index].task_inputs[
+                    input_output_ref.input_position
+                ]
                 input_output_params.append(
                     (
                         task_ids[graph_index][input_output_ref.input_task_index].bytes,
                         input_output_ref.input_position,
-                        task_graph.tasks[input_output_ref.input_task_index]
-                        .task_inputs[input_output_ref.input_position]
-                        .type,
+                        task_input.type,
                         task_ids[graph_index][input_output_ref.output_task_index].bytes,
                         input_output_ref.output_position,
+                        None,
                     )
                 )
         return input_output_params
