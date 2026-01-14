@@ -107,8 +107,8 @@ private:
 };
 
 struct ChannelItem {
-    boost::uuids::uuid channel_id{};
-    boost::uuids::uuid producer_task_id{};
+    boost::uuids::uuid channel_id;
+    boost::uuids::uuid producer_task_id;
     std::uint32_t item_index{};
     std::optional<std::string> value;
     std::optional<boost::uuids::uuid> data_id;
