@@ -514,7 +514,10 @@ class MariaDBStorage(Storage):
             {"type": channel_type, "producers": set(), "consumers": set()},
         )
         if entry["type"] != channel_type:
-            msg = f"Channel {channel_id} has conflicting types."
+            msg = (
+                f"Channel {channel_id} has conflicting types: "
+                f"existing type '{entry['type']}', new type '{channel_type}'."
+            )
             raise StorageError(msg)
         entry[member_key].add(task_id_bytes)
 
