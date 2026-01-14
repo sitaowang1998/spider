@@ -43,7 +43,7 @@ class TaskOutput:
     """Represents a task output"""
 
     type: str
-    value: TaskOutputData | TaskOutputValue
+    value: TaskOutputData | TaskOutputValue | None = None
     channel_id: ChannelId | None = None
 
 
