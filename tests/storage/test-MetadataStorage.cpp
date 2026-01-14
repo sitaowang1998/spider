@@ -648,7 +648,7 @@ TEMPLATE_LIST_TEST_CASE(
 
     REQUIRE(metadata_storage->add_job(*conn, job_id, client_id, graph).success());
 
-    spider::core::TaskInstance producer_instance{producer.get_id()};
+    spider::core::TaskInstance const producer_instance{producer.get_id()};
     REQUIRE(metadata_storage->create_task_instance(*conn, producer_instance).success());
 
     std::vector<spider::core::TaskOutput> outputs;
@@ -701,8 +701,10 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(drained);
 
     std::set<std::string> values;
-    values.insert(first_item->value.value_or(""));
-    values.insert(second_item->value.value_or(""));
+    REQUIRE(first_item->value.has_value());
+    REQUIRE(second_item->value.has_value());
+    values.insert(first_item->value.value());
+    values.insert(second_item->value.value());
     REQUIRE(values.size() == 2);
     REQUIRE(values.contains("one"));
     REQUIRE(values.contains("two"));
