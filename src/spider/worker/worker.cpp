@@ -319,7 +319,8 @@ parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> cons
     std::vector<spider::core::TaskOutput> outputs;
     outputs.reserve(task.get_num_outputs());
     for (size_t i = 0; i < task.get_num_outputs(); ++i) {
-        std::string const type = task.get_output(i).get_type();
+        TaskOutput const& output_def = task.get_output(i);
+        std::string const type = output_def.get_type();
         if (type == typeid(spider::core::Data).name()) {
             try {
                 msgpack::object_handle const handle
@@ -327,7 +328,11 @@ parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> cons
                 msgpack::object const obj = handle.get();
                 boost::uuids::uuid data_id;
                 obj.convert(data_id);
-                outputs.emplace_back(data_id);
+                TaskOutput output{data_id};
+                if (output_def.get_channel_id().has_value()) {
+                    output.set_channel_id(output_def.get_channel_id().value());
+                }
+                outputs.emplace_back(std::move(output));
             } catch (std::runtime_error const& e) {
                 spdlog::error(
                         "Task {} failed to parse result as data id",
@@ -338,7 +343,11 @@ parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> cons
         } else {
             msgpack::sbuffer const& buffer = result_buffers[i];
             std::string const value{buffer.data(), buffer.size()};
-            outputs.emplace_back(value, type);
+            TaskOutput output{value, type};
+            if (output_def.get_channel_id().has_value()) {
+                output.set_channel_id(output_def.get_channel_id().value());
+            }
+            outputs.emplace_back(std::move(output));
         }
     }
     return outputs;

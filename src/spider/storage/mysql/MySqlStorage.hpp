@@ -114,6 +114,13 @@ public:
     auto
     get_scheduler_addr(StorageConnection& conn, boost::uuids::uuid id, std::string* addr, int* port)
             -> StorageErr override;
+    auto dequeue_channel_item(
+            StorageConnection& conn,
+            boost::uuids::uuid channel_id,
+            boost::uuids::uuid consumer_task_id,
+            std::optional<ChannelItem>* item,
+            bool* drained
+    ) -> StorageErr override;
 
 private:
     MySqlMetadataStorage() = default;
