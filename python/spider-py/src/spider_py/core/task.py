@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from spider_py.core.data import Data, DataId
-from spider_py.core.ids import ChannelId, TaskId
+
+if TYPE_CHECKING:
+    from spider_py.core.ids import ChannelId, TaskId
 
 
 @dataclass

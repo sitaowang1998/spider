@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from spider_py.core.data import DataId
-from spider_py.core.ids import ChannelId, TaskId
+if TYPE_CHECKING:
+    from spider_py.core.data import DataId
+    from spider_py.core.ids import ChannelId, TaskId
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 """MariaDB Storage module."""
 
 from collections.abc import Sequence
+from typing import Literal, TypedDict
 from uuid import UUID, uuid4
 
 import mariadb
@@ -24,7 +25,8 @@ VALUES
 
 InsertTaskInputOutput = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`, `channel_id`)
+  `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`,
+  `channel_id`)
 VALUES
   (?, ?, ?, ?, ?, ?)"""
 
@@ -87,6 +89,12 @@ INSERT INTO
   `channel_consumers` (`channel_id`, `task_id`)
 VALUES
   (?, ?)"""
+
+
+class _ChannelInfo(TypedDict):
+    type: str
+    producers: set[bytes]
+    consumers: set[bytes]
 
 
 GetJobStatus = """
@@ -231,7 +239,7 @@ class MariaDBStorage(Storage):
         if not task_graphs:
             return []
         try:
-            # Create job UUIDs and task UUIDs
+            # Create job UUIDs and task UUIDs.
             jobs = []
             task_ids = []
             for task_graph in task_graphs:
@@ -251,20 +259,13 @@ class MariaDBStorage(Storage):
                 )
 
                 # Insert channels tables
-                if channel_params:
-                    cursor.executemany(InsertChannel, channel_params)
-                if channel_producer_params:
-                    cursor.executemany(InsertChannelProducer, channel_producer_params)
-                if channel_consumer_params:
-                    cursor.executemany(InsertChannelConsumer, channel_consumer_params)
+                self._execute_optional_batch(cursor, InsertChannel, channel_params)
+                self._execute_optional_batch(cursor, InsertChannelProducer, channel_producer_params)
+                self._execute_optional_batch(cursor, InsertChannelConsumer, channel_consumer_params)
 
                 # Insert task dependencies table
                 dep_params = self._gen_task_dependency_insertion_params(task_ids, task_graphs)
-                if dep_params:
-                    cursor.executemany(
-                        InsertTaskDependency,
-                        dep_params,
-                    )
+                self._execute_optional_batch(cursor, InsertTaskDependency, dep_params)
 
                 # Insert input tasks table
                 cursor.executemany(
@@ -288,41 +289,25 @@ class MariaDBStorage(Storage):
                 input_data_params = self._gen_task_input_data_insertion_params(
                     task_ids, task_graphs
                 )
-                if input_data_params:
-                    cursor.executemany(
-                        InsertTaskInputData,
-                        input_data_params,
-                    )
+                self._execute_optional_batch(cursor, InsertTaskInputData, input_data_params)
 
                 # Insert task input values table
                 input_value_params = self._gen_task_input_value_insertion_params(
                     task_ids, task_graphs
                 )
-                if input_value_params:
-                    cursor.executemany(
-                        InsertTaskInputValue,
-                        input_value_params,
-                    )
+                self._execute_optional_batch(cursor, InsertTaskInputValue, input_value_params)
 
                 # Insert task input channels table
                 input_channel_params = self._gen_task_input_channel_insertion_params(
                     task_ids, task_graphs
                 )
-                if input_channel_params:
-                    cursor.executemany(
-                        InsertTaskInputChannel,
-                        input_channel_params,
-                    )
+                self._execute_optional_batch(cursor, InsertTaskInputChannel, input_channel_params)
 
                 # Insert task input outputs table
                 input_output_params = self._gen_task_input_output_ref_insertion_params(
                     task_ids, task_graphs
                 )
-                if input_output_params:
-                    cursor.executemany(
-                        InsertTaskInputOutput,
-                        input_output_params,
-                    )
+                self._execute_optional_batch(cursor, InsertTaskInputOutput, input_output_params)
 
                 self._conn.commit()
                 return jobs
@@ -499,6 +484,106 @@ class MariaDBStorage(Storage):
             raise StorageError(str(e)) from e
 
     @staticmethod
+    def _execute_optional_batch(
+        cursor: mariadb.Cursor,
+        statement: str,
+        params: Sequence[tuple[object, ...]],
+    ) -> None:
+        if params:
+            cursor.executemany(statement, params)
+
+    @staticmethod
+    def _ensure_jobs_task_graphs_match(
+        jobs: Sequence[core.Job],
+        task_graphs: Sequence[core.TaskGraph],
+    ) -> None:
+        if len(jobs) != len(task_graphs):
+            msg = "The lengths of `jobs` and `task_graphs` must match."
+            raise ValueError(msg)
+
+    @staticmethod
+    def _update_channel_info(
+        channel_info: dict[UUID, _ChannelInfo],
+        channel_id: UUID,
+        channel_type: str,
+        task_id_bytes: bytes,
+        member_key: Literal["producers", "consumers"],
+    ) -> None:
+        entry = channel_info.setdefault(
+            channel_id,
+            {"type": channel_type, "producers": set(), "consumers": set()},
+        )
+        if entry["type"] != channel_type:
+            msg = f"Channel {channel_id} has conflicting types."
+            raise StorageError(msg)
+        entry[member_key].add(task_id_bytes)
+
+    @staticmethod
+    def _add_task_outputs(
+        channel_info: dict[UUID, _ChannelInfo],
+        task: core.Task,
+        task_id_bytes: bytes,
+    ) -> None:
+        for task_output in task.task_outputs:
+            if task_output.channel_id is None:
+                continue
+            MariaDBStorage._update_channel_info(
+                channel_info,
+                task_output.channel_id,
+                task_output.type,
+                task_id_bytes,
+                "producers",
+            )
+
+    @staticmethod
+    def _add_task_inputs(
+        channel_info: dict[UUID, _ChannelInfo],
+        task: core.Task,
+        task_id_bytes: bytes,
+    ) -> None:
+        for task_input in task.task_inputs:
+            if task_input.channel_id is None:
+                continue
+            if task_input.value is not None:
+                continue
+            MariaDBStorage._update_channel_info(
+                channel_info,
+                task_input.channel_id,
+                task_input.type,
+                task_id_bytes,
+                "consumers",
+            )
+
+    @staticmethod
+    def _collect_channel_info(
+        task_ids: Sequence[UUID],
+        task_graph: core.TaskGraph,
+    ) -> dict[UUID, _ChannelInfo]:
+        channel_info: dict[UUID, _ChannelInfo] = {}
+        for task_index, task in enumerate(task_graph.tasks):
+            task_id_bytes = task_ids[task_index].bytes
+            MariaDBStorage._add_task_outputs(channel_info, task, task_id_bytes)
+            MariaDBStorage._add_task_inputs(channel_info, task, task_id_bytes)
+        return channel_info
+
+    @staticmethod
+    def _append_channel_params(
+        channel_params: list[tuple[bytes, bytes, str]],
+        channel_producer_params: list[tuple[bytes, bytes]],
+        channel_consumer_params: list[tuple[bytes, bytes]],
+        channel_info: dict[UUID, _ChannelInfo],
+        job_id_bytes: bytes,
+    ) -> None:
+        for channel_id, info in channel_info.items():
+            channel_params.append((channel_id.bytes, job_id_bytes, info["type"]))
+            channel_producer_params.extend(
+                (channel_id.bytes, task_id_bytes) for task_id_bytes in info["producers"]
+            )
+            channel_consumer_params.extend(
+                (channel_id.bytes, task_id_bytes) for task_id_bytes in info["consumers"]
+            )
+
+    @staticmethod
     def _gen_task_insertion_params(
         jobs: Sequence[core.Job],
         task_ids: Sequence[Sequence[UUID]],
@@ -623,7 +708,11 @@ class MariaDBStorage(Storage):
         jobs: Sequence[core.Job],
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> tuple[list[tuple[bytes, bytes, str]], list[tuple[bytes, bytes]], list[tuple[bytes, bytes]]]:
+    ) -> tuple[
+        list[tuple[bytes, bytes, str]],
+        list[tuple[bytes, bytes]],
+        list[tuple[bytes, bytes]],
+    ]:
         """
         Generates parameters for inserting channels and channel memberships.
         :param jobs: The jobs.
@@ -634,45 +723,16 @@ class MariaDBStorage(Storage):
         channel_params: list[tuple[bytes, bytes, str]] = []
         channel_producer_params: list[tuple[bytes, bytes]] = []
         channel_consumer_params: list[tuple[bytes, bytes]] = []
-        if len(jobs) != len(task_graphs):
-            msg = "The lengths of `jobs` and `task_graphs` must match."
-            raise ValueError(msg)
+        MariaDBStorage._ensure_jobs_task_graphs_match(jobs, task_graphs)
         for graph_index, (job, task_graph) in enumerate(zip(jobs, task_graphs, strict=True)):
-            channel_info: dict[UUID, dict[str, set[bytes]]] = {}
-            for task_index, task in enumerate(task_graph.tasks):
-                task_id_bytes = task_ids[graph_index][task_index].bytes
-                for task_output in task.task_outputs:
-                    if task_output.channel_id is None:
-                        continue
-                    entry = channel_info.setdefault(
-                        task_output.channel_id,
-                        {"type": task_output.type, "producers": set(), "consumers": set()},
-                    )
-                    if entry["type"] != task_output.type:
-                        msg = f"Channel {task_output.channel_id} has conflicting types."
-                        raise StorageError(msg)
-                    entry["producers"].add(task_id_bytes)
-                for task_input in task.task_inputs:
-                    if task_input.channel_id is None:
-                        continue
-                    if task_input.value is not None:
-                        continue
-                    entry = channel_info.setdefault(
-                        task_input.channel_id,
-                        {"type": task_input.type, "producers": set(), "consumers": set()},
-                    )
-                    if entry["type"] != task_input.type:
-                        msg = f"Channel {task_input.channel_id} has conflicting types."
-                        raise StorageError(msg)
-                    entry["consumers"].add(task_id_bytes)
-            for channel_id, info in channel_info.items():
-                channel_params.append((channel_id.bytes, job.job_id.bytes, info["type"]))
-                channel_producer_params.extend(
-                    (channel_id.bytes, task_id_bytes) for task_id_bytes in info["producers"]
-                )
-                channel_consumer_params.extend(
-                    (channel_id.bytes, task_id_bytes) for task_id_bytes in info["consumers"]
-                )
+            channel_info = MariaDBStorage._collect_channel_info(task_ids[graph_index], task_graph)
+            MariaDBStorage._append_channel_params(
+                channel_params,
+                channel_producer_params,
+                channel_consumer_params,
+                channel_info,
+                job.job_id.bytes,
+            )
         return channel_params, channel_producer_params, channel_consumer_params
 
     @staticmethod
@@ -723,7 +783,7 @@ class MariaDBStorage(Storage):
             - Type of the input.
             - Input data.
         """
-        input_data_params = []
+        input_data_params: list[tuple[bytes, int, str, bytes, bytes | None]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
@@ -758,7 +818,7 @@ class MariaDBStorage(Storage):
             - Type of the input.
             - Input value.
         """
-        input_value_params = []
+        input_value_params: list[tuple[bytes, int, str, bytes, bytes | None]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
@@ -825,7 +885,7 @@ class MariaDBStorage(Storage):
             - Output task ID.
             - Positional index of the output.
         """
-        input_output_params = []
+        input_output_params: list[tuple[bytes, int, str, bytes, int, bytes | None]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for input_output_ref in task_graph.task_input_output_refs:
                 task_input = task_graph.tasks[input_output_ref.input_task_index].task_inputs[
