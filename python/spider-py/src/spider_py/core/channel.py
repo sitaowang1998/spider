@@ -6,17 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from spider_py.core.data import DataId
     from spider_py.core.ids import ChannelId, TaskId
-
-
-@dataclass(frozen=True)
-class ChannelItemPayload:
-    """Represents a channel item payload."""
-
-    item_index: int
-    value: bytes | None = None
-    data_id: DataId | None = None
 
 
 @dataclass(frozen=True)
@@ -25,7 +15,5 @@ class ChannelItem:
 
     channel_id: ChannelId
     producer_task_id: TaskId
-    item_index: int
     value: bytes | None = None
-    data_id: DataId | None = None
     delivered_to_task_id: TaskId | None = None

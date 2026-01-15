@@ -3,6 +3,7 @@
 from spider_py import core
 from spider_py.client.data import Data
 from spider_py.storage import Storage
+from spider_py.utils import from_serializable
 
 
 class TaskContext:
