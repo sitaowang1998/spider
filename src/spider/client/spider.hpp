@@ -5,6 +5,8 @@
 #include <spider/client/Data.hpp>
 #include <spider/client/Driver.hpp>
 #include <spider/client/Job.hpp>
+#include <spider/client/Receiver.hpp>
+#include <spider/client/Sender.hpp>
 #include <spider/client/TaskContext.hpp>
 #include <spider/client/TaskGraph.hpp>
 

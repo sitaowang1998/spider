@@ -68,38 +68,6 @@ public:
         };
     }
 
-    template <TaskIo T>
-    auto channel_recv(boost::uuids::uuid channel_id) -> std::pair<std::optional<T>, bool> {
-        static_assert(
-                !cIsSpecializationV<T, spider::Data>,
-                "Channels do not support spider::Data."
-        );
-        std::variant<std::unique_ptr<core::StorageConnection>, core::StorageErr> conn_result
-                = m_storage_factory->provide_storage_connection();
-        if (std::holds_alternative<core::StorageErr>(conn_result)) {
-            throw ConnectionException(std::get<core::StorageErr>(conn_result).description);
-        }
-        auto conn = std::move(std::get<std::unique_ptr<core::StorageConnection>>(conn_result));
-
-        std::optional<core::ChannelItem> item;
-        bool drained = false;
-        core::StorageErr const err
-                = m_metadata_store
-                          ->dequeue_channel_item(*conn, channel_id, m_task_id, &item, &drained);
-        if (!err.success()) {
-            throw ConnectionException(err.description);
-        }
-        if (!item.has_value()) {
-            return {std::nullopt, drained};
-        }
-        if (!item->value.has_value()) {
-            throw std::runtime_error("Channel item missing value.");
-        }
-        msgpack::object_handle const handle
-                = msgpack::unpack(item->value->data(), item->value->size());
-        return {std::make_optional(handle.get().as<T>()), drained};
-    }
-
     /**
      * Inserts the given key-value pair into the key-value store, overwriting any existing value.
      *

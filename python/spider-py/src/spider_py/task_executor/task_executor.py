@@ -15,6 +15,8 @@ from uuid import UUID
 import msgpack
 
 from spider_py import client
+from spider_py.client.receiver import Receiver
+from spider_py.client.sender import Sender
 from spider_py.storage import MariaDBStorage, parse_jdbc_url, Storage
 from spider_py.task_executor.task_executor_message import get_request_body, TaskExecutorResponseType
 from spider_py.utils import from_serializable, to_serializable
@@ -24,6 +26,36 @@ if TYPE_CHECKING:
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+
+def _is_receiver_type(cls: type | GenericAlias) -> bool:
+    """Check if a type annotation is a Receiver type."""
+    origin = get_origin(cls)
+    if origin is Receiver:
+        return True
+    # Handle cases where cls is the Receiver class itself
+    if isinstance(cls, type) and issubclass(cls, Receiver):
+        return True
+    return False
+
+
+def _is_sender_type(cls: type | GenericAlias) -> bool:
+    """Check if a type annotation is a Sender type."""
+    origin = get_origin(cls)
+    if origin is Sender:
+        return True
+    # Handle cases where cls is the Sender class itself
+    if isinstance(cls, type) and issubclass(cls, Sender):
+        return True
+    return False
+
+
+def _get_channel_item_type(cls: type | GenericAlias) -> type:
+    """Get the item type from a Receiver[T] or Sender[T] annotation."""
+    args = get_args(cls)
+    if args:
+        return args[0]
+    return object  # Default if no type argument
 
 
 HeaderSize = 16
@@ -66,7 +98,10 @@ def receive_message(pipe: BufferedReader) -> bytes:
 
 
 def parse_task_arguments(
-    storage: Storage, params: list[inspect.Parameter], arguments: list[object]
+    storage: Storage,
+    task_context: client.TaskContext,
+    params: list[inspect.Parameter],
+    arguments: list[object],
 ) -> list[object]:
     """
     Parses arguments for the function to be executed.
@@ -74,6 +109,7 @@ def parse_task_arguments(
     NOTE: `params` does not include the `TaskContext` parameter, and must be the same length as
     `arguments`. The caller is responsible for the size check.
     :param storage: Storage instance to use to get Data.
+    :param task_context: The task context for creating Receivers.
     :param params: A list of parameters in the function signature.
     :param arguments: A list of arguments to parse.
     :return: The parsed arguments.
@@ -86,14 +122,40 @@ def parse_task_arguments(
         if param.annotation is inspect.Parameter.empty:
             msg = f"Parameter `{param.name}` has no type annotation."
             raise TypeError(msg)
-        if cls is not client.Data:
-            parsed_args.append(from_serializable(cls, arg))
+
+        # Handle Receiver parameters - arg should be channel_id bytes
+        if _is_receiver_type(cls):
+            if not isinstance(arg, bytes):
+                msg = f"Argument {i}: Expected channel_id bytes for Receiver, got {type(arg).__name__}."
+                raise TypeError(msg)
+            channel_id = UUID(bytes=arg)
+            item_type = _get_channel_item_type(cls)
+            receiver = task_context.get_receiver(channel_id, item_type)
+            parsed_args.append(receiver)
             continue
-        if not isinstance(arg, bytes):
-            msg = f"Argument {i}: Expected `spider.Data` (bytes), but got {type(arg).__name__}."
-            raise TypeError(msg)
-        core_data = storage.get_data(UUID(bytes=arg))
-        parsed_args.append(client.Data(core_data))
+
+        # Handle Sender parameters - arg should be channel_id bytes
+        if _is_sender_type(cls):
+            if not isinstance(arg, bytes):
+                msg = f"Argument {i}: Expected channel_id bytes for Sender, got {type(arg).__name__}."
+                raise TypeError(msg)
+            channel_id = UUID(bytes=arg)
+            item_type = _get_channel_item_type(cls)
+            sender = task_context.get_sender(channel_id, item_type)
+            parsed_args.append(sender)
+            continue
+
+        # Handle Data parameters
+        if cls is client.Data:
+            if not isinstance(arg, bytes):
+                msg = f"Argument {i}: Expected `spider.Data` (bytes), but got {type(arg).__name__}."
+                raise TypeError(msg)
+            core_data = storage.get_data(UUID(bytes=arg))
+            parsed_args.append(client.Data(core_data))
+            continue
+
+        # Handle regular parameters
+        parsed_args.append(from_serializable(cls, arg))
     return parsed_args
 
 
@@ -228,7 +290,7 @@ def main() -> None:
         task_context = client.TaskContext(task_id, storage)
         arguments = [
             task_context,
-            *parse_task_arguments(storage, list(signature.parameters.values())[1:], arguments),
+            *parse_task_arguments(storage, task_context, list(signature.parameters.values())[1:], arguments),
         ]
         try:
             results = function(*arguments)

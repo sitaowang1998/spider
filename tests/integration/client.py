@@ -15,25 +15,28 @@ import pytest
 class TaskInput:
     """
     Represents an input to a task.
-    It can be a direct value, a reference to another task's output, or a reference to data.
+    It can be a direct value, a reference to another task's output, a reference to data,
+    or a channel input.
     """
 
     type: str
     task_output: tuple[uuid.UUID, int] | None = None
     value: bytes | None = None
     data_id: uuid.UUID | None = None
+    channel_id: uuid.UUID | None = None
 
 
 @dataclass
 class TaskOutput:
     """
     Represents an output of a task.
-    It can either be a direct value or a reference to data.
+    It can either be a direct value, a reference to data, or a channel output.
     """
 
     type: str
     value: bytes | None = None
     data_id: uuid.UUID | None = None
+    channel_id: uuid.UUID | None = None
 
 
 @dataclass
@@ -149,6 +152,23 @@ def submit_job(conn: SQLConnection, client_id: uuid.UUID, graph: TaskGraph) -> N
         "INSERT INTO jobs (id, client_id) VALUES (%s, %s)", (graph.id.bytes, client_id.bytes)
     )
 
+    # Collect all channel IDs from inputs and outputs
+    channel_ids: set[uuid.UUID] = set()
+    for task in graph.tasks.values():
+        for task_input in task.inputs:
+            if task_input.channel_id is not None:
+                channel_ids.add(task_input.channel_id)
+        for task_output in task.outputs:
+            if task_output.channel_id is not None:
+                channel_ids.add(task_output.channel_id)
+
+    # Create channel rows
+    for channel_id in channel_ids:
+        cursor.execute(
+            "INSERT INTO channels (id, job_id) VALUES (%s, %s)",
+            (channel_id.bytes, graph.id.bytes),
+        )
+
     for task_id, task in graph.tasks.items():
         state = "ready" if is_head_task(task_id, graph.dependencies) else "pending"
         cursor.execute(
@@ -167,7 +187,8 @@ def submit_job(conn: SQLConnection, client_id: uuid.UUID, graph: TaskGraph) -> N
         for i, task_input in enumerate(task.inputs):
             cursor.execute(
                 "INSERT INTO task_inputs (type, task_id, position, output_task_id,"
-                " output_task_position, value, data_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                " output_task_position, value, data_id, channel_id)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     task_input.type,
                     task.id.bytes,
@@ -176,13 +197,40 @@ def submit_job(conn: SQLConnection, client_id: uuid.UUID, graph: TaskGraph) -> N
                     task_input.task_output[1] if task_input.task_output is not None else None,
                     task_input.value,
                     task_input.data_id.bytes if task_input.data_id is not None else None,
+                    task_input.channel_id.bytes if task_input.channel_id is not None else None,
                 ),
             )
 
         for i, task_output in enumerate(task.outputs):
             cursor.execute(
-                "INSERT INTO task_outputs (task_id, position, type) VALUES (%s, %s, %s)",
-                (task.id.bytes, i, task_output.type),
+                "INSERT INTO task_outputs (task_id, position, type, channel_id)"
+                " VALUES (%s, %s, %s, %s)",
+                (
+                    task.id.bytes,
+                    i,
+                    task_output.type,
+                    task_output.channel_id.bytes if task_output.channel_id is not None else None,
+                ),
+            )
+
+        # Create producer entries for tasks with channel outputs
+        channel_output_ids = {
+            o.channel_id for o in task.outputs if o.channel_id is not None
+        }
+        for channel_id in channel_output_ids:
+            cursor.execute(
+                "INSERT INTO channel_producers (channel_id, task_id) VALUES (%s, %s)",
+                (channel_id.bytes, task.id.bytes),
+            )
+
+        # Create consumer entries for tasks with channel inputs
+        channel_input_ids = {
+            i.channel_id for i in task.inputs if i.channel_id is not None
+        }
+        for channel_id in channel_input_ids:
+            cursor.execute(
+                "INSERT INTO channel_consumers (channel_id, task_id) VALUES (%s, %s)",
+                (channel_id.bytes, task.id.bytes),
             )
 
     for dependency in graph.dependencies:
