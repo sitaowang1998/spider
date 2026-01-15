@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <boost/outcome/std_result.hpp>
+#include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <fmt/format.h>
@@ -1891,6 +1892,9 @@ auto MySqlMetadataStorage::task_finish(
         );
         for (size_t i = 0; i < outputs.size(); ++i) {
             TaskOutput const& output = outputs[i];
+            if (output.get_channel_id().has_value()) {
+                continue;
+            }
             std::optional<std::string> const& value = output.get_value();
             if (value.has_value()) {
                 output_statement->setString(1, value.value());
@@ -1912,11 +1916,12 @@ auto MySqlMetadataStorage::task_finish(
         // Update channel items
         std::unique_ptr<sql::PreparedStatement> const channel_statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(
-                        "INSERT INTO `channel_items` (`channel_id`, `producer_task_id`, "
-                        "`item_index`, `value`, `data_id`) VALUES(?, ?, ?, ?, ?)"
+                        "INSERT INTO `channel_items` (`id`, `channel_id`, `producer_task_id`, "
+                        "`value`) VALUES(?, ?, ?, ?)"
                 )
         );
         absl::flat_hash_set<boost::uuids::uuid> channel_ids;
+        boost::uuids::random_generator gen;
         for (size_t i = 0; i < outputs.size(); ++i) {
             TaskOutput const& output = outputs[i];
             std::optional<boost::uuids::uuid> const channel_id = output.get_channel_id();
@@ -1925,21 +1930,16 @@ auto MySqlMetadataStorage::task_finish(
             }
             channel_ids.insert(channel_id.value());
             sql::bytes channel_id_bytes = uuid_get_bytes(channel_id.value());
-            channel_statement->setBytes(1, &channel_id_bytes);
-            channel_statement->setBytes(2, &task_id_bytes);
-            channel_statement->setUInt(3, i);
+            boost::uuids::uuid const item_id = gen();
+            sql::bytes item_id_bytes = uuid_get_bytes(item_id);
+            channel_statement->setBytes(1, &item_id_bytes);
+            channel_statement->setBytes(2, &channel_id_bytes);
+            channel_statement->setBytes(3, &task_id_bytes);
             std::optional<std::string> const& value = output.get_value();
             if (value.has_value()) {
                 channel_statement->setString(4, value.value());
             } else {
                 channel_statement->setNull(4, sql::DataType::VARCHAR);
-            }
-            std::optional<boost::uuids::uuid> const& data_id = output.get_data_id();
-            if (data_id.has_value()) {
-                sql::bytes data_id_bytes = uuid_get_bytes(data_id.value());
-                channel_statement->setBytes(5, &data_id_bytes);
-            } else {
-                channel_statement->setNull(5, sql::DataType::BINARY);
             }
             channel_statement->executeUpdate();
         }
@@ -1970,6 +1970,9 @@ auto MySqlMetadataStorage::task_finish(
         );
         for (size_t i = 0; i < outputs.size(); ++i) {
             TaskOutput const& output = outputs[i];
+            if (output.get_channel_id().has_value()) {
+                continue;
+            }
             std::optional<std::string> const& value = output.get_value();
             if (value.has_value()) {
                 input_statement->setString(1, value.value());
@@ -2896,9 +2899,9 @@ auto MySqlMetadataStorage::dequeue_channel_item(
         }
         std::unique_ptr<sql::PreparedStatement> statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(
-                        "SELECT `producer_task_id`, `item_index`, `value`, `data_id` FROM "
+                        "SELECT `id`, `producer_task_id`, `value` FROM "
                         "`channel_items` WHERE `channel_id` = ? AND `delivered_to_task_id` IS "
-                        "NULL ORDER BY `item_index` LIMIT 1 FOR UPDATE"
+                        "NULL ORDER BY `creation_time` LIMIT 1 FOR UPDATE"
                 )
         );
         sql::bytes channel_id_bytes = uuid_get_bytes(channel_id);
@@ -2925,30 +2928,23 @@ auto MySqlMetadataStorage::dequeue_channel_item(
             return StorageErr{};
         }
         res->next();
-        boost::uuids::uuid const producer_id = read_id(res->getBinaryStream(1));
-        std::uint32_t const item_index = res->getUInt(2);
+        boost::uuids::uuid const item_id = read_id(res->getBinaryStream(1));
+        boost::uuids::uuid const producer_id = read_id(res->getBinaryStream(2));
         std::optional<std::string> value;
         if (!res->isNull(3)) {
             value = get_sql_string(res->getString(3));
-        }
-        std::optional<boost::uuids::uuid> data_id;
-        if (!res->isNull(4)) {
-            data_id = read_id(res->getBinaryStream(4));
         }
 
         std::unique_ptr<sql::PreparedStatement> update_statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(
                         "UPDATE `channel_items` SET `delivered_to_task_id` = ? WHERE "
-                        "`channel_id` = ? AND `producer_task_id` = ? AND `item_index` = ? AND "
-                        "`delivered_to_task_id` IS NULL"
+                        "`id` = ? AND `delivered_to_task_id` IS NULL"
                 )
         );
         sql::bytes consumer_id_bytes = uuid_get_bytes(consumer_task_id);
-        sql::bytes producer_id_bytes = uuid_get_bytes(producer_id);
+        sql::bytes item_id_bytes = uuid_get_bytes(item_id);
         update_statement->setBytes(1, &consumer_id_bytes);
-        update_statement->setBytes(2, &channel_id_bytes);
-        update_statement->setBytes(3, &producer_id_bytes);
-        update_statement->setUInt(4, item_index);
+        update_statement->setBytes(2, &item_id_bytes);
         int32_t const update_count = update_statement->executeUpdate();
         if (update_count == 0) {
             static_cast<MySqlConnection&>(conn)->commit();
@@ -2959,9 +2955,7 @@ auto MySqlMetadataStorage::dequeue_channel_item(
         ChannelItem result;
         result.channel_id = channel_id;
         result.producer_task_id = producer_id;
-        result.item_index = item_index;
         result.value = std::move(value);
-        result.data_id = data_id;
         result.delivered_to_task_id = consumer_task_id;
         *item = std::move(result);
     } catch (sql::SQLException& e) {

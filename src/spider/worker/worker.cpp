@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <typeinfo>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -225,6 +226,63 @@ auto setup_task(
     return optional_arg_buffers;
 }
 
+auto
+parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> const& result_buffers)
+        -> std::optional<std::vector<spider::core::TaskOutput>> {
+    if (result_buffers.size() != task.get_num_outputs()) {
+        spdlog::error(
+                "Task {} returned {} outputs but {} were expected",
+                task.get_function_name(),
+                result_buffers.size(),
+                task.get_num_outputs()
+        );
+        return std::nullopt;
+    }
+    std::vector<spider::core::TaskOutput> outputs;
+    outputs.reserve(task.get_num_outputs());
+    for (size_t i = 0; i < task.get_num_outputs(); ++i) {
+        auto const& output_def = task.get_output(i);
+        std::string const type = output_def.get_type();
+        if (output_def.get_channel_id().has_value() && type == typeid(spider::core::Data).name()) {
+            spdlog::error(
+                    "Task {} output {} attempts to send spider::Data to a channel",
+                    task.get_function_name(),
+                    i
+            );
+            return std::nullopt;
+        }
+        if (type == typeid(spider::core::Data).name()) {
+            try {
+                msgpack::object_handle const handle
+                        = msgpack::unpack(result_buffers[i].data(), result_buffers[i].size());
+                msgpack::object const obj = handle.get();
+                boost::uuids::uuid data_id;
+                obj.convert(data_id);
+                spider::core::TaskOutput output{data_id};
+                if (output_def.get_channel_id().has_value()) {
+                    output.set_channel_id(output_def.get_channel_id().value());
+                }
+                outputs.emplace_back(std::move(output));
+            } catch (std::runtime_error const& e) {
+                spdlog::error(
+                        "Task {} failed to parse result as data id",
+                        task.get_function_name()
+                );
+                return std::nullopt;
+            }
+        } else {
+            msgpack::sbuffer const& buffer = result_buffers[i];
+            std::string const value{buffer.data(), buffer.size()};
+            spider::core::TaskOutput output{value, type};
+            if (output_def.get_channel_id().has_value()) {
+                output.set_channel_id(output_def.get_channel_id().value());
+            }
+            outputs.emplace_back(std::move(output));
+        }
+    }
+    return outputs;
+}
+
 /**
  * Sets up a task executor by fetching the task from metadata storage and spawning a task executor
  * process.
@@ -311,46 +369,6 @@ auto setup_task(
     metadata_store->task_fail(*conn, instance, "Failed to spawn task executor.");
 
     return task.get_id();
-}
-
-auto
-parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> const& result_buffers)
-        -> std::optional<std::vector<spider::core::TaskOutput>> {
-    std::vector<spider::core::TaskOutput> outputs;
-    outputs.reserve(task.get_num_outputs());
-    for (size_t i = 0; i < task.get_num_outputs(); ++i) {
-        auto const& output_def = task.get_output(i);
-        std::string const type = output_def.get_type();
-        if (type == typeid(spider::core::Data).name()) {
-            try {
-                msgpack::object_handle const handle
-                        = msgpack::unpack(result_buffers[i].data(), result_buffers[i].size());
-                msgpack::object const obj = handle.get();
-                boost::uuids::uuid data_id;
-                obj.convert(data_id);
-                spider::core::TaskOutput output{data_id};
-                if (output_def.get_channel_id().has_value()) {
-                    output.set_channel_id(output_def.get_channel_id().value());
-                }
-                outputs.emplace_back(std::move(output));
-            } catch (std::runtime_error const& e) {
-                spdlog::error(
-                        "Task {} failed to parse result as data id",
-                        task.get_function_name()
-                );
-                return std::nullopt;
-            }
-        } else {
-            msgpack::sbuffer const& buffer = result_buffers[i];
-            std::string const value{buffer.data(), buffer.size()};
-            spider::core::TaskOutput output{value, type};
-            if (output_def.get_channel_id().has_value()) {
-                output.set_channel_id(output_def.get_channel_id().value());
-            }
-            outputs.emplace_back(std::move(output));
-        }
-    }
-    return outputs;
 }
 
 /**
