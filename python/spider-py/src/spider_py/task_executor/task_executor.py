@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from os import fdopen, getenv
 from pydoc import locate
 from types import FunctionType, GenericAlias
-from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING
+from typing import Any, cast, get_args, get_origin, get_type_hints, TYPE_CHECKING
 from uuid import UUID
 
 import msgpack
@@ -34,9 +34,7 @@ def _is_receiver_type(cls: type | GenericAlias) -> bool:
     if origin is Receiver:
         return True
     # Handle cases where cls is the Receiver class itself
-    if isinstance(cls, type) and issubclass(cls, Receiver):
-        return True
-    return False
+    return isinstance(cls, type) and issubclass(cls, Receiver)
 
 
 def _is_sender_type(cls: type | GenericAlias) -> bool:
@@ -45,16 +43,14 @@ def _is_sender_type(cls: type | GenericAlias) -> bool:
     if origin is Sender:
         return True
     # Handle cases where cls is the Sender class itself
-    if isinstance(cls, type) and issubclass(cls, Sender):
-        return True
-    return False
+    return isinstance(cls, type) and issubclass(cls, Sender)
 
 
-def _get_channel_item_type(cls: type | GenericAlias) -> type:
+def _get_channel_item_type(cls: type | GenericAlias) -> type[Any]:
     """Get the item type from a Receiver[T] or Sender[T] annotation."""
     args = get_args(cls)
     if args:
-        return args[0]
+        return cast("type[Any]", args[0])
     return object  # Default if no type argument
 
 
@@ -126,7 +122,10 @@ def parse_task_arguments(
         # Handle Receiver parameters - arg should be channel_id bytes
         if _is_receiver_type(cls):
             if not isinstance(arg, bytes):
-                msg = f"Argument {i}: Expected channel_id bytes for Receiver, got {type(arg).__name__}."
+                msg = (
+                    f"Argument {i}: Expected channel_id bytes for Receiver, "
+                    f"got {type(arg).__name__}."
+                )
                 raise TypeError(msg)
             channel_id = UUID(bytes=arg)
             item_type = _get_channel_item_type(cls)
@@ -137,7 +136,9 @@ def parse_task_arguments(
         # Handle Sender parameters - arg should be channel_id bytes
         if _is_sender_type(cls):
             if not isinstance(arg, bytes):
-                msg = f"Argument {i}: Expected channel_id bytes for Sender, got {type(arg).__name__}."
+                msg = (
+                    f"Argument {i}: Expected channel_id bytes for Sender, got {type(arg).__name__}."
+                )
                 raise TypeError(msg)
             channel_id = UUID(bytes=arg)
             item_type = _get_channel_item_type(cls)
@@ -288,10 +289,9 @@ def main() -> None:
             )
             raise ValueError(msg)
         task_context = client.TaskContext(task_id, storage)
-        arguments = [
-            task_context,
-            *parse_task_arguments(storage, task_context, list(signature.parameters.values())[1:], arguments),
-        ]
+        params = list(signature.parameters.values())[1:]
+        parsed_args = parse_task_arguments(storage, task_context, params, arguments)
+        arguments = [task_context, *parsed_args]
         try:
             results = function(*arguments)
             logger.debug("Function %s executed", function_name)

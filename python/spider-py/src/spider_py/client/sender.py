@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
-from uuid import UUID
+from typing import Generic, TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 T = TypeVar("T")
 

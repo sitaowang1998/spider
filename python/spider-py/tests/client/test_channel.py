@@ -3,8 +3,6 @@
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
-
 from spider_py import Receiver, Sender
 from spider_py.core import ChannelItem
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Generic, TYPE_CHECKING, TypeVar
 
@@ -76,11 +77,9 @@ class Receiver(Generic[T]):
                     raise RuntimeError(msg)
                 value = msgpack.unpackb(item.value)
                 # Convert to the expected type if needed
-                if self._item_type is not None and hasattr(self._item_type, "__call__"):
-                    try:
+                if self._item_type is not None and callable(self._item_type):
+                    with contextlib.suppress(TypeError, ValueError):
                         value = self._item_type(value)
-                    except (TypeError, ValueError):
-                        pass  # Keep the raw value if conversion fails
                 return (value, False)
 
             # If channel is drained, return that

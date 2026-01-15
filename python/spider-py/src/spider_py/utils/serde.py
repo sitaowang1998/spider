@@ -3,7 +3,6 @@
 from dataclasses import fields, is_dataclass
 from types import GenericAlias
 from typing import Any, cast, get_args, get_origin, get_type_hints
-from uuid import UUID
 
 
 def to_serializable(obj: object, cls: type | GenericAlias) -> object:

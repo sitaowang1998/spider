@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
-from spider_py import core
-from spider_py.client.data import Data
 from spider_py.client.receiver import Receiver
 from spider_py.client.sender import Sender
-from spider_py.storage import Storage
 
 if TYPE_CHECKING:
     from uuid import UUID
+
+    from spider_py import core
+    from spider_py.client.data import Data
+    from spider_py.storage import Storage
 
 
 class TaskContext:
@@ -48,7 +49,7 @@ class TaskContext:
         """
         self._storage.create_data_with_task_ref(self._task_id, data._impl)
 
-    def get_receiver(self, channel_id: UUID, item_type: type) -> Receiver:
+    def get_receiver(self, channel_id: UUID, item_type: type) -> Receiver[Any]:
         """
         Creates a Receiver for the given channel.
 
@@ -63,7 +64,7 @@ class TaskContext:
             storage=self._storage,
         )
 
-    def get_sender(self, channel_id: UUID, item_type: type) -> Sender:
+    def get_sender(self, channel_id: UUID, item_type: type) -> Sender[Any]:
         """
         Creates a Sender for the given channel.
 
