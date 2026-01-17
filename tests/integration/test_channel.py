@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Generator
 from pathlib import Path
+from typing import cast
 
 import msgpack
 import pytest
@@ -439,7 +440,7 @@ class TestChannelCommunication:
         assert len(consumer1_outputs) >= 1
         assert len(consumer2_outputs) >= 1
 
-        sum1 = msgpack.unpackb(consumer1_outputs[0].value)
-        sum2 = msgpack.unpackb(consumer2_outputs[0].value)
+        sum1 = msgpack.unpackb(cast("bytes", consumer1_outputs[0].value))
+        sum2 = msgpack.unpackb(cast("bytes", consumer2_outputs[0].value))
         # Total sum of 0+1+2+3+4+5 = 15
-        assert sum1 + sum2 == 15
+        assert sum1 + sum2 == 15  # noqa: PLR2004

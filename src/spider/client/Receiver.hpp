@@ -1,6 +1,7 @@
 #ifndef SPIDER_CLIENT_RECEIVER_HPP
 #define SPIDER_CLIENT_RECEIVER_HPP
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -22,6 +23,11 @@
 #include <spider/storage/StorageFactory.hpp>
 
 namespace spider {
+// Default timeout for recv() operations (30 seconds)
+constexpr std::chrono::milliseconds cReceiverDefaultTimeout{30'000};
+// Default poll interval for recv() operations (100 milliseconds)
+constexpr std::chrono::milliseconds cReceiverDefaultPollInterval{100};
+
 /**
  * A receiver handle for reading items from a channel.
  *
@@ -75,8 +81,8 @@ public:
      * @throw spider::ConnectionException if storage operations fail.
      */
     auto recv(
-            std::chrono::milliseconds timeout = std::chrono::milliseconds(30'000),
-            std::chrono::milliseconds poll_interval = std::chrono::milliseconds(100)
+            std::chrono::milliseconds timeout = cReceiverDefaultTimeout,
+            std::chrono::milliseconds poll_interval = cReceiverDefaultPollInterval
     ) -> std::pair<std::optional<T>, bool> {
         auto const start_time = std::chrono::steady_clock::now();
 

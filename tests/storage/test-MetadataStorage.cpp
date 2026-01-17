@@ -701,15 +701,21 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(drained);
 
     std::set<std::string> values;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(first_item->value.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(second_item->value.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     values.insert(first_item->value.value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     values.insert(second_item->value.value());
     REQUIRE(values.size() == 2);
     REQUIRE(values.contains("one"));
     REQUIRE(values.contains("two"));
 
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(first_item->producer_task_id == producer.get_id());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(second_item->producer_task_id == producer.get_id());
 
     REQUIRE(metadata_storage->remove_job(*conn, job_id).success());
@@ -780,6 +786,7 @@ TEMPLATE_LIST_TEST_CASE(
                     ->dequeue_channel_item(*conn, channel_id, consumer.get_id(), &item1, &drained)
                     .success());
     REQUIRE(item1.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(item1->value.value() == "from_p1");
     REQUIRE(!drained);  // Not drained because producer2 hasn't finished
 
@@ -806,6 +813,7 @@ TEMPLATE_LIST_TEST_CASE(
                     ->dequeue_channel_item(*conn, channel_id, consumer.get_id(), &item2, &drained)
                     .success());
     REQUIRE(item2.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(item2->value.value() == "from_p2");
     REQUIRE(!drained);  // Not drained yet, just empty
 
@@ -921,7 +929,9 @@ TEMPLATE_LIST_TEST_CASE(
 
     // Verify both consumers got different items
     std::set<std::string> received_values;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     received_values.insert(c1_item->value.value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     received_values.insert(c2_item->value.value());
     REQUIRE(received_values.size() == 2);
     REQUIRE(received_values.contains("item1"));

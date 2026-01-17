@@ -329,6 +329,7 @@ auto MySqlMetadataStorage::add_task(
             input_statement->setString(3, input.get_type());
             sql::bytes data_id_bytes = uuid_get_bytes(data_id.value());
             input_statement->setBytes(4, &data_id_bytes);
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
             input_statement->setNull(5, sql::DataType::BINARY);
             input_statement->executeUpdate();
         } else if (value.has_value()) {
@@ -339,6 +340,7 @@ auto MySqlMetadataStorage::add_task(
             input_statement->setUInt(2, i);
             input_statement->setString(3, input.get_type());
             input_statement->setString(4, value.value());
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
             input_statement->setNull(5, sql::DataType::BINARY);
             input_statement->executeUpdate();
         } else if (channel_id.has_value()) {
@@ -431,6 +433,7 @@ auto MySqlMetadataStorage::add_task_batch(
             input_statement.setString(3, input.get_type());
             sql::bytes data_id_bytes = uuid_get_bytes(data_id.value());
             input_statement.setBytes(4, &data_id_bytes);
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
             input_statement.setNull(5, sql::DataType::BINARY);
             input_statement.addBatch();
         } else if (value.has_value()) {
@@ -439,6 +442,7 @@ auto MySqlMetadataStorage::add_task_batch(
             input_statement.setUInt(2, i);
             input_statement.setString(3, input.get_type());
             input_statement.setString(4, value.value());
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
             input_statement.setNull(5, sql::DataType::BINARY);
             input_statement.addBatch();
         } else if (channel_id.has_value()) {
@@ -958,6 +962,7 @@ auto fetch_task_input(Task* task, std::unique_ptr<sql::ResultSet> const& res) {
         channel_id = read_id(res->getBinaryStream(8));
     }
     if (!res->isNull(4)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(read_id(res->getBinaryStream(4)), res->getUInt(5), type);
         if (!res->isNull(6)) {
             input.set_value(get_sql_string(res->getString(6)));
@@ -967,12 +972,15 @@ auto fetch_task_input(Task* task, std::unique_ptr<sql::ResultSet> const& res) {
         }
         task->add_input(input);
     } else if (!res->isNull(6)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(get_sql_string(res->getString(6)), type);
         task->add_input(input);
     } else if (!res->isNull(7)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(read_id(res->getBinaryStream(7)));
         task->add_input(input);
     } else if (channel_id.has_value()) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(type);
         input.set_channel_id(channel_id.value());
         task->add_input(input);
@@ -1011,6 +1019,7 @@ auto fetch_task_graph_task_input(TaskGraph* task_graph, std::unique_ptr<sql::Res
     }
     Task* task = task_option.value();
     if (!res->isNull(4)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(read_id(res->getBinaryStream(4)), res->getUInt(5), type);
         if (!res->isNull(6)) {
             input.set_value(get_sql_string(res->getString(6)));
@@ -1020,12 +1029,15 @@ auto fetch_task_graph_task_input(TaskGraph* task_graph, std::unique_ptr<sql::Res
         }
         task->add_input(input);
     } else if (!res->isNull(6)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(get_sql_string(res->getString(6)), type);
         task->add_input(input);
     } else if (!res->isNull(7)) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(read_id(res->getBinaryStream(7)));
         task->add_input(input);
     } else if (channel_id.has_value()) {
+        // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input = TaskInput(type);
         input.set_channel_id(channel_id.value());
         task->add_input(input);
@@ -1860,6 +1872,7 @@ MySqlMetadataStorage::create_task_instance(StorageConnection& conn, TaskInstance
     return StorageErr{};
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto MySqlMetadataStorage::task_finish(
         StorageConnection& conn,
         TaskInstance const& instance,
@@ -1922,8 +1935,7 @@ auto MySqlMetadataStorage::task_finish(
         );
         absl::flat_hash_set<boost::uuids::uuid> channel_ids;
         boost::uuids::random_generator gen;
-        for (size_t i = 0; i < outputs.size(); ++i) {
-            TaskOutput const& output = outputs[i];
+        for (auto const& output : outputs) {
             std::optional<boost::uuids::uuid> const channel_id = output.get_channel_id();
             if (!channel_id.has_value()) {
                 continue;

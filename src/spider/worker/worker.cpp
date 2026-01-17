@@ -260,6 +260,7 @@ parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> cons
                 obj.convert(data_id);
                 spider::core::TaskOutput output{data_id};
                 if (output_def.get_channel_id().has_value()) {
+                    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
                     output.set_channel_id(output_def.get_channel_id().value());
                 }
                 outputs.emplace_back(std::move(output));
@@ -275,6 +276,7 @@ parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> cons
             std::string const value{buffer.data(), buffer.size()};
             spider::core::TaskOutput output{value, type};
             if (output_def.get_channel_id().has_value()) {
+                // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
                 output.set_channel_id(output_def.get_channel_id().value());
             }
             outputs.emplace_back(std::move(output));
