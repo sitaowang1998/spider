@@ -268,6 +268,11 @@ auto TaskExecutor::get_result_buffers() const -> std::optional<std::vector<msgpa
     return core::response_get_result_buffers(m_result_buffer);
 }
 
+auto TaskExecutor::get_channel_items() const
+        -> std::vector<std::pair<boost::uuids::uuid, std::string>> {
+    return core::response_get_channel_items(m_result_buffer);
+}
+
 auto TaskExecutor::get_error() const -> std::tuple<core::FunctionInvokeError, std::string> {
     return core::response_get_error(m_result_buffer)
             .value_or(

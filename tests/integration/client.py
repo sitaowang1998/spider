@@ -49,6 +49,7 @@ class Task:
     outputs: list[TaskOutput]
     timeout: float = 0.0
     max_retries: int = 0
+    language: str = "cpp"  # "cpp" or "python"
 
 
 @dataclass
@@ -139,17 +140,17 @@ def storage() -> Generator[SQLConnection, None, None]:
     conn.close()
 
 
-def _collect_channel_ids(graph: TaskGraph) -> set[uuid.UUID]:
-    """Collects all channel IDs from task inputs and outputs."""
-    channel_ids: set[uuid.UUID] = set()
+def _collect_channels(graph: TaskGraph) -> dict[uuid.UUID, str]:
+    """Collects all channel IDs and their types from task inputs and outputs."""
+    channels: dict[uuid.UUID, str] = {}
     for task in graph.tasks.values():
         for task_input in task.inputs:
             if task_input.channel_id is not None:
-                channel_ids.add(task_input.channel_id)
+                channels[task_input.channel_id] = task_input.type
         for task_output in task.outputs:
             if task_output.channel_id is not None:
-                channel_ids.add(task_output.channel_id)
-    return channel_ids
+                channels[task_output.channel_id] = task_output.type
+    return channels
 
 
 def _insert_task_inputs(cursor: mysql.connector.abstracts.MySQLCursorAbstract, task: Task) -> None:
@@ -222,21 +223,22 @@ def submit_job(conn: SQLConnection, client_id: uuid.UUID, graph: TaskGraph) -> N
     )
 
     # Create channel rows
-    for channel_id in _collect_channel_ids(graph):
+    for channel_id, channel_type in _collect_channels(graph).items():
         cursor.execute(
-            "INSERT INTO channels (id, job_id) VALUES (%s, %s)",
-            (channel_id.bytes, graph.id.bytes),
+            "INSERT INTO channels (id, job_id, type) VALUES (%s, %s, %s)",
+            (channel_id.bytes, graph.id.bytes, channel_type),
         )
 
     for task_id, task in graph.tasks.items():
         state = "ready" if is_head_task(task_id, graph.dependencies) else "pending"
         cursor.execute(
-            "INSERT INTO tasks (id, job_id, func_name, state, timeout, max_retry)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO tasks (id, job_id, func_name, language, state, timeout, max_retry)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (
                 task.id.bytes,
                 graph.id.bytes,
                 task.function_name,
+                task.language,
                 state,
                 task.timeout,
                 task.max_retries,

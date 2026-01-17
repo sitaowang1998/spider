@@ -70,6 +70,38 @@ auto join_string_test(
     return input_1 + input_2;
 }
 
+auto channel_producer_test(
+        spider::TaskContext& /*context*/,
+        spider::Sender<int>& sender,
+        int const count
+) -> int {
+    std::cerr << "Producer: sending " << count << " items\n";
+    for (int i = 0; i < count; ++i) {
+        sender.send(i);
+    }
+    std::cerr << "Producer: sent " << count << " items\n";
+    return count;
+}
+
+auto channel_consumer_test(spider::TaskContext& /*context*/, spider::Receiver<int>& receiver)
+        -> int {
+    std::cerr << "Consumer: starting to receive\n";
+    int total = 0;
+    while (true) {
+        auto [item, drained] = receiver.recv();
+        if (item.has_value()) {
+            total += item.value();
+            std::cerr << "Consumer: received " << item.value() << ", total = " << total << "\n";
+        }
+        if (drained) {
+            std::cerr << "Consumer: channel drained\n";
+            break;
+        }
+    }
+    std::cerr << "Consumer: finished with total = " << total << "\n";
+    return total;
+}
+
 // NOLINTBEGIN(cert-err58-cpp)
 SPIDER_REGISTER_TASK(sum_test);
 SPIDER_REGISTER_TASK(swap_test);
@@ -79,4 +111,6 @@ SPIDER_REGISTER_TASK(random_fail_test);
 SPIDER_REGISTER_TASK(create_data_test);
 SPIDER_REGISTER_TASK(create_task_test);
 SPIDER_REGISTER_TASK(join_string_test);
+SPIDER_REGISTER_TASK(channel_producer_test);
+SPIDER_REGISTER_TASK(channel_consumer_test);
 // NOLINTEND(cert-err58-cpp)

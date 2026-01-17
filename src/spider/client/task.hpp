@@ -8,13 +8,21 @@
 #include <spider/io/Serializer.hpp>
 
 namespace spider {
+// Forward declarations for channel types
+template <class T>
+class Sender;
+
+template <class T>
+class Receiver;
+
 /**
  * Concept that represents the input to or output from a Task.
  *
  * @tparam T
  */
 template <class T>
-concept TaskIo = Serializable<T> || cIsSpecializationV<T, Data>;
+concept TaskIo = Serializable<T> || cIsSpecializationV<T, Data> || cIsSpecializationV<T, Sender>
+                 || cIsSpecializationV<T, Receiver>;
 
 // Forward declare `TaskContext` since `TaskFunction` takes `TaskContext` as a param, and
 // `TaskContext` uses `TaskFunction` as a param in its methods.

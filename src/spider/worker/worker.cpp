@@ -422,7 +422,7 @@ auto handle_executor_result(
         return false;
     }
     std::vector<msgpack::sbuffer> const& result_buffers = optional_result_buffers.value();
-    std::optional<std::vector<spider::core::TaskOutput>> const optional_outputs
+    std::optional<std::vector<spider::core::TaskOutput>> optional_outputs
             = parse_outputs(task, result_buffers);
     if (!optional_outputs.has_value()) {
         metadata_store->task_fail(
@@ -436,7 +436,17 @@ auto handle_executor_result(
         return false;
     }
 
-    std::vector<spider::core::TaskOutput> const& outputs = optional_outputs.value();
+    std::vector<spider::core::TaskOutput>& outputs = optional_outputs.value();
+
+    // Get channel items from Sender buffers and add them to outputs
+    std::vector<std::pair<boost::uuids::uuid, std::string>> const channel_items
+            = executor.get_channel_items();
+    for (auto const& [channel_id, value] : channel_items) {
+        spider::core::TaskOutput channel_output{value, "channel"};
+        channel_output.set_channel_id(channel_id);
+        outputs.emplace_back(std::move(channel_output));
+    }
+
     // Submit result
     spdlog::debug("Submitting result for task {}", boost::uuids::to_string(task.get_id()));
     spider::core::StorageErr err;

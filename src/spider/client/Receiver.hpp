@@ -25,12 +25,19 @@ namespace spider {
 /**
  * A receiver handle for reading items from a channel.
  *
- * @tparam T The type of items to receive. Must satisfy TaskIo and not be spider::Data.
+ * @tparam T The type of items to receive. Must satisfy Serializable and not be spider::Data.
  */
-template <TaskIo T>
+template <class T>
 class Receiver {
 public:
+    static_assert(Serializable<T>, "Receiver item type must be Serializable.");
     static_assert(!cIsSpecializationV<T, spider::Data>, "Channels do not support spider::Data.");
+
+    /**
+     * Default constructor for use in tuple initialization.
+     * Creates an invalid receiver that must be assigned before use.
+     */
+    Receiver() = default;
 
     /**
      * Creates a receiver for the given channel.

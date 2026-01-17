@@ -16,12 +16,19 @@ namespace spider {
  * Items are buffered in memory and committed atomically when the task succeeds.
  * If the task fails, buffered items are discarded.
  *
- * @tparam T The type of items to send. Must satisfy TaskIo and not be spider::Data.
+ * @tparam T The type of items to send. Must satisfy Serializable and not be spider::Data.
  */
-template <TaskIo T>
+template <class T>
 class Sender {
 public:
+    static_assert(Serializable<T>, "Sender item type must be Serializable.");
     static_assert(!cIsSpecializationV<T, spider::Data>, "Channels do not support spider::Data.");
+
+    /**
+     * Default constructor for use in tuple initialization.
+     * Creates an invalid sender that must be assigned before use.
+     */
+    Sender() = default;
 
     /**
      * Creates a sender for the given channel.

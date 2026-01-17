@@ -5,6 +5,8 @@
 #include <tuple>
 
 #include <spider/client/Data.hpp>
+#include <spider/client/Receiver.hpp>
+#include <spider/client/Sender.hpp>
 #include <spider/client/TaskContext.hpp>
 
 auto sum_test(spider::TaskContext& /*context*/, int x, int y) -> int;
@@ -26,5 +28,11 @@ auto join_string_test(
         std::string const& input_1,
         std::string const& input_2
 ) -> std::string;
+
+// Channel test functions
+auto channel_producer_test(spider::TaskContext& context, spider::Sender<int>& sender, int count)
+        -> int;
+
+auto channel_consumer_test(spider::TaskContext& context, spider::Receiver<int>& receiver) -> int;
 
 #endif

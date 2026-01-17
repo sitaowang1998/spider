@@ -1992,17 +1992,20 @@ auto MySqlMetadataStorage::task_finish(
         }
 
         // Set task states to ready if all inputs are available
+        // Use task_dependencies to find downstream tasks (handles both output references and
+        // channel dependencies)
         std::unique_ptr<sql::PreparedStatement> ready_statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(
-                        "UPDATE `tasks` SET `state` = 'ready' WHERE `id` IN (SELECT `task_id` FROM "
-                        "`task_inputs` WHERE `output_task_id` = ?) AND `state` = 'pending' AND NOT "
-                        "EXISTS (SELECT `task_id` FROM `task_inputs` WHERE `task_id` IN (SELECT "
-                        "`task_id` FROM `task_inputs` WHERE `output_task_id` = ?) AND `value` IS "
-                        "NULL AND `data_id` IS NULL AND `channel_id` IS NULL)"
+                        "UPDATE `tasks` SET `state` = 'ready' WHERE `id` IN (SELECT `child` FROM "
+                        "`task_dependencies` WHERE `parent` = ?) AND `state` = 'pending' AND NOT "
+                        "EXISTS (SELECT 1 FROM `task_inputs` WHERE `task_inputs`.`task_id` = "
+                        "`tasks`.`id` AND `value` IS NULL AND `data_id` IS NULL AND `channel_id` "
+                        "IS NULL) AND NOT EXISTS (SELECT 1 FROM `task_dependencies` AS `td` JOIN "
+                        "`tasks` AS `t` ON `td`.`parent` = `t`.`id` WHERE `td`.`child` = "
+                        "`tasks`.`id` AND `t`.`state` != 'success')"
                 )
         );
         ready_statement->setBytes(1, &task_id_bytes);
-        ready_statement->setBytes(2, &task_id_bytes);
         ready_statement->executeUpdate();
         // If all tasks in the job finishes, set the job state to success
         std::unique_ptr<sql::PreparedStatement> job_statement(

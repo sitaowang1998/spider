@@ -84,6 +84,14 @@ public:
 
     [[nodiscard]] auto get_result_buffers() const -> std::optional<std::vector<msgpack::sbuffer>>;
 
+    /**
+     * Gets channel items from the result buffer.
+     *
+     * @return A vector of (channel_id, serialized_value) pairs.
+     */
+    [[nodiscard]] auto get_channel_items() const
+            -> std::vector<std::pair<boost::uuids::uuid, std::string>>;
+
     [[nodiscard]] auto get_error() const -> std::tuple<core::FunctionInvokeError, std::string>;
 
 private:

@@ -18,6 +18,8 @@
 #include <fmt/format.h>
 
 #include <spider/client/Data.hpp>
+#include <spider/client/Receiver.hpp>
+#include <spider/client/Sender.hpp>
 #include <spider/client/task.hpp>
 #include <spider/client/TaskContext.hpp>
 #include <spider/core/DataImpl.hpp>
@@ -165,6 +167,63 @@ auto response_get_result(msgpack::sbuffer const& buffer) -> std::optional<std::t
 auto response_get_result_buffers(msgpack::sbuffer const& buffer)
         -> std::optional<std::vector<msgpack::sbuffer>>;
 
+/**
+ * Extracts channel items from the response buffer.
+ *
+ * The response format supports optional channel items:
+ *   [Result, result_values..., [[channel_id, value], ...]]
+ *
+ * @param buffer The response buffer to parse.
+ * @return A vector of (channel_id, serialized_value) pairs, or empty if no channel items.
+ */
+auto response_get_channel_items(msgpack::sbuffer const& buffer)
+        -> std::vector<std::pair<boost::uuids::uuid, std::string>>;
+
+/**
+ * Represents a channel item to be committed when a task succeeds.
+ */
+struct ChannelItemBuffer {
+    boost::uuids::uuid channel_id;
+    msgpack::sbuffer value;
+};
+
+/**
+ * Extracts channel items from Sender arguments in a tuple.
+ *
+ * @tparam ArgsTuple The argument tuple type.
+ * @param args The argument tuple after function execution.
+ * @return A vector of channel items from all Sender arguments.
+ */
+template <class ArgsTuple>
+auto extract_sender_channel_items(ArgsTuple& args) -> std::vector<ChannelItemBuffer> {
+    std::vector<ChannelItemBuffer> items;
+    for_n<std::tuple_size_v<ArgsTuple>>([&](auto i) {
+        using T = std::tuple_element_t<i.cValue, ArgsTuple>;
+        if constexpr (cIsSpecializationV<T, spider::Sender>) {
+            auto& sender = std::get<i.cValue>(args);
+            boost::uuids::uuid const channel_id = sender.get_channel_id();
+            for (auto const& item : sender.get_buffered_items()) {
+                ChannelItemBuffer ci;
+                ci.channel_id = channel_id;
+                msgpack::pack(ci.value, item);
+                items.push_back(std::move(ci));
+            }
+        }
+    });
+    return items;
+}
+
+/**
+ * Creates a result response.
+ *
+ * Response format: [Result, [result_values...], [channel_items...]]
+ *
+ * For backward compatibility with non-channel functions, this also supports:
+ * [Result, result_value] (legacy format, no channel items)
+ *
+ * @param t The function's return value.
+ * @return Serialized response buffer.
+ */
 template <TaskIo T>
 auto create_result_response(T const& t) -> msgpack::sbuffer {
     msgpack::sbuffer buffer;
@@ -179,6 +238,52 @@ auto create_result_response(T const& t) -> msgpack::sbuffer {
     return buffer;
 }
 
+/**
+ * Creates a result response with channel items.
+ *
+ * Response format: [Result, [result_values...], [channel_items...]]
+ *
+ * @param t The function's return value.
+ * @param channel_items Channel items from Sender buffers.
+ * @return Serialized response buffer.
+ */
+template <TaskIo T>
+auto create_result_response_with_channels(
+        T const& t,
+        std::vector<ChannelItemBuffer> const& channel_items
+) -> msgpack::sbuffer {
+    msgpack::sbuffer buffer;
+    msgpack::packer packer{buffer};
+
+    // Format: [Result, [result_values...], [[channel_id, value], ...]]
+    packer.pack_array(3);
+    packer.pack(worker::TaskExecutorResponseType::Result);
+
+    // Pack result values as an array (single element for non-tuple)
+    packer.pack_array(1);
+    if constexpr (cIsSpecializationV<T, spider::Data>) {
+        packer.pack(DataImpl::get_impl(t)->get_id());
+    } else {
+        packer.pack(t);
+    }
+
+    // Pack channel items: [[channel_id, value], ...]
+    packer.pack_array(channel_items.size());
+    for (auto const& item : channel_items) {
+        packer.pack_array(2);
+        packer.pack(item.channel_id);
+        // Write the raw value buffer
+        buffer.write(item.value.data(), item.value.size());
+    }
+
+    return buffer;
+}
+
+/**
+ * Creates a result response for tuple return types.
+ *
+ * Response format: [Result, val1, val2, ...] (legacy format)
+ */
 template <TaskIo... Values>
 auto create_result_response(std::tuple<Values...> const& t) -> msgpack::sbuffer {
     msgpack::sbuffer buffer;
@@ -318,6 +423,16 @@ public:
                                     data_store,
                                     TaskContextImpl::get_storage_factory(context)
                             );
+                } else if constexpr (cIsSpecializationV<T, spider::Sender>) {
+                    boost::uuids::uuid const channel_id = arg.as<boost::uuids::uuid>();
+                    std::get<i.cValue + 1>(args_tuple) = T{channel_id};
+                } else if constexpr (cIsSpecializationV<T, spider::Receiver>) {
+                    boost::uuids::uuid const channel_id = arg.as<boost::uuids::uuid>();
+                    std::get<i.cValue + 1>(args_tuple)
+                            = T{channel_id,
+                                task_id,
+                                TaskContextImpl::get_metadata_store(context),
+                                TaskContextImpl::get_storage_factory(context)};
                 } else {
                     std::get<i.cValue + 1>(args_tuple)
                             = arg.as<std::tuple_element_t<i.cValue + 1, ArgsTuple>>();
@@ -338,7 +453,14 @@ public:
 
         try {
             ReturnType result = std::apply(function, args_tuple);
-            return create_result_response(result);
+
+            // Extract channel items from Sender arguments
+            std::vector<ChannelItemBuffer> channel_items = extract_sender_channel_items(args_tuple);
+
+            if (channel_items.empty()) {
+                return create_result_response(result);
+            }
+            return create_result_response_with_channels(result, channel_items);
         } catch (msgpack::type_error& e) {
             return create_error_response(
                     FunctionInvokeError::ResultParsingError,
