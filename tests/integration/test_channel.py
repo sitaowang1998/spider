@@ -104,9 +104,15 @@ def scheduler_worker(
     # Wait for 5 seconds to make sure the scheduler and workers are started
     time.sleep(5)
     yield
-    scheduler_process.kill()
-    for worker_process in worker_processes:
-        worker_process.kill()
+    # Graceful shutdown: terminate first, then kill if needed
+    for process in [scheduler_process, *worker_processes]:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 @pytest.fixture
