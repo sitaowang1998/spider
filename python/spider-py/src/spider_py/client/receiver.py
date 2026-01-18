@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import time
 from typing import Generic, TYPE_CHECKING, TypeVar
 
@@ -58,6 +57,8 @@ class Receiver(Generic[T]):
             - (None, True): The channel is drained (sender closed and empty)
             - (None, False): Timeout reached without receiving an item
         :raises StorageError: If storage operations fail.
+        :raises TypeError: If the received value cannot be converted to the expected type.
+        :raises ValueError: If the received value cannot be converted to the expected type.
         """
         start_time = time.monotonic()
         timeout_sec = timeout_ms / 1000.0
@@ -78,8 +79,7 @@ class Receiver(Generic[T]):
                 value = msgpack.unpackb(item.value)
                 # Convert to the expected type if needed
                 if self._item_type is not None and callable(self._item_type):
-                    with contextlib.suppress(TypeError, ValueError):
-                        value = self._item_type(value)
+                    value = self._item_type(value)
                 return (value, False)
 
             # If channel is drained, return that

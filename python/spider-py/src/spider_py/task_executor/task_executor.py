@@ -172,31 +172,65 @@ def parse_single_output_to_serializable(output: object, cls: type | GenericAlias
     return to_serializable(output, cls)
 
 
+def extract_sender_channel_items(parsed_args: list[object]) -> list[tuple[bytes, bytes]]:
+    """
+    Extracts channel items from Sender objects in the parsed arguments.
+
+    :param parsed_args: The parsed arguments list that may contain Sender objects.
+    :return: A list of (channel_id_bytes, msgpack_value) tuples.
+    """
+    channel_items: list[tuple[bytes, bytes]] = []
+    for arg in parsed_args:
+        if isinstance(arg, Sender):
+            channel_id_bytes = arg.channel_id.bytes
+            item_type = arg.item_type
+            for item in arg.get_buffered_items():
+                serialized_item = to_serializable(item, item_type)
+                packed_value = msgpack.packb(serialized_item)
+                channel_items.append((channel_id_bytes, packed_value))
+    return channel_items
+
+
 def parse_task_execution_results(
-    results: object, types: type | GenericAlias | Sequence[type | GenericAlias]
+    results: object,
+    types: type | GenericAlias | Sequence[type | GenericAlias],
+    channel_items: list[tuple[bytes, bytes]] | None = None,
 ) -> list[object]:
     """
     Parses results from the function execution.
+
     :param results: Results to parse.
     :param types: Expected output types. Must be a single type for non-tuple results, or a sequence
         of types matching the length of tuple results.
-    :return: The parsed results.
+    :param channel_items: Optional list of (channel_id_bytes, packed_value) tuples from Sender
+        objects.
+    :return: The parsed results in the format:
+        - Legacy (no channels): [Result, val1, val2, ...]
+        - With channels: [Result, [result_values...], [[channel_id, value], ...]]
     :raises TypeError: If the number of output types does not match the number of results.
     """
-    response_messages: list[object] = [TaskExecutorResponseType.Result]
+    # Collect result values
+    result_values: list[object] = []
     if not isinstance(results, tuple):
         if not isinstance(types, (type, GenericAlias)):
             msg = "Invalid single output type."
             raise TypeError(msg)
-        response_messages.append(parse_single_output_to_serializable(results, types))
-        return response_messages
-    # Parse as a tuple
-    if not isinstance(types, Sequence) or len(results) != len(types):
-        msg = "The number of output types does not match the number of results."
-        raise TypeError(msg)
-    for result, ret_type in zip(results, types, strict=True):
-        response_messages.append(parse_single_output_to_serializable(result, ret_type))
-    return response_messages
+        result_values.append(parse_single_output_to_serializable(results, types))
+    else:
+        # Parse as a tuple
+        if not isinstance(types, Sequence) or len(results) != len(types):
+            msg = "The number of output types does not match the number of results."
+            raise TypeError(msg)
+        for result, ret_type in zip(results, types, strict=True):
+            result_values.append(parse_single_output_to_serializable(result, ret_type))
+
+    # If no channel items, use legacy format for backward compatibility
+    if not channel_items:
+        return [TaskExecutorResponseType.Result, *result_values]
+
+    # New format with channel items: [Result, [result_values...], [[channel_id, value], ...]]
+    channel_items_serialized = [[cid, msgpack.unpackb(val)] for cid, val in channel_items]
+    return [TaskExecutorResponseType.Result, result_values, channel_items_serialized]
 
 
 def get_return_types(
@@ -296,7 +330,9 @@ def main() -> None:
             results = function(*arguments)
             logger.debug("Function %s executed", function_name)
             return_types = get_return_types(function)
-            responses = parse_task_execution_results(results, return_types)
+            # Extract channel items from Sender objects
+            channel_items = extract_sender_channel_items(parsed_args)
+            responses = parse_task_execution_results(results, return_types, channel_items)
         except Exception as e:
             logger.exception("Function %s failed", function_name)
             responses = [

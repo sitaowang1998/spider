@@ -143,7 +143,7 @@ _TABLE_CREATORS = [
       REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
       CONSTRAINT `channel_item_delivered_to_task_id` FOREIGN KEY (`delivered_to_task_id`)
       REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
-      INDEX (`channel_id`, `creation_time`),
+      INDEX (`channel_id`, `delivered_to_task_id`, `creation_time`),
       INDEX (`delivered_to_task_id`),
       PRIMARY KEY (`id`)
     );
