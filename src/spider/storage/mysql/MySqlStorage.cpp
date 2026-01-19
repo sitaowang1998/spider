@@ -1082,8 +1082,8 @@ auto update_task_outputs(
             "UPDATE `task_outputs` SET `value` = ?, `data_id` = ? WHERE `task_id` = ? "
             "AND `position` = ?"
     ));
-    for (size_t i = 0; i < outputs.size(); ++i) {
-        TaskOutput const& output = outputs[i];
+    size_t position = 0;  // Track position separately from loop index
+    for (auto const& output : outputs) {
         if (output.get_channel_id().has_value()) {
             continue;
         }
@@ -1101,8 +1101,9 @@ auto update_task_outputs(
             output_statement->setNull(2, sql::DataType::BINARY);
         }
         output_statement->setBytes(3, &task_id_bytes);
-        output_statement->setUInt(4, i);
+        output_statement->setUInt(4, position);
         output_statement->executeUpdate();
+        ++position;
     }
 }
 
@@ -1171,8 +1172,8 @@ auto propagate_outputs_to_inputs(
             "UPDATE `task_inputs` SET `value` = ?, `data_id` = ? WHERE "
             "`output_task_id` = ? AND `output_task_position` = ?"
     ));
-    for (size_t i = 0; i < outputs.size(); ++i) {
-        TaskOutput const& output = outputs[i];
+    size_t position = 0;  // Track position separately from loop index
+    for (auto const& output : outputs) {
         if (output.get_channel_id().has_value()) {
             continue;
         }
@@ -1190,8 +1191,9 @@ auto propagate_outputs_to_inputs(
             input_statement->setNull(2, sql::DataType::BINARY);
         }
         input_statement->setBytes(3, &task_id_bytes);
-        input_statement->setUInt(4, i);
+        input_statement->setUInt(4, position);
         input_statement->executeUpdate();
+        ++position;
     }
 }
 
