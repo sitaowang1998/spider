@@ -20,27 +20,16 @@ class Receiver(Generic[T]):
     A receiver handle for reading items from a channel.
 
     Items are retrieved from the channel with polling and timeout support.
+
+    Note: Receiver instances are created internally by the task executor.
+    Users should not instantiate this class directly.
     """
 
-    def __init__(
-        self,
-        channel_id: UUID,
-        item_type: type,
-        task_id: UUID,
-        storage: Storage,
-    ) -> None:
-        """
-        Creates a receiver for the given channel.
-
-        :param channel_id: The ID of the channel to receive items from.
-        :param item_type: The type of items to receive.
-        :param task_id: The ID of the consumer task.
-        :param storage: The storage backend for channel operations.
-        """
-        self._channel_id = channel_id
-        self._item_type = item_type
-        self._task_id = task_id
-        self._storage = storage
+    # Private attributes set by _channel_impl.create_receiver()
+    _channel_id: UUID
+    _item_type: type
+    _task_id: UUID
+    _storage: Storage
 
     def recv(
         self,
@@ -95,13 +84,3 @@ class Receiver(Generic[T]):
             remaining = timeout_sec - elapsed
             sleep_time = min(poll_interval_sec, remaining)
             time.sleep(sleep_time)
-
-    @property
-    def channel_id(self) -> UUID:
-        """Returns the channel ID this receiver is bound to."""
-        return self._channel_id
-
-    @property
-    def item_type(self) -> type:
-        """Returns the type of items this receiver accepts."""
-        return self._item_type

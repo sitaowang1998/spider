@@ -10,6 +10,11 @@
 #include <spider/io/Serializer.hpp>
 
 namespace spider {
+// Forward declaration for internal access
+namespace core {
+struct SenderAccess;
+}  // namespace core
+
 /**
  * A sender handle for writing items to a channel.
  *
@@ -24,18 +29,8 @@ public:
     static_assert(Serializable<T>, "Sender item type must be Serializable.");
     static_assert(!cIsSpecializationV<T, spider::Data>, "Channels do not support spider::Data.");
 
-    /**
-     * Default constructor for use in tuple initialization.
-     * Creates an invalid sender that must be assigned before use.
-     */
+    // Default constructor creates an invalid sender. Only use for internal purposes.
     Sender() = default;
-
-    /**
-     * Creates a sender for the given channel.
-     * @param channel_id The ID of the channel to send items to.
-     */
-    explicit Sender(boost::uuids::uuid channel_id) : m_channel_id{channel_id} {}
-
     Sender(Sender const&) = delete;
     auto operator=(Sender const&) -> Sender& = delete;
     Sender(Sender&&) = default;
@@ -56,21 +51,6 @@ public:
     auto send(T&& item) -> void { m_buffer.emplace_back(std::move(item)); }
 
     /**
-     * @return The channel ID this sender is bound to.
-     */
-    [[nodiscard]] auto get_channel_id() const -> boost::uuids::uuid { return m_channel_id; }
-
-    /**
-     * @return Reference to the buffered items.
-     */
-    [[nodiscard]] auto get_buffered_items() const -> std::vector<T> const& { return m_buffer; }
-
-    /**
-     * Clears all buffered items.
-     */
-    auto clear() -> void { m_buffer.clear(); }
-
-    /**
      * @return The number of buffered items.
      */
     [[nodiscard]] auto size() const -> std::size_t { return m_buffer.size(); }
@@ -81,6 +61,15 @@ public:
     [[nodiscard]] auto empty() const -> bool { return m_buffer.empty(); }
 
 private:
+    // Allow internal access to channel_id and buffer
+    friend struct core::SenderAccess;
+
+    /**
+     * Creates a sender for the given channel.
+     * @param channel_id The ID of the channel to send items to.
+     */
+    explicit Sender(boost::uuids::uuid channel_id) : m_channel_id{channel_id} {}
+
     boost::uuids::uuid m_channel_id;
     std::vector<T> m_buffer;
 };

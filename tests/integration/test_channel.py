@@ -450,3 +450,396 @@ class TestChannelCommunication:
         sum2 = msgpack.unpackb(cast("bytes", consumer2_outputs[0].value))
         # Total sum of 0+1+2+3+4+5 = 15
         assert sum1 + sum2 == 15  # noqa: PLR2004
+
+
+@pytest.fixture
+def cpp_multi_sender_job(
+    storage: SQLConnection,  # noqa: F811
+) -> Generator[tuple[TaskGraph, Task, Task, Task], None, None]:
+    """
+    Fixture: Multi-sender producer -> Two Consumers (each reads from separate channel).
+
+    One task (multi_channel_producer_test) writes to TWO channels and returns a tuple.
+    Two consumers each read from their respective channel.
+
+    :param storage: The storage connection.
+    :return: A tuple of the task graph and tasks.
+    """
+    channel_id1 = uuid.uuid4()
+    channel_id2 = uuid.uuid4()
+
+    # Producer with two senders that returns int (count)
+    producer = Task(
+        id=uuid.uuid4(),
+        function_name="multi_channel_producer_test",
+        inputs=[
+            TaskInput(type="channel", channel_id=channel_id1),  # sender1
+            TaskInput(type="channel", channel_id=channel_id2),  # sender2
+            TaskInput(type="int", value=msgpack.packb(3)),  # count
+        ],
+        outputs=[TaskOutput(type="int")],  # returns count
+        language="cpp",
+    )
+
+    consumer1 = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id1)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    consumer2 = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id2)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    graph = TaskGraph(
+        tasks={producer.id: producer, consumer1.id: consumer1, consumer2.id: consumer2},
+        # Both consumers depend on producer
+        dependencies=[(producer.id, consumer1.id), (producer.id, consumer2.id)],
+        id=uuid.uuid4(),
+    )
+
+    submit_job(storage, uuid.uuid4(), graph)
+    yield graph, producer, consumer1, consumer2
+    remove_job(storage, graph.id)
+
+
+@pytest.fixture
+def cpp_passthrough_job(
+    storage: SQLConnection,  # noqa: F811
+) -> Generator[tuple[TaskGraph, Task, Task, Task], None, None]:
+    """
+    Fixture: Producer -> Passthrough -> Consumer (channel chain).
+
+    Producer sends items to channel1.
+    Passthrough receives from channel1, doubles values, sends to channel2.
+    Consumer receives from channel2.
+
+    :param storage: The storage connection.
+    :return: A tuple of the task graph and tasks.
+    """
+    channel_id1 = uuid.uuid4()
+    channel_id2 = uuid.uuid4()
+
+    producer = Task(
+        id=uuid.uuid4(),
+        function_name="channel_producer_test",
+        inputs=[
+            TaskInput(type="channel", channel_id=channel_id1),
+            TaskInput(type="int", value=msgpack.packb(3)),  # count=3 -> sends 0,1,2
+        ],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    # Passthrough: receives from channel1, doubles, sends to channel2
+    passthrough = Task(
+        id=uuid.uuid4(),
+        function_name="channel_passthrough_test",
+        inputs=[
+            TaskInput(type="channel", channel_id=channel_id1),  # receiver
+            TaskInput(type="channel", channel_id=channel_id2),  # sender
+        ],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    consumer = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id2)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    graph = TaskGraph(
+        tasks={producer.id: producer, passthrough.id: passthrough, consumer.id: consumer},
+        # passthrough depends on producer, consumer depends on passthrough
+        dependencies=[(producer.id, passthrough.id), (passthrough.id, consumer.id)],
+        id=uuid.uuid4(),
+    )
+
+    submit_job(storage, uuid.uuid4(), graph)
+    yield graph, producer, passthrough, consumer
+    remove_job(storage, graph.id)
+
+
+class TestMultiChannelCommunication:
+    """Tests for tasks with multiple channels (senders/receivers)."""
+
+    @pytest.mark.usefixtures("scheduler_worker")
+    def test_multi_sender_task(
+        self,
+        storage: SQLConnection,  # noqa: F811
+        cpp_multi_sender_job: tuple[TaskGraph, Task, Task, Task],
+    ) -> None:
+        """
+        Test task with multiple Senders (writes to two channels).
+
+        multi_channel_producer_test(sender1, sender2, count=3):
+        - Sends 0,1,2 to sender1
+        - Sends 0,2,4 to sender2
+        - Returns tuple<int, int>(3, 3)
+
+        consumer1 receives from channel1: 0+1+2=3
+        consumer2 receives from channel2: 0+2+4=6
+        """
+        _, producer, consumer1, consumer2 = cpp_multi_sender_job
+
+        # Wait for execution
+        time.sleep(15)
+
+        assert get_task_state(storage, producer.id) == "success"
+        assert get_task_state(storage, consumer1.id) == "success"
+        assert get_task_state(storage, consumer2.id) == "success"
+
+        # Producer returns count=3
+        producer_outputs = get_task_outputs(storage, producer.id)
+        assert len(producer_outputs) >= 1
+        assert producer_outputs[0].value == msgpack.packb(3)
+
+        # consumer1 receives 0+1+2=3
+        consumer1_outputs = get_task_outputs(storage, consumer1.id)
+        assert len(consumer1_outputs) >= 1
+        assert consumer1_outputs[0].value == msgpack.packb(3)
+
+        # consumer2 receives 0+2+4=6
+        consumer2_outputs = get_task_outputs(storage, consumer2.id)
+        assert len(consumer2_outputs) >= 1
+        assert consumer2_outputs[0].value == msgpack.packb(6)
+
+    @pytest.mark.usefixtures("scheduler_worker")
+    def test_passthrough_chain(
+        self,
+        storage: SQLConnection,  # noqa: F811
+        cpp_passthrough_job: tuple[TaskGraph, Task, Task, Task],
+    ) -> None:
+        """
+        Test channel chain: Producer -> Passthrough -> Consumer.
+
+        producer sends 0,1,2 to channel1
+        passthrough receives from channel1, doubles (0,2,4), sends to channel2
+        consumer receives from channel2: 0+2+4=6
+        """
+        _, producer, passthrough, consumer = cpp_passthrough_job
+
+        # Wait for execution
+        time.sleep(15)
+
+        assert get_task_state(storage, producer.id) == "success"
+        assert get_task_state(storage, passthrough.id) == "success"
+        assert get_task_state(storage, consumer.id) == "success"
+
+        # Producer returns count=3
+        producer_outputs = get_task_outputs(storage, producer.id)
+        assert len(producer_outputs) >= 1
+        assert producer_outputs[0].value == msgpack.packb(3)
+
+        # Passthrough returns count=3 (forwarded 3 items)
+        passthrough_outputs = get_task_outputs(storage, passthrough.id)
+        assert len(passthrough_outputs) >= 1
+        assert passthrough_outputs[0].value == msgpack.packb(3)
+
+        # Consumer receives doubled values: 0+2+4=6
+        consumer_outputs = get_task_outputs(storage, consumer.id)
+        assert len(consumer_outputs) >= 1
+        assert consumer_outputs[0].value == msgpack.packb(6)
+
+
+@pytest.fixture
+def cpp_mixed_output_tuple_with_sender_job(
+    storage: SQLConnection,  # noqa: F811
+) -> Generator[tuple[TaskGraph, Task, Task], None, None]:
+    """
+    Fixture: Mixed output task (tuple return with Sender argument) -> Consumer.
+
+    Producer takes a Sender argument and returns tuple<int, int>.
+    Sends items through the Sender while returning two regular values.
+    Output order: [int, int, channel_items...]
+
+    :param storage: The storage connection.
+    :return: A tuple of the task graph and tasks.
+    """
+    channel_id = uuid.uuid4()
+
+    # Producer takes Sender and returns tuple<int, int>
+    # Outputs: [count, sum, channel_items...]
+    producer = Task(
+        id=uuid.uuid4(),
+        function_name="mixed_output_tuple_with_sender_test",
+        inputs=[
+            TaskInput(type="channel", channel_id=channel_id),  # Sender argument
+            TaskInput(type="int", value=msgpack.packb(4)),  # count=4
+        ],
+        outputs=[
+            TaskOutput(type="int"),  # return value: count
+            TaskOutput(type="int"),  # return value: sum
+        ],
+        language="cpp",
+    )
+
+    consumer = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    graph = TaskGraph(
+        tasks={producer.id: producer, consumer.id: consumer},
+        dependencies=[(producer.id, consumer.id)],
+        id=uuid.uuid4(),
+    )
+
+    submit_job(storage, uuid.uuid4(), graph)
+    yield graph, producer, consumer
+    remove_job(storage, graph.id)
+
+
+@pytest.fixture
+def cpp_mixed_output_multi_sender_job(
+    storage: SQLConnection,  # noqa: F811
+) -> Generator[tuple[TaskGraph, Task, Task, Task], None, None]:
+    """
+    Fixture: Mixed output task (int return with two Sender arguments) -> Two Consumers.
+
+    Producer takes two Sender arguments and returns int.
+    Sends items to both Senders while returning a regular value.
+    Output order: [int, channel_items_1..., channel_items_2...]
+
+    :param storage: The storage connection.
+    :return: A tuple of the task graph and tasks.
+    """
+    channel_id1 = uuid.uuid4()
+    channel_id2 = uuid.uuid4()
+
+    # Producer takes two Senders and returns int
+    producer = Task(
+        id=uuid.uuid4(),
+        function_name="mixed_output_multi_sender_test",
+        inputs=[
+            TaskInput(type="channel", channel_id=channel_id1),  # sender1
+            TaskInput(type="channel", channel_id=channel_id2),  # sender2
+            TaskInput(type="int", value=msgpack.packb(3)),  # count=3
+        ],
+        outputs=[TaskOutput(type="int")],  # return value: count
+        language="cpp",
+    )
+
+    consumer1 = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id1)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    consumer2 = Task(
+        id=uuid.uuid4(),
+        function_name="channel_consumer_test",
+        inputs=[TaskInput(type="channel", channel_id=channel_id2)],
+        outputs=[TaskOutput(type="int")],
+        language="cpp",
+    )
+
+    graph = TaskGraph(
+        tasks={producer.id: producer, consumer1.id: consumer1, consumer2.id: consumer2},
+        dependencies=[(producer.id, consumer1.id), (producer.id, consumer2.id)],
+        id=uuid.uuid4(),
+    )
+
+    submit_job(storage, uuid.uuid4(), graph)
+    yield graph, producer, consumer1, consumer2
+    remove_job(storage, graph.id)
+
+
+class TestMixedOutputTasks:
+    """Tests for tasks that return both regular values and channel items from Sender arguments."""
+
+    @pytest.mark.usefixtures("scheduler_worker")
+    def test_mixed_output_tuple_with_sender(
+        self,
+        storage: SQLConnection,  # noqa: F811
+        cpp_mixed_output_tuple_with_sender_job: tuple[TaskGraph, Task, Task],
+    ) -> None:
+        """
+        Test task with Sender argument returning tuple<int, int>.
+
+        mixed_output_tuple_with_sender_test(sender, count=4):
+        - Sends 0,1,2,3 through sender
+        - Returns tuple(4, 6) where 6 = 0+1+2+3
+        - Outputs: [4, 6, channel_items...]
+
+        Consumer receives 0+1+2+3=6 from channel.
+        Tests that regular return values come before channel items from Sender arguments.
+        """
+        _, producer, consumer = cpp_mixed_output_tuple_with_sender_job
+
+        # Wait for execution
+        time.sleep(10)
+
+        assert get_task_state(storage, producer.id) == "success"
+        assert get_task_state(storage, consumer.id) == "success"
+
+        # Producer outputs: first is count=4, second is sum=6
+        producer_outputs = get_task_outputs(storage, producer.id)
+        regular_outputs = [o for o in producer_outputs if o.channel_id is None]
+        expected_num_regular_outputs = 2
+        assert len(regular_outputs) >= expected_num_regular_outputs
+        assert regular_outputs[0].value == msgpack.packb(4)
+        assert regular_outputs[1].value == msgpack.packb(6)
+
+        # Consumer receives 0+1+2+3=6
+        consumer_outputs = get_task_outputs(storage, consumer.id)
+        assert len(consumer_outputs) >= 1
+        assert consumer_outputs[0].value == msgpack.packb(6)
+
+    @pytest.mark.usefixtures("scheduler_worker")
+    def test_mixed_output_multi_sender(
+        self,
+        storage: SQLConnection,  # noqa: F811
+        cpp_mixed_output_multi_sender_job: tuple[TaskGraph, Task, Task, Task],
+    ) -> None:
+        """
+        Test task with two Sender arguments returning int.
+
+        mixed_output_multi_sender_test(sender1, sender2, count=3):
+        - Sends 0,1,2 to sender1
+        - Sends 0,2,4 to sender2
+        - Returns 3 (count)
+        - Outputs: [3, channel_items_1..., channel_items_2...]
+
+        consumer1 receives 0+1+2=3 from channel1.
+        consumer2 receives 0+2+4=6 from channel2.
+        Tests multiple Senders with a return value.
+        """
+        _, producer, consumer1, consumer2 = cpp_mixed_output_multi_sender_job
+
+        # Wait for execution
+        time.sleep(15)
+
+        assert get_task_state(storage, producer.id) == "success"
+        assert get_task_state(storage, consumer1.id) == "success"
+        assert get_task_state(storage, consumer2.id) == "success"
+
+        # Producer outputs: first regular value is count=3
+        producer_outputs = get_task_outputs(storage, producer.id)
+        regular_outputs = [o for o in producer_outputs if o.channel_id is None]
+        assert len(regular_outputs) >= 1
+        assert regular_outputs[0].value == msgpack.packb(3)
+
+        # consumer1 receives 0+1+2=3
+        consumer1_outputs = get_task_outputs(storage, consumer1.id)
+        assert len(consumer1_outputs) >= 1
+        assert consumer1_outputs[0].value == msgpack.packb(3)
+
+        # consumer2 receives 0+2+4=6
+        consumer2_outputs = get_task_outputs(storage, consumer2.id)
+        assert len(consumer2_outputs) >= 1
+        assert consumer2_outputs[0].value == msgpack.packb(6)

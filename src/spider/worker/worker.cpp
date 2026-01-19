@@ -51,6 +51,7 @@
 #include <spider/utils/logging.hpp>
 #include <spider/utils/StopFlag.hpp>
 #include <spider/worker/ChildPid.hpp>
+#include <spider/worker/FunctionManager.hpp>
 #include <spider/worker/TaskExecutor.hpp>
 #include <spider/worker/WorkerClient.hpp>
 
@@ -226,62 +227,114 @@ auto setup_task(
     return optional_arg_buffers;
 }
 
-auto
-parse_outputs(spider::core::Task const& task, std::vector<msgpack::sbuffer> const& result_buffers)
-        -> std::optional<std::vector<spider::core::TaskOutput>> {
-    if (result_buffers.size() != task.get_num_outputs()) {
+/**
+ * Parses a regular value output from the task executor response.
+ *
+ * @param task The task definition.
+ * @param output_def The output definition from the task.
+ * @param result_buffer The serialized output buffer.
+ * @param task_output_idx The index of this output in the task definition.
+ * @return The parsed TaskOutput, or nullopt on error.
+ */
+auto parse_regular_output(
+        spider::core::Task const& task,
+        spider::core::TaskOutput const& output_def,
+        msgpack::sbuffer const& result_buffer,
+        size_t task_output_idx
+) -> std::optional<spider::core::TaskOutput> {
+    std::string const type = output_def.get_type();
+
+    if (output_def.get_channel_id().has_value() && type == typeid(spider::core::Data).name()) {
         spdlog::error(
-                "Task {} returned {} outputs but {} were expected",
+                "Task {} output {} attempts to send spider::Data to a channel",
                 task.get_function_name(),
-                result_buffers.size(),
-                task.get_num_outputs()
+                task_output_idx
         );
         return std::nullopt;
     }
-    std::vector<spider::core::TaskOutput> outputs;
-    outputs.reserve(task.get_num_outputs());
-    for (size_t i = 0; i < task.get_num_outputs(); ++i) {
-        auto const& output_def = task.get_output(i);
-        std::string const type = output_def.get_type();
-        if (output_def.get_channel_id().has_value() && type == typeid(spider::core::Data).name()) {
-            spdlog::error(
-                    "Task {} output {} attempts to send spider::Data to a channel",
-                    task.get_function_name(),
-                    i
-            );
-            return std::nullopt;
-        }
-        if (type == typeid(spider::core::Data).name()) {
-            try {
-                msgpack::object_handle const handle
-                        = msgpack::unpack(result_buffers[i].data(), result_buffers[i].size());
-                msgpack::object const obj = handle.get();
-                boost::uuids::uuid data_id;
-                obj.convert(data_id);
-                spider::core::TaskOutput output{data_id};
-                if (output_def.get_channel_id().has_value()) {
-                    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-                    output.set_channel_id(output_def.get_channel_id().value());
-                }
-                outputs.emplace_back(std::move(output));
-            } catch (std::runtime_error const& e) {
-                spdlog::error(
-                        "Task {} failed to parse result as data id",
-                        task.get_function_name()
-                );
-                return std::nullopt;
-            }
-        } else {
-            msgpack::sbuffer const& buffer = result_buffers[i];
-            std::string const value{buffer.data(), buffer.size()};
-            spider::core::TaskOutput output{value, type};
+
+    if (type == typeid(spider::core::Data).name()) {
+        try {
+            msgpack::object_handle const handle
+                    = msgpack::unpack(result_buffer.data(), result_buffer.size());
+            msgpack::object const obj = handle.get();
+            boost::uuids::uuid data_id;
+            obj.convert(data_id);
+            spider::core::TaskOutput output{data_id};
             if (output_def.get_channel_id().has_value()) {
                 // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
                 output.set_channel_id(output_def.get_channel_id().value());
             }
-            outputs.emplace_back(std::move(output));
+            return output;
+        } catch (std::runtime_error const& e) {
+            spdlog::error("Task {} failed to parse result as data id", task.get_function_name());
+            return std::nullopt;
         }
     }
+
+    std::string const value{result_buffer.data(), result_buffer.size()};
+    spider::core::TaskOutput output{value, type};
+    if (output_def.get_channel_id().has_value()) {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        output.set_channel_id(output_def.get_channel_id().value());
+    }
+    return output;
+}
+
+auto parse_outputs(
+        spider::core::Task const& task,
+        std::vector<spider::core::TaskOutputItem> const& output_items
+) -> std::optional<std::vector<spider::core::TaskOutput>> {
+    // Process outputs in order. Task output definitions only define regular return values.
+    // Channel items from Sender arguments are processed and included in their original positions.
+    std::vector<spider::core::TaskOutput> outputs;
+    outputs.reserve(output_items.size());
+
+    size_t task_output_idx = 0;  // Index into task output definitions (for regular values only)
+    for (auto const& output_item : output_items) {
+        // Check if this output is a channel item
+        if (std::holds_alternative<spider::core::ChannelOutput>(output_item)) {
+            auto const& channel_output = std::get<spider::core::ChannelOutput>(output_item);
+            spider::core::TaskOutput output{channel_output.value, "channel"};
+            output.set_channel_id(channel_output.channel_id);
+            outputs.emplace_back(std::move(output));
+            continue;
+        }
+
+        // Regular value - match against task output definition
+        if (task_output_idx >= task.get_num_outputs()) {
+            spdlog::error(
+                    "Task {} returned more regular outputs than expected (got > {}, expected {})",
+                    task.get_function_name(),
+                    task_output_idx,
+                    task.get_num_outputs()
+            );
+            return std::nullopt;
+        }
+
+        auto const& output_def = task.get_output(task_output_idx);
+        auto const& result_buffer = std::get<msgpack::sbuffer>(output_item);
+
+        auto optional_output
+                = parse_regular_output(task, output_def, result_buffer, task_output_idx);
+        if (!optional_output.has_value()) {
+            return std::nullopt;
+        }
+        outputs.emplace_back(std::move(optional_output.value()));
+        ++task_output_idx;
+    }
+
+    // Verify we got exactly the expected number of regular outputs
+    if (task_output_idx != task.get_num_outputs()) {
+        spdlog::error(
+                "Task {} returned {} regular outputs but {} were expected",
+                task.get_function_name(),
+                task_output_idx,
+                task.get_num_outputs()
+        );
+        return std::nullopt;
+    }
+
     return outputs;
 }
 
@@ -411,21 +464,23 @@ auto handle_executor_result(
         return false;
     }
 
-    // Parse result
-    std::optional<std::vector<msgpack::sbuffer>> const optional_result_buffers
-            = executor.get_result_buffers();
-    if (!optional_result_buffers.has_value()) {
-        spdlog::error("Task {} failed to parse result into buffers", task.get_function_name());
+    // Parse all outputs (values and channel items) from the response
+    std::optional<spider::core::TaskExecutionResponse> const optional_response
+            = executor.parse_response();
+    if (!optional_response.has_value()) {
+        spdlog::error("Task {} failed to parse response", task.get_function_name());
         metadata_store->task_fail(
                 *conn,
                 instance,
-                fmt::format("Task {} failed to parse result into buffers", task.get_function_name())
+                fmt::format("Task {} failed to parse response", task.get_function_name())
         );
         return false;
     }
-    std::vector<msgpack::sbuffer> const& result_buffers = optional_result_buffers.value();
+    spider::core::TaskExecutionResponse const& response = optional_response.value();
+
+    // Parse outputs in order - channel items and regular values can be interleaved
     std::optional<std::vector<spider::core::TaskOutput>> optional_outputs
-            = parse_outputs(task, result_buffers);
+            = parse_outputs(task, response.outputs);
     if (!optional_outputs.has_value()) {
         metadata_store->task_fail(
                 *conn,
@@ -438,16 +493,7 @@ auto handle_executor_result(
         return false;
     }
 
-    std::vector<spider::core::TaskOutput>& outputs = optional_outputs.value();
-
-    // Get channel items from Sender buffers and add them to outputs
-    std::vector<std::pair<boost::uuids::uuid, std::string>> const channel_items
-            = executor.get_channel_items();
-    for (auto const& [channel_id, value] : channel_items) {
-        spider::core::TaskOutput channel_output{value, "channel"};
-        channel_output.set_channel_id(channel_id);
-        outputs.emplace_back(std::move(channel_output));
-    }
+    std::vector<spider::core::TaskOutput> const& outputs = optional_outputs.value();
 
     // Submit result
     spdlog::debug("Submitting result for task {}", boost::uuids::to_string(task.get_id()));

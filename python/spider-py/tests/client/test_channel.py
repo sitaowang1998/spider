@@ -1,10 +1,22 @@
 """Tests for channel Sender and Receiver classes."""
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from spider_py import Receiver, Sender
 from spider_py.core import ChannelItem
+from spider_py.core._channel_impl import (
+    create_receiver,
+    create_sender,
+    get_receiver_channel_id,
+    get_receiver_item_type,
+    get_sender_buffered_items,
+    get_sender_channel_id,
+    get_sender_item_type,
+)
+
+if TYPE_CHECKING:
+    from spider_py import Receiver, Sender
 
 
 class TestSender:
@@ -13,39 +25,26 @@ class TestSender:
     def test_send_buffers_items(self) -> None:
         """Tests that send() buffers items."""
         channel_id = uuid4()
-        sender: Sender[str] = Sender(channel_id, str)
+        sender: Sender[str] = create_sender(channel_id, str)
 
         sender.send("item1")
         sender.send("item2")
         sender.send("item3")
 
         assert len(sender) == 3
-        assert sender.get_buffered_items() == ["item1", "item2", "item3"]
-
-    def test_clear(self) -> None:
-        """Tests that clear() removes all buffered items."""
-        channel_id = uuid4()
-        sender: Sender[int] = Sender(channel_id, int)
-
-        sender.send(1)
-        sender.send(2)
-        assert len(sender) == 2
-
-        sender.clear()
-        assert len(sender) == 0
-        assert sender.get_buffered_items() == []
+        assert get_sender_buffered_items(sender) == ["item1", "item2", "item3"]
 
     def test_channel_id(self) -> None:
-        """Tests channel_id property."""
+        """Tests channel_id via impl function."""
         channel_id = uuid4()
-        sender: Sender[str] = Sender(channel_id, str)
-        assert sender.channel_id == channel_id
+        sender: Sender[str] = create_sender(channel_id, str)
+        assert get_sender_channel_id(sender) == channel_id
 
     def test_item_type(self) -> None:
-        """Tests item_type property."""
+        """Tests item_type via impl function."""
         channel_id = uuid4()
-        sender: Sender[int] = Sender(channel_id, int)
-        assert sender.item_type is int
+        sender: Sender[int] = create_sender(channel_id, int)
+        assert get_sender_item_type(sender) is int
 
 
 class TestReceiver:
@@ -65,7 +64,7 @@ class TestReceiver:
         )
         mock_storage.dequeue_channel_item.return_value = (item, False)
 
-        receiver: Receiver[str] = Receiver(
+        receiver: Receiver[str] = create_receiver(
             channel_id=channel_id,
             item_type=str,
             task_id=task_id,
@@ -86,7 +85,7 @@ class TestReceiver:
         mock_storage = MagicMock()
         mock_storage.dequeue_channel_item.return_value = (None, True)
 
-        receiver: Receiver[str] = Receiver(
+        receiver: Receiver[str] = create_receiver(
             channel_id=channel_id,
             item_type=str,
             task_id=task_id,
@@ -107,7 +106,7 @@ class TestReceiver:
         # Always return empty (no item, not drained)
         mock_storage.dequeue_channel_item.return_value = (None, False)
 
-        receiver: Receiver[str] = Receiver(
+        receiver: Receiver[str] = create_receiver(
             channel_id=channel_id,
             item_type=str,
             task_id=task_id,
@@ -123,23 +122,23 @@ class TestReceiver:
         assert mock_storage.dequeue_channel_item.call_count >= 2
 
     def test_channel_id(self) -> None:
-        """Tests channel_id property."""
+        """Tests channel_id via impl function."""
         channel_id = uuid4()
-        receiver: Receiver[str] = Receiver(
+        receiver: Receiver[str] = create_receiver(
             channel_id=channel_id,
             item_type=str,
             task_id=uuid4(),
             storage=MagicMock(),
         )
-        assert receiver.channel_id == channel_id
+        assert get_receiver_channel_id(receiver) == channel_id
 
     def test_item_type(self) -> None:
-        """Tests item_type property."""
+        """Tests item_type via impl function."""
         channel_id = uuid4()
-        receiver: Receiver[int] = Receiver(
+        receiver: Receiver[int] = create_receiver(
             channel_id=channel_id,
             item_type=int,
             task_id=uuid4(),
             storage=MagicMock(),
         )
-        assert receiver.item_type is int
+        assert get_receiver_item_type(receiver) is int

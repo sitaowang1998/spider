@@ -33,6 +33,17 @@ public:
             : m_data_id(data_id),
               m_type(typeid(spider::core::Data).name()) {}
 
+    /**
+     * Creates a channel input.
+     * @param type The type of items in the channel.
+     * @param channel_id The channel ID.
+     */
+    static auto create_channel_input(std::string type, boost::uuids::uuid channel_id) -> TaskInput {
+        TaskInput input{std::move(type)};
+        input.m_channel_id = channel_id;
+        return input;
+    }
+
     [[nodiscard]] auto get_task_output() const
             -> std::optional<std::tuple<boost::uuids::uuid, std::uint8_t>> {
         return m_task_output;
