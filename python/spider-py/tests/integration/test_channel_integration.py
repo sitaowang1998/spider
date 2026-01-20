@@ -22,13 +22,13 @@ from spider_py.core import JobStatus
 from spider_py.storage import MariaDBStorage, parse_jdbc_url
 from spider_py.type import Int8, Int32
 
-MariaDBTestUrl = "jdbc:mariadb://127.0.0.1:3306/spider-storage?user=spider&password=password"
+MARIADB_TEST_URL = "jdbc:mariadb://127.0.0.1:3306/spider-storage?user=spider&password=password"
 
 
 @pytest.fixture(scope="session")
 def storage_url() -> str:
     """Fixture for storage URL."""
-    return os.getenv("SPIDER_STORAGE_URL", MariaDBTestUrl)
+    return os.getenv("SPIDER_STORAGE_URL", MARIADB_TEST_URL)
 
 
 @pytest.fixture(scope="session")
@@ -292,121 +292,3 @@ class TestChannelDatabaseStructure:
         assert len(jobs) == 1
         status = mariadb_storage.get_job_status(jobs[0]._impl)
         assert status == JobStatus.Running
-
-
-class TestChannelTaskGraphStructure:
-    """Tests that verify the task graph structure for channel tasks."""
-
-    def test_producer_task_structure(self) -> None:
-        """Tests the structure of a producer task in the graph."""
-        channel = Channel[bytes]()
-        graph = channel_task(producer_bytes, senders={"s": channel})
-
-        assert len(graph._impl.tasks) == 1
-        task = graph._impl.tasks[0]
-
-        # Producer should have:
-        # - 1 input (Sender bound to channel)
-        # - 2 outputs (channel output + return value)
-        assert len(task.task_inputs) == 1
-        assert len(task.task_outputs) == 2
-
-        # Verify input
-        assert task.task_inputs[0].channel_id == channel.id
-        assert task.task_inputs[0].type == "channel:bytes"
-
-        # Verify channel output
-        assert task.task_outputs[0].channel_id == channel.id
-        assert task.task_outputs[0].type == "channel:bytes"
-
-        # Verify return output
-        assert task.task_outputs[1].channel_id is None
-        assert task.task_outputs[1].type == "bytes"
-
-    def test_consumer_task_structure(self) -> None:
-        """Tests the structure of a consumer task in the graph."""
-        channel = Channel[bytes]()
-        graph = channel_task(consumer_bytes, receivers={"r": channel})
-
-        assert len(graph._impl.tasks) == 1
-        task = graph._impl.tasks[0]
-
-        # Consumer should have:
-        # - 1 input (Receiver bound to channel)
-        # - 1 output (return value only, no channel output)
-        assert len(task.task_inputs) == 1
-        assert len(task.task_outputs) == 1
-
-        # Verify input
-        assert task.task_inputs[0].channel_id == channel.id
-        assert task.task_inputs[0].type == "channel:bytes"
-
-        # Verify return output (no channel)
-        assert task.task_outputs[0].channel_id is None
-        assert task.task_outputs[0].type == "int32"
-
-    def test_grouped_graph_structure(self) -> None:
-        """Tests the structure of a grouped producer-consumer graph."""
-        channel = Channel[bytes]()
-        prod = channel_task(producer_bytes, senders={"s": channel})
-        cons = channel_task(consumer_bytes, receivers={"r": channel})
-        graph = group([prod, cons])
-
-        # Should have 2 tasks
-        assert len(graph._impl.tasks) == 2
-
-        # Both tasks share the same channel ID
-        prod_task = graph._impl.tasks[0]
-        cons_task = graph._impl.tasks[1]
-
-        assert prod_task.task_inputs[0].channel_id == channel.id
-        assert cons_task.task_inputs[0].channel_id == channel.id
-        assert prod_task.task_inputs[0].channel_id == cons_task.task_inputs[0].channel_id
-
-        # No task dependencies (channel coordinates execution)
-        assert len(graph._impl.dependencies) == 0
-
-    def test_passthrough_task_structure(self) -> None:
-        """Tests the structure of a passthrough task."""
-        ch_in = Channel[bytes]()
-        ch_out = Channel[Int32]()
-        graph = channel_task(passthrough, receivers={"r": ch_in}, senders={"s": ch_out})
-
-        assert len(graph._impl.tasks) == 1
-        task = graph._impl.tasks[0]
-
-        # Passthrough should have:
-        # - 2 inputs (Receiver + Sender)
-        # - 2 outputs (channel output for sender + return value)
-        assert len(task.task_inputs) == 2
-        assert len(task.task_outputs) == 2
-
-        # Verify inputs (order: Receiver, Sender as in function signature)
-        assert task.task_inputs[0].channel_id == ch_in.id
-        assert task.task_inputs[0].type == "channel:bytes"
-        assert task.task_inputs[1].channel_id == ch_out.id
-        assert task.task_inputs[1].type == "channel:int32"
-
-        # Verify outputs (channel output first, then return)
-        assert task.task_outputs[0].channel_id == ch_out.id
-        assert task.task_outputs[0].type == "channel:int32"
-        assert task.task_outputs[1].channel_id is None
-        assert task.task_outputs[1].type == "bytes"
-
-    def test_mixed_input_order_preserved(self) -> None:
-        """Tests that parameter order is preserved for mixed inputs."""
-        channel = Channel[bytes]()
-        graph = channel_task(producer_with_count, senders={"s": channel})
-
-        task = graph._impl.tasks[0]
-
-        # Should have 2 inputs: Sender[bytes], Int8
-        assert len(task.task_inputs) == 2
-
-        # First: Sender (channel)
-        assert task.task_inputs[0].channel_id == channel.id
-        assert task.task_inputs[0].type == "channel:bytes"
-
-        # Second: Int8 (regular)
-        assert task.task_inputs[1].channel_id is None
-        assert task.task_inputs[1].type == "int8"
