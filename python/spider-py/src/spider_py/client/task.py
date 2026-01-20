@@ -145,6 +145,91 @@ def create_task(func: TaskFunction) -> core.Task:
     )
 
 
+def _create_channel_input(channel: Channel[Any], annotation: type | GenericAlias) -> TaskInput:
+    """Creates a TaskInput for a channel parameter."""
+    item_type = _get_channel_item_type(annotation)
+    tdl_type_str = to_tdl_type_str(item_type)
+    return TaskInput(
+        type=f"channel:{tdl_type_str}",
+        value=None,
+        channel_id=channel.id,
+    )
+
+
+def _create_channel_output(channel: Channel[Any], annotation: type | GenericAlias) -> TaskOutput:
+    """Creates a TaskOutput for producer registration."""
+    item_type = _get_channel_item_type(annotation)
+    tdl_type_str = to_tdl_type_str(item_type)
+    return TaskOutput(
+        type=f"channel:{tdl_type_str}",
+        value=None,
+        channel_id=channel.id,
+    )
+
+
+def _validate_channel_bindings(
+    provided: dict[str, Channel[Any]],
+    used: set[str],
+    binding_type: str,
+) -> None:
+    """Validates that all provided channel bindings were used."""
+    unused = set(provided.keys()) - used
+    if unused:
+        msg = f"Unused {binding_type} bindings: {unused}"
+        raise TypeError(msg)
+
+
+def _process_channel_params(
+    params: list[inspect.Parameter],
+    senders: dict[str, Channel[Any]],
+    receivers: dict[str, Channel[Any]],
+) -> tuple[list[TaskInput], list[TaskOutput]]:
+    """
+    Processes function parameters and creates TaskInputs and channel TaskOutputs.
+
+    :return: Tuple of (task_inputs, channel_outputs)
+    """
+    task_inputs: list[TaskInput] = []
+    channel_outputs: list[TaskOutput] = []
+    used_senders: set[str] = set()
+    used_receivers: set[str] = set()
+
+    for param in params:
+        if param.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
+            msg = "Variadic parameters are not supported."
+            raise TypeError(msg)
+        if param.annotation is inspect.Parameter.empty:
+            msg = "Parameters must have type annotation."
+            raise TypeError(msg)
+
+        annotation = param.annotation
+        name = param.name
+
+        if _is_sender(annotation):
+            if name not in senders:
+                msg = f"Sender parameter '{name}' must have channel binding."
+                raise TypeError(msg)
+            used_senders.add(name)
+            channel = senders[name]
+            task_inputs.append(_create_channel_input(channel, annotation))
+            channel_outputs.append(_create_channel_output(channel, annotation))
+        elif _is_receiver(annotation):
+            if name not in receivers:
+                msg = f"Receiver parameter '{name}' must have channel binding."
+                raise TypeError(msg)
+            used_receivers.add(name)
+            channel = receivers[name]
+            task_inputs.append(_create_channel_input(channel, annotation))
+        else:
+            tdl_type_str = to_tdl_type_str(annotation)
+            task_inputs.append(TaskInput(tdl_type_str, None))
+
+    _validate_channel_bindings(senders, used_senders, "sender")
+    _validate_channel_bindings(receivers, used_receivers, "receiver")
+
+    return task_inputs, channel_outputs
+
+
 def channel_task(
     func: TaskFunction,
     senders: dict[str, Channel[Any]] | None = None,
@@ -180,68 +265,13 @@ def channel_task(
 
     # Validate first param is TaskContext
     if not params or params[0].annotation is not TaskContext:
-        msg = "First argument must be TaskContext."
+        msg = "First argument is not a TaskContext."
         raise TypeError(msg)
 
-    task_inputs: list[TaskInput] = []
-    channel_outputs: list[TaskOutput] = []  # For producer registration
+    task_inputs, channel_outputs = _process_channel_params(params[1:], senders, receivers)
 
-    for param in params[1:]:
-        if param.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
-            msg = "Variadic parameters are not supported."
-            raise TypeError(msg)
-        if param.annotation is inspect.Parameter.empty:
-            msg = "Parameters must have type annotation."
-            raise TypeError(msg)
-
-        annotation = param.annotation
-        name = param.name
-
-        if _is_sender(annotation):
-            if name not in senders:
-                msg = f"Sender parameter '{name}' must have channel binding."
-                raise TypeError(msg)
-            channel = senders[name]
-            item_type = _get_channel_item_type(annotation)
-            tdl_type_str = to_tdl_type_str(item_type)
-            task_inputs.append(
-                TaskInput(
-                    type=f"channel:{tdl_type_str}",
-                    value=None,
-                    channel_id=channel.id,
-                )
-            )
-            # Register as producer with channel output
-            channel_outputs.append(
-                TaskOutput(
-                    type=f"channel:{tdl_type_str}",
-                    value=None,
-                    channel_id=channel.id,
-                )
-            )
-        elif _is_receiver(annotation):
-            if name not in receivers:
-                msg = f"Receiver parameter '{name}' must have channel binding."
-                raise TypeError(msg)
-            channel = receivers[name]
-            item_type = _get_channel_item_type(annotation)
-            tdl_type_str = to_tdl_type_str(item_type)
-            task_inputs.append(
-                TaskInput(
-                    type=f"channel:{tdl_type_str}",
-                    value=None,
-                    channel_id=channel.id,
-                )
-            )
-        else:
-            # Regular parameter
-            tdl_type_str = to_tdl_type_str(annotation)
-            task_inputs.append(TaskInput(tdl_type_str, None))
-
-    # Process return type for regular outputs
-    task_outputs = _validate_and_convert_return(signature)
-    # Prepend channel outputs (for producer registration)
-    task_outputs = channel_outputs + task_outputs
+    # Process return type and prepend channel outputs
+    task_outputs = channel_outputs + _validate_and_convert_return(signature)
 
     task = core.Task(
         function_name=f"{func.__module__}.{func.__qualname__}",

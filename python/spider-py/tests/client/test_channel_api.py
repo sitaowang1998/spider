@@ -271,7 +271,7 @@ class TestChannelTaskValidation:
             return b"done"
 
         channel = Channel[bytes]()
-        with pytest.raises(TypeError, match="First argument must be TaskContext"):
+        with pytest.raises(TypeError, match="First argument is not a TaskContext"):
             channel_task(invalid, senders={"s": channel})
 
     def test_not_a_function(self) -> None:
@@ -298,6 +298,28 @@ class TestChannelTaskValidation:
         channel = Channel[bytes]()
         with pytest.raises(TypeError, match="Return type must have type annotation"):
             channel_task(no_return, senders={"s": channel})
+
+    def test_unused_sender_binding(self) -> None:
+        """Tests that unused sender binding raises TypeError."""
+
+        def producer(ctx: TaskContext, s: Sender[bytes]) -> bytes:
+            return b"done"
+
+        ch1 = Channel[bytes]()
+        ch2 = Channel[bytes]()
+        with pytest.raises(TypeError, match="Unused sender bindings"):
+            channel_task(producer, senders={"s": ch1, "extra": ch2})
+
+    def test_unused_receiver_binding(self) -> None:
+        """Tests that unused receiver binding raises TypeError."""
+
+        def consumer(ctx: TaskContext, r: Receiver[bytes]) -> bytes:
+            return b"done"
+
+        ch1 = Channel[bytes]()
+        ch2 = Channel[bytes]()
+        with pytest.raises(TypeError, match="Unused receiver bindings"):
+            channel_task(consumer, receivers={"r": ch1, "extra": ch2})
 
 
 class TestChannelTaskComposition:
