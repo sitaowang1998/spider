@@ -1,4 +1,4 @@
-"""Integration tests for high-level Channel API."""
+"""Unit tests for high-level Channel API."""
 
 import pytest
 

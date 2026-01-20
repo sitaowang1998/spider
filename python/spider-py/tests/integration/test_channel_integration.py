@@ -294,7 +294,6 @@ class TestChannelDatabaseStructure:
         assert status == JobStatus.Running
 
 
-@pytest.mark.storage
 class TestChannelTaskGraphStructure:
     """Tests that verify the task graph structure for channel tasks."""
 
