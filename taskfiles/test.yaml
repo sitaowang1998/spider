@@ -142,6 +142,7 @@ tasks:
           INCLUDE_PATTERNS: ["{{.OUTPUT_DIR}}"]
 
   spider-py-unit-tests:
+    desc: "Run all spider-py unit tests (requires storage)"
     dir: "{{.G_SRC_PYTHON_DIR}}"
     env:
       # Don't create __pycache__ directories in the source tree.
@@ -166,17 +167,19 @@ tasks:
           MARIADB_USERNAME: "{{.G_MARIADB_USERNAME}}"
           MARIADB_PASSWORD: "{{.G_MARIADB_PASSWORD}}"
           MARIADB_PORT: "{{.MARIADB_PORT}}"
-      - "uv run pytest"
+      - "uv run pytest --ignore=tests/integration -m \"not integration\""
 
   spider-py-non-storage-unit-tests:
+    desc: "Run spider-py unit tests that don't require storage"
     dir: "{{.G_SRC_PYTHON_DIR}}"
     env:
       # Don't create __pycache__ directories in the source tree.
       PYTHONDONTWRITEBYTECODE: "1"
     cmds:
-      - "uv run pytest -m \"not storage\""
+      - "uv run pytest --ignore=tests/integration -m \"not storage and not integration\""
 
   spider-py-storage-unit-tests:
+    desc: "Run spider-py unit tests that require storage"
     dir: "{{.G_SRC_PYTHON_DIR}}"
     env:
       # Don't create __pycache__ directories in the source tree.
@@ -201,7 +204,35 @@ tasks:
           MARIADB_USERNAME: "{{.G_MARIADB_USERNAME}}"
           MARIADB_PASSWORD: "{{.G_MARIADB_PASSWORD}}"
           MARIADB_PORT: "{{.MARIADB_PORT}}"
-      - "uv run pytest -m \"storage\""
+      - "uv run pytest --ignore=tests/integration -m \"storage and not integration\""
+
+  spider-py-integration-tests:
+    desc: "Run spider-py integration tests (requires storage)"
+    dir: "{{.G_SRC_PYTHON_DIR}}"
+    env:
+      # Don't create __pycache__ directories in the source tree.
+      PYTHONDONTWRITEBYTECODE: "1"
+      SPIDER_STORAGE_URL:
+        "jdbc:mariadb://127.0.0.1:{{.MARIADB_PORT}}/{{.G_MARIADB_DATABASE}}?\
+        user={{.G_MARIADB_USERNAME}}&password={{.G_MARIADB_PASSWORD}}"
+    vars:
+      MARIADB_CONTAINER_NAME:
+        # Normalize UUID casing: macOS generates uppercase while Linux generates lowercase.
+        sh: "uuidgen | tr '[:upper:]' '[:lower:]' | sed 's/^/spider-mariadb-/'"
+      MARIADB_PORT:
+        sh: "tools/scripts/get_free_port.py"
+    cmds:
+      - defer: |-
+          {{.ROOT_DIR}}/tools/scripts/mariadb/stop.py \
+          --name "{{.MARIADB_CONTAINER_NAME}}"
+      - task: "start-mariadb"
+        vars:
+          MARIADB_CONTAINER_NAME: "{{.MARIADB_CONTAINER_NAME}}"
+          MARIADB_DATABASE: "{{.G_MARIADB_DATABASE}}"
+          MARIADB_USERNAME: "{{.G_MARIADB_USERNAME}}"
+          MARIADB_PASSWORD: "{{.G_MARIADB_PASSWORD}}"
+          MARIADB_PORT: "{{.MARIADB_PORT}}"
+      - "uv run pytest tests/integration"
 
   start-mariadb:
     internal: true
