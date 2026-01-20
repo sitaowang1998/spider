@@ -60,6 +60,16 @@ class Driver:
         self._storage.create_data_with_driver_ref(self._driver_id, data._impl)
 
 
+def _is_channel_input(task_input: core.TaskInput) -> bool:
+    """
+    Checks if the task input is a channel input (Sender or Receiver).
+    Channel inputs have channel_id set and no value (value is provided at runtime by the executor).
+    :param task_input: The task input to check.
+    :return: True if the input is a channel input, False otherwise.
+    """
+    return task_input.channel_id is not None and task_input.value is None
+
+
 def _copy_graph_for_submission(
     task_graph: TaskGraph, task_args: Sequence[object]
 ) -> core.TaskGraph:
@@ -78,6 +88,9 @@ def _copy_graph_for_submission(
         task = core_graph.tasks[task_index]
         task.set_ready()
         for task_input in task.task_inputs:
+            # Skip channel inputs - they don't need user-provided arguments
+            if _is_channel_input(task_input):
+                continue
             if next_arg is None:
                 raise ValueError(_argument_number_mismatch_msg)
             arg = next_arg

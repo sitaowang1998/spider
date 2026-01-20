@@ -22,6 +22,11 @@ class Job:
         self._impl = job
         self._storage = storage
 
+    @property
+    def job_id(self) -> core.JobId:
+        """:return: The job ID."""
+        return self._impl.job_id
+
     def get_status(self) -> core.JobStatus:
         """:return: The current job status."""
         if self._impl.is_running():

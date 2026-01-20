@@ -60,3 +60,5 @@ jobs:
       - run: "task test:cpp-integration"
 
       - run: "task test:spider-py-unit-tests"
+
+      - run: "task test:spider-py-integration-tests"

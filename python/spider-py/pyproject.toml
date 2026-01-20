@@ -64,12 +64,18 @@ extend = "../../ruff.toml"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
+  "ANN202",  # Allow missing return type annotation for test helper functions
+  "ARG001",  # Allow unused function arguments (task functions have required signatures)
+  "ERA001",  # Allow descriptive comments that look like code
   "INP001",  # Allow implicit namespace package for tests
   "PLR2004",  # Allow use of magic value
   "S101",  # Allow use of `assert` (security warning)
   "S603",  # Allow use of `subprocess.Popen` (security warning)
   "T201",  # Allow use of `print` (testing)
   "TC003",  # Ignore performance overhead of imports only used for type checking
+]
+"src/spider_py/client/task.py" = [
+  "PLC0415",  # Allow import inside function to avoid circular import
 ]
 
 [tool.ruff.lint.flake8-self]
