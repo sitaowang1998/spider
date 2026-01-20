@@ -701,16 +701,267 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(drained);
 
     std::set<std::string> values;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(first_item->value.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(second_item->value.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     values.insert(first_item->value.value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     values.insert(second_item->value.value());
     REQUIRE(values.size() == 2);
     REQUIRE(values.contains("one"));
     REQUIRE(values.contains("two"));
 
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(first_item->producer_task_id == producer.get_id());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     REQUIRE(second_item->producer_task_id == producer.get_id());
+
+    REQUIRE(metadata_storage->remove_job(*conn, job_id).success());
+}
+
+TEMPLATE_LIST_TEST_CASE(
+        "Channel multiple producers",
+        "[storage]",
+        spider::test::StorageFactoryTypeList
+) {
+    std::unique_ptr<spider::core::StorageFactory> storage_factory
+            = spider::test::create_storage_factory<TestType>();
+    std::unique_ptr<spider::core::MetadataStorage> metadata_storage
+            = storage_factory->provide_metadata_storage();
+
+    std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
+            conn_result = storage_factory->provide_storage_connection();
+    REQUIRE(std::holds_alternative<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+    auto conn = std::move(std::get<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+
+    boost::uuids::random_generator gen;
+    boost::uuids::uuid const job_id = gen();
+    boost::uuids::uuid const client_id = gen();
+    boost::uuids::uuid const channel_id = gen();
+
+    // Create two producer tasks and one consumer
+    spider::core::Task producer1{"producer1"};
+    spider::core::TaskOutput producer1_output{"int"};
+    producer1_output.set_channel_id(channel_id);
+    producer1.add_output(producer1_output);
+
+    spider::core::Task producer2{"producer2"};
+    spider::core::TaskOutput producer2_output{"int"};
+    producer2_output.set_channel_id(channel_id);
+    producer2.add_output(producer2_output);
+
+    spider::core::Task consumer{"consumer"};
+    spider::core::TaskInput consumer_input{"int"};
+    consumer_input.set_channel_id(channel_id);
+    consumer.add_input(consumer_input);
+
+    spider::core::TaskGraph graph;
+    graph.add_task(producer1);
+    graph.add_task(producer2);
+    graph.add_task(consumer);
+    graph.add_input_task(producer1.get_id());
+    graph.add_input_task(producer2.get_id());
+    graph.add_input_task(consumer.get_id());
+    graph.add_output_task(consumer.get_id());
+    graph.add_output_task(producer1.get_id());
+    graph.add_output_task(producer2.get_id());
+
+    REQUIRE(metadata_storage->add_job(*conn, job_id, client_id, graph).success());
+
+    // Finish producer1 - channel should not be drained yet
+    spider::core::TaskInstance const producer1_instance{producer1.get_id()};
+    REQUIRE(metadata_storage->create_task_instance(*conn, producer1_instance).success());
+    std::vector<spider::core::TaskOutput> producer1_outputs;
+    spider::core::TaskOutput p1_out{std::string{"from_p1"}, "int"};
+    p1_out.set_channel_id(channel_id);
+    producer1_outputs.push_back(p1_out);
+    REQUIRE(metadata_storage->task_finish(*conn, producer1_instance, producer1_outputs).success());
+
+    // Dequeue the item from producer1
+    std::optional<spider::core::ChannelItem> item1;
+    bool drained = false;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(*conn, channel_id, consumer.get_id(), &item1, &drained)
+                    .success());
+    REQUIRE(item1.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    REQUIRE(item1->value.value() == "from_p1");
+    REQUIRE(!drained);  // Not drained because producer2 hasn't finished
+
+    // Try to dequeue again - should return no item but not drained
+    std::optional<spider::core::ChannelItem> no_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(*conn, channel_id, consumer.get_id(), &no_item, &drained)
+                    .success());
+    REQUIRE(!no_item.has_value());
+    REQUIRE(!drained);  // Still not drained because producer2 hasn't finished
+
+    // Finish producer2 - now channel should become drainable
+    spider::core::TaskInstance const producer2_instance{producer2.get_id()};
+    REQUIRE(metadata_storage->create_task_instance(*conn, producer2_instance).success());
+    std::vector<spider::core::TaskOutput> producer2_outputs;
+    spider::core::TaskOutput p2_out{std::string{"from_p2"}, "int"};
+    p2_out.set_channel_id(channel_id);
+    producer2_outputs.push_back(p2_out);
+    REQUIRE(metadata_storage->task_finish(*conn, producer2_instance, producer2_outputs).success());
+
+    // Dequeue item from producer2
+    std::optional<spider::core::ChannelItem> item2;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(*conn, channel_id, consumer.get_id(), &item2, &drained)
+                    .success());
+    REQUIRE(item2.has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    REQUIRE(item2->value.value() == "from_p2");
+    REQUIRE(!drained);  // Not drained yet, just empty
+
+    // Now channel should be drained (all producers finished and empty)
+    std::optional<spider::core::ChannelItem> final_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer.get_id(),
+                            &final_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(!final_item.has_value());
+    REQUIRE(drained);  // Now drained
+
+    REQUIRE(metadata_storage->remove_job(*conn, job_id).success());
+}
+
+TEMPLATE_LIST_TEST_CASE(
+        "Channel multiple consumers",
+        "[storage]",
+        spider::test::StorageFactoryTypeList
+) {
+    std::unique_ptr<spider::core::StorageFactory> storage_factory
+            = spider::test::create_storage_factory<TestType>();
+    std::unique_ptr<spider::core::MetadataStorage> metadata_storage
+            = storage_factory->provide_metadata_storage();
+
+    std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
+            conn_result = storage_factory->provide_storage_connection();
+    REQUIRE(std::holds_alternative<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+    auto conn = std::move(std::get<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+
+    boost::uuids::random_generator gen;
+    boost::uuids::uuid const job_id = gen();
+    boost::uuids::uuid const client_id = gen();
+    boost::uuids::uuid const channel_id = gen();
+
+    // Create one producer and two consumer tasks
+    spider::core::Task producer{"producer"};
+    spider::core::TaskOutput producer_output1{"int"};
+    producer_output1.set_channel_id(channel_id);
+    producer.add_output(producer_output1);
+    spider::core::TaskOutput producer_output2{"int"};
+    producer_output2.set_channel_id(channel_id);
+    producer.add_output(producer_output2);
+
+    spider::core::Task consumer1{"consumer1"};
+    spider::core::TaskInput consumer1_input{"int"};
+    consumer1_input.set_channel_id(channel_id);
+    consumer1.add_input(consumer1_input);
+
+    spider::core::Task consumer2{"consumer2"};
+    spider::core::TaskInput consumer2_input{"int"};
+    consumer2_input.set_channel_id(channel_id);
+    consumer2.add_input(consumer2_input);
+
+    spider::core::TaskGraph graph;
+    graph.add_task(producer);
+    graph.add_task(consumer1);
+    graph.add_task(consumer2);
+    graph.add_input_task(producer.get_id());
+    graph.add_input_task(consumer1.get_id());
+    graph.add_input_task(consumer2.get_id());
+    graph.add_output_task(producer.get_id());
+    graph.add_output_task(consumer1.get_id());
+    graph.add_output_task(consumer2.get_id());
+
+    REQUIRE(metadata_storage->add_job(*conn, job_id, client_id, graph).success());
+
+    // Finish producer with 2 items
+    spider::core::TaskInstance const producer_instance{producer.get_id()};
+    REQUIRE(metadata_storage->create_task_instance(*conn, producer_instance).success());
+    std::vector<spider::core::TaskOutput> outputs;
+    spider::core::TaskOutput out1{std::string{"item1"}, "int"};
+    out1.set_channel_id(channel_id);
+    outputs.push_back(out1);
+    spider::core::TaskOutput out2{std::string{"item2"}, "int"};
+    out2.set_channel_id(channel_id);
+    outputs.push_back(out2);
+    REQUIRE(metadata_storage->task_finish(*conn, producer_instance, outputs).success());
+
+    // Consumer1 dequeues first item
+    std::optional<spider::core::ChannelItem> c1_item;
+    bool drained = false;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer1.get_id(),
+                            &c1_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(c1_item.has_value());
+    REQUIRE(!drained);
+
+    // Consumer2 dequeues second item
+    std::optional<spider::core::ChannelItem> c2_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer2.get_id(),
+                            &c2_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(c2_item.has_value());
+    REQUIRE(!drained);
+
+    // Verify both consumers got different items
+    std::set<std::string> received_values;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    received_values.insert(c1_item->value.value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    received_values.insert(c2_item->value.value());
+    REQUIRE(received_values.size() == 2);
+    REQUIRE(received_values.contains("item1"));
+    REQUIRE(received_values.contains("item2"));
+
+    // Both consumers should see channel as drained now
+    std::optional<spider::core::ChannelItem> empty_item;
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer1.get_id(),
+                            &empty_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(!empty_item.has_value());
+    REQUIRE(drained);
+
+    REQUIRE(metadata_storage
+                    ->dequeue_channel_item(
+                            *conn,
+                            channel_id,
+                            consumer2.get_id(),
+                            &empty_item,
+                            &drained
+                    )
+                    .success());
+    REQUIRE(!empty_item.has_value());
+    REQUIRE(drained);
 
     REQUIRE(metadata_storage->remove_job(*conn, job_id).success());
 }

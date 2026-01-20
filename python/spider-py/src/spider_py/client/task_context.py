@@ -1,8 +1,13 @@
 """Spider client task context module."""
 
-from spider_py import core
-from spider_py.client.data import Data
-from spider_py.storage import Storage
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from spider_py import core
+    from spider_py.client.data import Data
+    from spider_py.storage import Storage
 
 
 class TaskContext:

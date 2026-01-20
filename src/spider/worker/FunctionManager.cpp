@@ -6,9 +6,11 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <boost/dll/alias.hpp>
+#include <boost/uuid/uuid.hpp>
 #include <spdlog/spdlog.h>
 
 #include <spider/io/MsgPack.hpp>  // IWYU pragma: keep
@@ -64,16 +66,39 @@ void create_error_buffer(
     packer.pack(message);
 }
 
-auto response_get_result_buffers(msgpack::sbuffer const& buffer)
-        -> std::optional<std::vector<msgpack::sbuffer>> {
+namespace {
+/**
+ * Checks if a msgpack object is a channel item: [channel_id, value]
+ * Channel items are 2-element arrays where the first element is a 16-byte UUID.
+ */
+auto is_channel_item(msgpack::object const& obj) -> bool {
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access,cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (msgpack::type::ARRAY != obj.type || obj.via.array.size != 2) {
+        return false;
+    }
+    // Check if first element is a 16-byte binary (UUID)
+    msgpack::object const& first = obj.via.array.ptr[0];
+    constexpr size_t cUuidSize = 16;
+    if (msgpack::type::BIN == first.type && first.via.bin.size == cUuidSize) {
+        return true;
+    }
+    if (msgpack::type::EXT == first.type && first.via.ext.size == cUuidSize) {
+        return true;
+    }
+    return false;
+    // NOLINTEND(cppcoreguidelines-pro-type-union-access,cppcoreguidelines-pro-bounds-pointer-arithmetic)
+}
+}  // namespace
+
+auto response_parse(msgpack::sbuffer const& buffer) -> std::optional<TaskExecutionResponse> {
     // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access,cppcoreguidelines-pro-bounds-pointer-arithmetic)
     try {
-        std::vector<msgpack::sbuffer> result_buffers;
+        TaskExecutionResponse response;
         msgpack::object_handle const handle = msgpack::unpack(buffer.data(), buffer.size());
         msgpack::object const object = handle.get();
 
         if (msgpack::type::ARRAY != object.type || object.via.array.size < 2) {
-            spdlog::error("Cannot split result into buffers: Wrong type");
+            spdlog::error("Cannot parse response: Wrong type");
             return std::nullopt;
         }
 
@@ -81,7 +106,7 @@ auto response_get_result_buffers(msgpack::sbuffer const& buffer)
             != object.via.array.ptr[0].as<worker::TaskExecutorResponseType>())
         {
             spdlog::error(
-                    "Cannot split result into buffers: Wrong response type {}",
+                    "Cannot parse response: Wrong response type {}",
                     static_cast<std::underlying_type_t<worker::TaskExecutorResponseType>>(
                             object.via.array.ptr[0].as<worker::TaskExecutorResponseType>()
                     )
@@ -89,14 +114,35 @@ auto response_get_result_buffers(msgpack::sbuffer const& buffer)
             return std::nullopt;
         }
 
+        // Protocol: [Result, output1, output2, ...]
+        // Outputs are in the order the task returns them.
+        // Each output is either a regular value or a channel item [channel_id, value].
+        // Channel items and regular values can be interleaved.
         for (size_t i = 1; i < object.via.array.size; ++i) {
             msgpack::object const& obj = object.via.array.ptr[i];
-            result_buffers.emplace_back();
-            msgpack::pack(result_buffers.back(), obj);
+
+            if (is_channel_item(obj)) {
+                // Extract as channel item
+                boost::uuids::uuid const channel_id = obj.via.array.ptr[0].as<boost::uuids::uuid>();
+                msgpack::object const& value_obj = obj.via.array.ptr[1];
+
+                msgpack::sbuffer value_buffer;
+                msgpack::pack(value_buffer, value_obj);
+                std::string const value{value_buffer.data(), value_buffer.size()};
+
+                response.outputs.emplace_back(
+                        ChannelOutput{.channel_id = channel_id, .value = value}
+                );
+            } else {
+                // Extract as regular value buffer
+                msgpack::sbuffer result_buffer;
+                msgpack::pack(result_buffer, obj);
+                response.outputs.emplace_back(std::move(result_buffer));
+            }
         }
-        return result_buffers;
+        return response;
     } catch (msgpack::type_error& e) {
-        spdlog::error("Cannot split result into buffers: {}", e.what());
+        spdlog::error("Cannot parse response: {}", e.what());
         return std::nullopt;
     }
     // NOLINTEND(cppcoreguidelines-pro-type-union-access,cppcoreguidelines-pro-bounds-pointer-arithmetic)

@@ -131,24 +131,21 @@ _TABLE_CREATORS = [
     """,
     """
     CREATE TABLE IF NOT EXISTS `channel_items` (
+      `id` BINARY(16) NOT NULL,
       `channel_id` BINARY(16) NOT NULL,
       `producer_task_id` BINARY(16) NOT NULL,
-      `item_index` INT UNSIGNED NOT NULL,
       `value` VARBINARY(999),
-      `data_id` BINARY(16),
       `delivered_to_task_id` BINARY(16),
       `creation_time` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT `channel_item_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`)
       ON UPDATE NO ACTION ON DELETE CASCADE,
       CONSTRAINT `channel_item_producer_task_id` FOREIGN KEY (`producer_task_id`)
       REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
-      CONSTRAINT `channel_item_data_id` FOREIGN KEY (`data_id`) REFERENCES `data` (`id`)
-      ON UPDATE NO ACTION ON DELETE SET NULL,
       CONSTRAINT `channel_item_delivered_to_task_id` FOREIGN KEY (`delivered_to_task_id`)
       REFERENCES `tasks` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
-      INDEX (`channel_id`),
+      INDEX (`channel_id`, `creation_time`),
       INDEX (`delivered_to_task_id`),
-      PRIMARY KEY (`channel_id`, `producer_task_id`, `item_index`)
+      PRIMARY KEY (`id`)
     );
     """,
     """

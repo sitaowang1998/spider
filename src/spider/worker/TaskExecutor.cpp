@@ -264,8 +264,8 @@ auto TaskExecutor::process_output_handler() -> boost::asio::awaitable<void> {
 
 // NOLINTEND(clang-analyzer-core.CallAndMessage)
 
-auto TaskExecutor::get_result_buffers() const -> std::optional<std::vector<msgpack::sbuffer>> {
-    return core::response_get_result_buffers(m_result_buffer);
+auto TaskExecutor::parse_response() const -> std::optional<core::TaskExecutionResponse> {
+    return core::response_parse(m_result_buffer);
 }
 
 auto TaskExecutor::get_error() const -> std::tuple<core::FunctionInvokeError, std::string> {

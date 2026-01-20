@@ -9,12 +9,29 @@
 
 namespace spider {
 /**
+ * Concept for types that can be sent through a channel.
+ * Must be Serializable and not spider::Data (channels don't support Data).
+ *
+ * @tparam T
+ */
+template <class T>
+concept ChannelItem = Serializable<T> && !cIsSpecializationV<T, Data>;
+
+// Forward declarations for channel types
+template <ChannelItem T>
+class Sender;
+
+template <ChannelItem T>
+class Receiver;
+
+/**
  * Concept that represents the input to or output from a Task.
  *
  * @tparam T
  */
 template <class T>
-concept TaskIo = Serializable<T> || cIsSpecializationV<T, Data>;
+concept TaskIo = Serializable<T> || cIsSpecializationV<T, Data> || cIsSpecializationV<T, Sender>
+                 || cIsSpecializationV<T, Receiver>;
 
 // Forward declare `TaskContext` since `TaskFunction` takes `TaskContext` as a param, and
 // `TaskContext` uses `TaskFunction` as a param in its methods.

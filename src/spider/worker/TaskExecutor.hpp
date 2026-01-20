@@ -82,7 +82,13 @@ public:
         return core::response_get_result<T>(m_result_buffer);
     }
 
-    [[nodiscard]] auto get_result_buffers() const -> std::optional<std::vector<msgpack::sbuffer>>;
+    /**
+     * Parses the result buffer to extract both task results and channel items.
+     *
+     * @return TaskExecutionResponse containing result buffers and channel items, or nullopt on
+     * error.
+     */
+    [[nodiscard]] auto parse_response() const -> std::optional<core::TaskExecutionResponse>;
 
     [[nodiscard]] auto get_error() const -> std::tuple<core::FunctionInvokeError, std::string>;
 

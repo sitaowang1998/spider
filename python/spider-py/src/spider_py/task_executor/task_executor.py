@@ -9,12 +9,21 @@ from collections.abc import Sequence
 from os import fdopen, getenv
 from pydoc import locate
 from types import FunctionType, GenericAlias
-from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING
+from typing import Any, cast, get_args, get_origin, get_type_hints, TYPE_CHECKING
 from uuid import UUID
 
 import msgpack
 
 from spider_py import client
+from spider_py.client.receiver import Receiver
+from spider_py.client.sender import Sender
+from spider_py.core._channel_impl import (
+    create_receiver,
+    create_sender,
+    get_sender_buffered_items,
+    get_sender_channel_id,
+    get_sender_item_type,
+)
 from spider_py.storage import MariaDBStorage, parse_jdbc_url, Storage
 from spider_py.task_executor.task_executor_message import get_request_body, TaskExecutorResponseType
 from spider_py.utils import from_serializable, to_serializable
@@ -24,6 +33,32 @@ if TYPE_CHECKING:
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+
+def _is_receiver_type(cls: type | GenericAlias) -> bool:
+    """Check if a type annotation is a Receiver type."""
+    origin = get_origin(cls)
+    if origin is Receiver:
+        return True
+    # Handle cases where cls is the Receiver class itself
+    return isinstance(cls, type) and issubclass(cls, Receiver)
+
+
+def _is_sender_type(cls: type | GenericAlias) -> bool:
+    """Check if a type annotation is a Sender type."""
+    origin = get_origin(cls)
+    if origin is Sender:
+        return True
+    # Handle cases where cls is the Sender class itself
+    return isinstance(cls, type) and issubclass(cls, Sender)
+
+
+def _get_channel_item_type(cls: type | GenericAlias) -> type[Any]:
+    """Get the item type from a Receiver[T] or Sender[T] annotation."""
+    args = get_args(cls)
+    if args:
+        return cast("type[Any]", args[0])
+    return object  # Default if no type argument
 
 
 HeaderSize = 16
@@ -66,7 +101,10 @@ def receive_message(pipe: BufferedReader) -> bytes:
 
 
 def parse_task_arguments(
-    storage: Storage, params: list[inspect.Parameter], arguments: list[object]
+    storage: Storage,
+    task_context: client.TaskContext,
+    params: list[inspect.Parameter],
+    arguments: list[object],
 ) -> list[object]:
     """
     Parses arguments for the function to be executed.
@@ -74,6 +112,7 @@ def parse_task_arguments(
     NOTE: `params` does not include the `TaskContext` parameter, and must be the same length as
     `arguments`. The caller is responsible for the size check.
     :param storage: Storage instance to use to get Data.
+    :param task_context: The task context for creating Receivers.
     :param params: A list of parameters in the function signature.
     :param arguments: A list of arguments to parse.
     :return: The parsed arguments.
@@ -86,54 +125,144 @@ def parse_task_arguments(
         if param.annotation is inspect.Parameter.empty:
             msg = f"Parameter `{param.name}` has no type annotation."
             raise TypeError(msg)
-        if cls is not client.Data:
-            parsed_args.append(from_serializable(cls, arg))
+
+        # Handle Receiver parameters - arg should be channel_id bytes
+        if _is_receiver_type(cls):
+            if not isinstance(arg, bytes):
+                msg = (
+                    f"Argument {i}: Expected channel_id bytes for Receiver, "
+                    f"got {type(arg).__name__}."
+                )
+                raise TypeError(msg)
+            channel_id = UUID(bytes=arg)
+            item_type = _get_channel_item_type(cls)
+            receiver = create_receiver(channel_id, item_type, task_context.task_id, storage)
+            parsed_args.append(receiver)
             continue
-        if not isinstance(arg, bytes):
-            msg = f"Argument {i}: Expected `spider.Data` (bytes), but got {type(arg).__name__}."
-            raise TypeError(msg)
-        core_data = storage.get_data(UUID(bytes=arg))
-        parsed_args.append(client.Data(core_data))
+
+        # Handle Sender parameters - arg should be channel_id bytes
+        if _is_sender_type(cls):
+            if not isinstance(arg, bytes):
+                msg = (
+                    f"Argument {i}: Expected channel_id bytes for Sender, got {type(arg).__name__}."
+                )
+                raise TypeError(msg)
+            channel_id = UUID(bytes=arg)
+            item_type = _get_channel_item_type(cls)
+            sender = create_sender(channel_id, item_type)
+            parsed_args.append(sender)
+            continue
+
+        # Handle Data parameters
+        if cls is client.Data:
+            if not isinstance(arg, bytes):
+                msg = f"Argument {i}: Expected `spider.Data` (bytes), but got {type(arg).__name__}."
+                raise TypeError(msg)
+            core_data = storage.get_data(UUID(bytes=arg))
+            parsed_args.append(client.Data(core_data))
+            continue
+
+        # Handle regular parameters
+        parsed_args.append(from_serializable(cls, arg))
     return parsed_args
 
 
-def parse_single_output_to_serializable(output: object, cls: type | GenericAlias) -> object:
+def pack_output(output: object, cls: type | GenericAlias) -> list[object]:
     """
-    Parses a single output from the function execution to a serializable form.
-    :param output: Output to parse.
-    :param cls: Expected output type.
-    :return: The parsed output.
+    Pack a single output value into a list of serializable items.
+
+    For Senders, returns a list of [channel_id, value] channel items.
+    For Data, returns [data_id_bytes].
+    For regular values, returns [serialized_value].
+
+    :param output: The output value to pack.
+    :param cls: The expected output type.
+    :return: A list of serializable items.
     """
+    if _is_sender_type(cls) and isinstance(output, Sender):
+        channel_id_bytes = get_sender_channel_id(output).bytes
+        item_type = get_sender_item_type(output)
+        items: list[object] = []
+        for item in get_sender_buffered_items(output):
+            serialized = to_serializable(item, item_type)
+            items.append([channel_id_bytes, serialized])
+        return items
+
+    # Handle Data
     if isinstance(output, client.Data):
-        return output.id.bytes
-    return to_serializable(output, cls)
+        return [output.id.bytes]
+
+    # Handle regular value
+    return [to_serializable(output, cls)]
+
+
+def pack_sender_argument_items(
+    params: list[inspect.Parameter],
+    parsed_args: list[object],
+) -> list[object]:
+    """
+    Pack channel items from Sender arguments.
+
+    :param params: The function parameters (excluding TaskContext).
+    :param parsed_args: The parsed arguments corresponding to the parameters.
+    :return: A list of channel items [channel_id, value] from Sender arguments.
+    """
+    items: list[object] = []
+    for param, arg in zip(params, parsed_args, strict=True):
+        cls = param.annotation
+        if _is_sender_type(cls) and isinstance(arg, Sender):
+            channel_id_bytes = get_sender_channel_id(arg).bytes
+            item_type = get_sender_item_type(arg)
+            for item in get_sender_buffered_items(arg):
+                serialized = to_serializable(item, item_type)
+                items.append([channel_id_bytes, serialized])
+    return items
 
 
 def parse_task_execution_results(
-    results: object, types: type | GenericAlias | Sequence[type | GenericAlias]
+    results: object,
+    types: type | GenericAlias | Sequence[type | GenericAlias],
+    params: list[inspect.Parameter],
+    parsed_args: list[object],
 ) -> list[object]:
     """
     Parses results from the function execution.
+
+    Protocol: [Result, output1, output2, ...]
+    Each output is packed at its position in the return type.
+    - Regular values: packed as-is
+    - Data: packed as UUID bytes
+    - Sender: expanded to channel items [channel_id, value] at its position
+
+    After return values, channel items from Sender arguments are appended.
+
     :param results: Results to parse.
     :param types: Expected output types. Must be a single type for non-tuple results, or a sequence
         of types matching the length of tuple results.
+    :param params: The function parameters (excluding TaskContext).
+    :param parsed_args: The parsed arguments corresponding to the parameters.
     :return: The parsed results.
     :raises TypeError: If the number of output types does not match the number of results.
     """
-    response_messages: list[object] = [TaskExecutorResponseType.Result]
+    response: list[object] = [TaskExecutorResponseType.Result]
+
     if not isinstance(results, tuple):
         if not isinstance(types, (type, GenericAlias)):
             msg = "Invalid single output type."
             raise TypeError(msg)
-        response_messages.append(parse_single_output_to_serializable(results, types))
-        return response_messages
-    # Parse as a tuple
-    if not isinstance(types, Sequence) or len(results) != len(types):
-        msg = "The number of output types does not match the number of results."
-        raise TypeError(msg)
-    for result, ret_type in zip(results, types, strict=True):
-        response_messages.append(parse_single_output_to_serializable(result, ret_type))
-    return response_messages
+        response.extend(pack_output(results, types))
+    else:
+        # Parse as a tuple
+        if not isinstance(types, Sequence) or len(results) != len(types):
+            msg = "The number of output types does not match the number of results."
+            raise TypeError(msg)
+        for result, ret_type in zip(results, types, strict=True):
+            response.extend(pack_output(result, ret_type))
+
+    # Pack channel items from Sender arguments
+    response.extend(pack_sender_argument_items(params, parsed_args))
+
+    return response
 
 
 def get_return_types(
@@ -226,15 +355,14 @@ def main() -> None:
             )
             raise ValueError(msg)
         task_context = client.TaskContext(task_id, storage)
-        arguments = [
-            task_context,
-            *parse_task_arguments(storage, list(signature.parameters.values())[1:], arguments),
-        ]
+        params = list(signature.parameters.values())[1:]
+        parsed_args = parse_task_arguments(storage, task_context, params, arguments)
+        func_arguments = [task_context, *parsed_args]
         try:
-            results = function(*arguments)
+            results = function(*func_arguments)
             logger.debug("Function %s executed", function_name)
             return_types = get_return_types(function)
-            responses = parse_task_execution_results(results, return_types)
+            responses = parse_task_execution_results(results, return_types, params, parsed_args)
         except Exception as e:
             logger.exception("Function %s failed", function_name)
             responses = [

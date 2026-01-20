@@ -18,10 +18,14 @@
 #include <fmt/format.h>
 
 #include <spider/client/Data.hpp>
+#include <spider/client/Receiver.hpp>
+#include <spider/client/Sender.hpp>
 #include <spider/client/task.hpp>
 #include <spider/client/TaskContext.hpp>
 #include <spider/core/DataImpl.hpp>
 #include <spider/core/Error.hpp>
+#include <spider/core/ReceiverAccess.hpp>
+#include <spider/core/SenderAccess.hpp>
 #include <spider/core/TaskContextImpl.hpp>
 #include <spider/io/MsgPack.hpp>  // IWYU pragma: keep
 #include <spider/io/Serializer.hpp>
@@ -162,38 +166,195 @@ auto response_get_result(msgpack::sbuffer const& buffer) -> std::optional<std::t
     // NOLINTEND(cppcoreguidelines-pro-type-union-access,cppcoreguidelines-pro-bounds-pointer-arithmetic)
 }
 
-auto response_get_result_buffers(msgpack::sbuffer const& buffer)
-        -> std::optional<std::vector<msgpack::sbuffer>>;
+/**
+ * A channel item output: channel_id and serialized value.
+ */
+struct ChannelOutput {
+    boost::uuids::uuid channel_id;
+    std::string value;
+};
 
+/**
+ * A single task output item - either a regular value buffer or a channel item.
+ */
+using TaskOutputItem = std::variant<msgpack::sbuffer, ChannelOutput>;
+
+/**
+ * Parsed task execution response containing all outputs in the order the task returns them.
+ * Outputs include both regular values and channel items, and they can be interleaved.
+ */
+struct TaskExecutionResponse {
+    std::vector<TaskOutputItem> outputs;
+};
+
+/**
+ * Parses a task execution response buffer to extract all outputs.
+ *
+ * Protocol format: [Result, output1, output2, ...]
+ * - Outputs are in the order the task returns them
+ * - Each output is either a regular value or a channel item [channel_id (16-byte UUID), value]
+ * - Channel items and regular values can be interleaved
+ *
+ * @param buffer The response buffer to parse.
+ * @return The parsed response containing all outputs in order, or nullopt on error.
+ */
+auto response_parse(msgpack::sbuffer const& buffer) -> std::optional<TaskExecutionResponse>;
+
+/**
+ * Counts the total number of outputs for a return type.
+ * Regular values count as 1, Senders count as the number of buffered items.
+ */
 template <TaskIo T>
-auto create_result_response(T const& t) -> msgpack::sbuffer {
-    msgpack::sbuffer buffer;
-    msgpack::packer packer{buffer};
-    packer.pack_array(2);
-    packer.pack(worker::TaskExecutorResponseType::Result);
-    if constexpr (cIsSpecializationV<T, spider::Data>) {
+auto count_outputs(T const& t) -> size_t {
+    if constexpr (cIsSpecializationV<T, spider::Sender>) {
+        return core::SenderAccess::get_buffered_items(t).size();
+    } else {
+        return 1;
+    }
+}
+
+/**
+ * Counts total outputs for a tuple return type.
+ */
+template <TaskIo... Values>
+auto count_outputs(std::tuple<Values...> const& t) -> size_t {
+    size_t count = 0;
+    for_n<sizeof...(Values)>([&](auto i) { count += count_outputs(std::get<i.cValue>(t)); });
+    return count;
+}
+
+/**
+ * Counts channel items from Sender arguments in a tuple.
+ */
+template <class ArgsTuple>
+auto count_sender_items(ArgsTuple const& args) -> size_t {
+    size_t count = 0;
+    for_n<std::tuple_size_v<ArgsTuple>>([&](auto i) {
+        using T = std::tuple_element_t<i.cValue, ArgsTuple>;
+        if constexpr (cIsSpecializationV<T, spider::Sender>) {
+            count += core::SenderAccess::get_buffered_items(std::get<i.cValue>(args)).size();
+        }
+    });
+    return count;
+}
+
+/**
+ * Packs a single output value into the packer.
+ * For Senders, packs all channel items as [channel_id, value] arrays.
+ */
+template <TaskIo T>
+void pack_output(msgpack::packer<msgpack::sbuffer>& packer, msgpack::sbuffer& buffer, T const& t) {
+    if constexpr (cIsSpecializationV<T, spider::Sender>) {
+        boost::uuids::uuid const channel_id = core::SenderAccess::get_channel_id(t);
+        for (auto const& item : core::SenderAccess::get_buffered_items(t)) {
+            packer.pack_array(2);
+            packer.pack(channel_id);
+            msgpack::sbuffer item_buffer;
+            msgpack::pack(item_buffer, item);
+            buffer.write(item_buffer.data(), item_buffer.size());
+        }
+    } else if constexpr (cIsSpecializationV<T, spider::Data>) {
         packer.pack(DataImpl::get_impl(t)->get_id());
     } else {
         packer.pack(t);
     }
+}
+
+/**
+ * Packs channel items from Sender arguments in a tuple.
+ */
+template <class ArgsTuple>
+void pack_sender_items(
+        msgpack::packer<msgpack::sbuffer>& packer,
+        msgpack::sbuffer& buffer,
+        ArgsTuple const& args
+) {
+    for_n<std::tuple_size_v<ArgsTuple>>([&](auto i) {
+        using T = std::tuple_element_t<i.cValue, ArgsTuple>;
+        if constexpr (cIsSpecializationV<T, spider::Sender>) {
+            pack_output(packer, buffer, std::get<i.cValue>(args));
+        }
+    });
+}
+
+/**
+ * Creates a result response for a single value return type (no Sender arguments).
+ *
+ * Response format: [Result, return_value]
+ *
+ * @param t The function's return value.
+ * @return Serialized response buffer.
+ */
+template <TaskIo T>
+auto create_result_response(T const& t) -> msgpack::sbuffer {
+    msgpack::sbuffer buffer;
+    msgpack::packer packer{buffer};
+    packer.pack_array(1 + count_outputs(t));
+    packer.pack(worker::TaskExecutorResponseType::Result);
+    pack_output(packer, buffer, t);
     return buffer;
 }
 
+/**
+ * Creates a result response for a single value return type with Sender arguments.
+ *
+ * Response format: [Result, return_value, [channel_id, item], ...]
+ * Return value is packed first (expanded to channel items if Sender),
+ * then channel items from Sender arguments are appended.
+ *
+ * @param t The function's return value.
+ * @param args_tuple The argument tuple containing Sender arguments.
+ * @return Serialized response buffer.
+ */
+template <TaskIo T, class ArgsTuple>
+auto create_result_response(T const& t, ArgsTuple const& args_tuple) -> msgpack::sbuffer {
+    msgpack::sbuffer buffer;
+    msgpack::packer packer{buffer};
+    packer.pack_array(1 + count_outputs(t) + count_sender_items(args_tuple));
+    packer.pack(worker::TaskExecutorResponseType::Result);
+    pack_output(packer, buffer, t);
+    pack_sender_items(packer, buffer, args_tuple);
+    return buffer;
+}
+
+/**
+ * Creates a result response for tuple return types (no Sender arguments).
+ *
+ * Response format: [Result, val1, val2, ...]
+ *
+ * @param t The function's return value tuple.
+ * @return Serialized response buffer.
+ */
 template <TaskIo... Values>
 auto create_result_response(std::tuple<Values...> const& t) -> msgpack::sbuffer {
     msgpack::sbuffer buffer;
     msgpack::packer packer{buffer};
-    packer.pack_array(sizeof...(Values) + 1);
+    packer.pack_array(1 + count_outputs(t));
     packer.pack(worker::TaskExecutorResponseType::Result);
-    for_n<sizeof...(Values)>([&](auto i) {
-        using T = std::tuple_element_t<i.cValue, std::tuple<Values...>>;
-        if constexpr (cIsSpecializationV<T, spider::Data>) {
-            T const& data = std::get<i.cValue>(t);
-            packer.pack(DataImpl::get_impl(data)->get_id());
-        } else {
-            packer.pack(std::get<i.cValue>(t));
-        }
-    });
+    for_n<sizeof...(Values)>([&](auto i) { pack_output(packer, buffer, std::get<i.cValue>(t)); });
+    return buffer;
+}
+
+/**
+ * Creates a result response for tuple return types with Sender arguments.
+ *
+ * Response format: [Result, val1, val2, ..., [channel_id, item], ...]
+ * Return values are packed first in tuple order (Senders expanded to channel items),
+ * then channel items from Sender arguments are appended.
+ *
+ * @param t The function's return value tuple.
+ * @param args_tuple The argument tuple containing Sender arguments.
+ * @return Serialized response buffer.
+ */
+template <TaskIo... Values, class ArgsTuple>
+auto create_result_response(std::tuple<Values...> const& t, ArgsTuple const& args_tuple)
+        -> msgpack::sbuffer {
+    msgpack::sbuffer buffer;
+    msgpack::packer packer{buffer};
+    packer.pack_array(1 + count_outputs(t) + count_sender_items(args_tuple));
+    packer.pack(worker::TaskExecutorResponseType::Result);
+    for_n<sizeof...(Values)>([&](auto i) { pack_output(packer, buffer, std::get<i.cValue>(t)); });
+    pack_sender_items(packer, buffer, args_tuple);
     return buffer;
 }
 
@@ -318,6 +479,19 @@ public:
                                     data_store,
                                     TaskContextImpl::get_storage_factory(context)
                             );
+                } else if constexpr (cIsSpecializationV<T, spider::Sender>) {
+                    boost::uuids::uuid const channel_id = arg.as<boost::uuids::uuid>();
+                    std::get<i.cValue + 1>(args_tuple)
+                            = core::SenderAccess::create<TemplateParameterT<T>>(channel_id);
+                } else if constexpr (cIsSpecializationV<T, spider::Receiver>) {
+                    boost::uuids::uuid const channel_id = arg.as<boost::uuids::uuid>();
+                    std::get<i.cValue + 1>(args_tuple)
+                            = core::ReceiverAccess::create<TemplateParameterT<T>>(
+                                    channel_id,
+                                    task_id,
+                                    TaskContextImpl::get_metadata_store(context),
+                                    TaskContextImpl::get_storage_factory(context)
+                            );
                 } else {
                     std::get<i.cValue + 1>(args_tuple)
                             = arg.as<std::tuple_element_t<i.cValue + 1, ArgsTuple>>();
@@ -338,7 +512,7 @@ public:
 
         try {
             ReturnType result = std::apply(function, args_tuple);
-            return create_result_response(result);
+            return create_result_response(result, args_tuple);
         } catch (msgpack::type_error& e) {
             return create_error_response(
                     FunctionInvokeError::ResultParsingError,

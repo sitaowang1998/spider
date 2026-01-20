@@ -176,16 +176,15 @@ VALUES
 
 SelectChannelItemForUpdate = """
 SELECT
+  `id`,
   `producer_task_id`,
-  `item_index`,
-  `value`,
-  `data_id`
+  `value`
 FROM
   `channel_items`
 WHERE
   `channel_id` = ? AND `delivered_to_task_id` IS NULL
 ORDER BY
-  `item_index`
+  `creation_time`
 LIMIT 1 FOR UPDATE"""
 
 UpdateChannelItemDelivery = """
@@ -194,8 +193,7 @@ UPDATE
 SET
   `delivered_to_task_id` = ?
 WHERE
-  `channel_id` = ? AND `producer_task_id` = ? AND `item_index` = ?
-  AND `delivered_to_task_id` IS NULL"""
+  `id` = ? AND `delivered_to_task_id` IS NULL"""
 
 _StrToJobStatusMap = {
     "running": core.JobStatus.Running,
@@ -426,14 +424,12 @@ class MariaDBStorage(Storage):
                     drained = bool(closed_row[0])
                     self._conn.commit()
                     return None, drained
-                producer_task_id_bytes, item_index, value, data_id = row
+                item_id_bytes, producer_task_id_bytes, value = row
                 cursor.execute(
                     UpdateChannelItemDelivery,
                     (
                         consumer_task_id.bytes,
-                        channel_id.bytes,
-                        producer_task_id_bytes,
-                        item_index,
+                        item_id_bytes,
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -442,9 +438,7 @@ class MariaDBStorage(Storage):
                 item = core.ChannelItem(
                     channel_id=channel_id,
                     producer_task_id=UUID(bytes=producer_task_id_bytes),
-                    item_index=item_index,
                     value=value,
-                    data_id=UUID(bytes=data_id) if data_id is not None else None,
                     delivered_to_task_id=consumer_task_id,
                 )
                 self._conn.commit()

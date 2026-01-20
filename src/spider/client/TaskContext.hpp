@@ -19,6 +19,7 @@
 #include <spider/client/Exception.hpp>
 #include <spider/client/Job.hpp>
 #include <spider/client/task.hpp>
+#include <spider/client/type_utils.hpp>
 #include <spider/core/Context.hpp>
 #include <spider/core/Error.hpp>
 #include <spider/core/TaskGraph.hpp>
