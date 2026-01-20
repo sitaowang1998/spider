@@ -40,8 +40,9 @@ struct ReceiverAccess;
 template <ChannelItem T>
 class Receiver {
 public:
-    // Default constructor for internal use only (required by std::tuple in FunctionInvoker).
-    // Creates an invalid receiver - external code should not use this directly.
+    // Default constructor required for std::tuple default construction in FunctionInvoker.
+    // This is only implicitly called during args_tuple construction and should never be
+    // explicitly used. Creates an invalid receiver with uninitialized members.
     Receiver() = default;
 
     /**

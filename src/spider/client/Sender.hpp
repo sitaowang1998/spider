@@ -25,8 +25,9 @@ struct SenderAccess;
 template <ChannelItem T>
 class Sender {
 public:
-    // Default constructor for internal use only (required by std::tuple in FunctionInvoker).
-    // Creates an invalid sender - external code should not use this directly.
+    // Default constructor required for std::tuple default construction in FunctionInvoker.
+    // This is only implicitly called during args_tuple construction and should never be
+    // explicitly used. Creates an invalid sender with uninitialized channel_id.
     Sender() = default;
 
     Sender(Sender const&) = delete;
