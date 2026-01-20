@@ -8,11 +8,20 @@
 #include <spider/io/Serializer.hpp>
 
 namespace spider {
-// Forward declarations for channel types
+/**
+ * Concept for types that can be sent through a channel.
+ * Must be Serializable and not spider::Data (channels don't support Data).
+ *
+ * @tparam T
+ */
 template <class T>
+concept ChannelItem = Serializable<T> && !cIsSpecializationV<T, Data>;
+
+// Forward declarations for channel types
+template <ChannelItem T>
 class Sender;
 
-template <class T>
+template <ChannelItem T>
 class Receiver;
 
 /**

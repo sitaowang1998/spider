@@ -35,13 +35,14 @@ struct ReceiverAccess;
 /**
  * A receiver handle for reading items from a channel.
  *
- * @tparam T The type of items to receive. Must satisfy Serializable and not be spider::Data.
+ * @tparam T The type of items to receive. Must satisfy ChannelItem concept.
  */
-template <class T>
+template <ChannelItem T>
 class Receiver {
 public:
-    static_assert(Serializable<T>, "Receiver item type must be Serializable.");
-    static_assert(!cIsSpecializationV<T, spider::Data>, "Channels do not support spider::Data.");
+    // Default constructor for internal use only (required by std::tuple in FunctionInvoker).
+    // Creates an invalid receiver - external code should not use this directly.
+    Receiver() = default;
 
     /**
      * Result type for recv() operation.
@@ -54,8 +55,6 @@ public:
     using RecvResult = boost::outcome_v2::
             std_checked<std::pair<std::optional<T>, bool>, core::StorageErrType>;
 
-    // Default constructor creates an invalid receiver. Only use for internal purposes.
-    Receiver() = default;
     Receiver(Receiver const&) = delete;
     auto operator=(Receiver const&) -> Receiver& = delete;
     Receiver(Receiver&&) = default;

@@ -7,7 +7,6 @@
 #include <boost/uuid/uuid.hpp>
 
 #include <spider/client/task.hpp>
-#include <spider/io/Serializer.hpp>
 
 namespace spider {
 // Forward declaration for internal access
@@ -21,16 +20,15 @@ struct SenderAccess;
  * Items are buffered in memory and committed atomically when the task succeeds.
  * If the task fails, buffered items are discarded.
  *
- * @tparam T The type of items to send. Must satisfy Serializable and not be spider::Data.
+ * @tparam T The type of items to send. Must satisfy ChannelItem concept.
  */
-template <class T>
+template <ChannelItem T>
 class Sender {
 public:
-    static_assert(Serializable<T>, "Sender item type must be Serializable.");
-    static_assert(!cIsSpecializationV<T, spider::Data>, "Channels do not support spider::Data.");
-
-    // Default constructor creates an invalid sender. Only use for internal purposes.
+    // Default constructor for internal use only (required by std::tuple in FunctionInvoker).
+    // Creates an invalid sender - external code should not use this directly.
     Sender() = default;
+
     Sender(Sender const&) = delete;
     auto operator=(Sender const&) -> Sender& = delete;
     Sender(Sender&&) = default;
