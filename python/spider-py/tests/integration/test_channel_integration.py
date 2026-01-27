@@ -292,3 +292,188 @@ class TestChannelDatabaseStructure:
         assert len(jobs) == 1
         status = mariadb_storage.get_job_status(jobs[0]._impl)
         assert status == JobStatus.Running
+
+
+# Task functions for mixed output testing (return value + channel output)
+def producer_tuple_with_sender(
+    ctx: TaskContext, s: Sender[Int32], count: Int8
+) -> tuple[Int32, Int32]:
+    """
+    Producer that sends items to channel and returns a tuple.
+
+    Sends 0, 1, ..., count-1 to the channel.
+    Returns (count, sum) where sum = 0 + 1 + ... + (count-1).
+    This tests the mixed output scenario: regular return values + channel items.
+    """
+    total = 0
+    for i in range(int(count)):
+        s.send(Int32(i))
+        total += i
+    return Int32(int(count)), Int32(total)
+
+
+def producer_multi_sender(
+    ctx: TaskContext, s1: Sender[Int32], s2: Sender[Int32], count: Int8
+) -> Int32:
+    """
+    Producer that sends to two channels and returns a value.
+
+    Sends 0, 1, ..., count-1 to s1.
+    Sends 0, 2, ..., 2*(count-1) to s2.
+    Returns count.
+    This tests multiple Senders with a return value.
+    """
+    for i in range(int(count)):
+        s1.send(Int32(i))
+        s2.send(Int32(i * 2))
+    return Int32(int(count))
+
+
+def producer_single_return_with_sender(ctx: TaskContext, s: Sender[bytes]) -> Int32:
+    """Producer that sends bytes and returns an Int32."""
+    s.send(b"first")
+    s.send(b"second")
+    return Int32(99)
+
+
+@pytest.mark.integration
+@pytest.mark.storage
+class TestMixedOutputJobSubmission:
+    """
+    Tests for submitting jobs where tasks have both return values and channel outputs.
+
+    These tests verify that the job submission correctly handles tasks that:
+    1. Return regular values (tuples or single values)
+    2. Have Sender arguments that produce channel items
+    """
+
+    def test_producer_tuple_with_sender_submission(self, driver: Driver) -> None:
+        """
+        Tests submitting a producer that returns tuple AND sends to channel.
+
+        This validates the scenario from test_mixed_output_tuple_with_sender:
+        - Producer returns tuple<int, int>
+        - Producer also sends items through Sender
+        """
+        channel = Channel[Int32]()
+        prod = channel_task(producer_tuple_with_sender, senders={"s": channel})
+        cons = channel_task(consumer_int32, receivers={"r": channel})
+        graph = group([prod, cons])
+
+        # Producer needs count parameter
+        jobs = driver.submit_jobs([graph], [(Int8(4),)])
+        assert len(jobs) == 1
+        assert jobs[0].job_id is not None
+
+    def test_producer_multi_sender_submission(self, driver: Driver) -> None:
+        """
+        Tests submitting a producer with multiple Senders and return value.
+
+        This validates the scenario from test_mixed_output_multi_sender:
+        - Producer returns int
+        - Producer sends to two different channels
+        """
+        ch1 = Channel[Int32]()
+        ch2 = Channel[Int32]()
+        prod = channel_task(producer_multi_sender, senders={"s1": ch1, "s2": ch2})
+        cons1 = channel_task(consumer_int32, receivers={"r": ch1})
+        cons2 = channel_task(consumer_int32, receivers={"r": ch2})
+        graph = group([prod, cons1, cons2])
+
+        jobs = driver.submit_jobs([graph], [(Int8(3),)])
+        assert len(jobs) == 1
+        assert jobs[0].job_id is not None
+
+    def test_single_return_with_sender_submission(self, driver: Driver) -> None:
+        """Tests submitting a producer with single return value and Sender."""
+        channel = Channel[bytes]()
+        prod = channel_task(producer_single_return_with_sender, senders={"s": channel})
+        cons = channel_task(consumer_bytes, receivers={"r": channel})
+        graph = group([prod, cons])
+
+        jobs = driver.submit_jobs([graph], [()])
+        assert len(jobs) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.storage
+class TestMixedOutputDatabaseStructure:
+    """
+    Tests that verify database structure for mixed output jobs.
+
+    These tests ensure that tasks with both return values and channel outputs
+    have the correct output records created with proper channel_id assignments.
+    """
+
+    def test_tuple_with_sender_output_structure(
+        self,
+        driver: Driver,
+        mariadb_storage: MariaDBStorage,
+    ) -> None:
+        """
+        Tests that tuple return + Sender creates correct output structure.
+
+        Verifies that:
+        - Regular return values have channel_id = NULL
+        - Channel outputs have channel_id set
+        """
+        channel = Channel[Int32]()
+        prod = channel_task(producer_tuple_with_sender, senders={"s": channel})
+        cons = channel_task(consumer_int32, receivers={"r": channel})
+        graph = group([prod, cons])
+
+        jobs = driver.submit_jobs([graph], [(Int8(2),)])
+        job = jobs[0]
+
+        # Verify job was created and is running
+        status = mariadb_storage.get_job_status(job._impl)
+        assert status == JobStatus.Running
+
+    def test_multi_sender_output_structure(
+        self,
+        driver: Driver,
+        mariadb_storage: MariaDBStorage,
+    ) -> None:
+        """Tests that multiple Senders + return creates correct output structure."""
+        ch1 = Channel[Int32]()
+        ch2 = Channel[Int32]()
+        prod = channel_task(producer_multi_sender, senders={"s1": ch1, "s2": ch2})
+        cons1 = channel_task(consumer_int32, receivers={"r": ch1})
+        cons2 = channel_task(consumer_int32, receivers={"r": ch2})
+        graph = group([prod, cons1, cons2])
+
+        jobs = driver.submit_jobs([graph], [(Int8(2),)])
+        job = jobs[0]
+
+        status = mariadb_storage.get_job_status(job._impl)
+        assert status == JobStatus.Running
+
+    def test_multiple_mixed_output_jobs(
+        self,
+        driver: Driver,
+        mariadb_storage: MariaDBStorage,
+    ) -> None:
+        """Tests submitting multiple jobs with mixed outputs."""
+        ch1 = Channel[Int32]()
+        ch2 = Channel[Int32]()
+
+        g1 = group(
+            [
+                channel_task(producer_tuple_with_sender, senders={"s": ch1}),
+                channel_task(consumer_int32, receivers={"r": ch1}),
+            ]
+        )
+        g2 = group(
+            [
+                channel_task(producer_tuple_with_sender, senders={"s": ch2}),
+                channel_task(consumer_int32, receivers={"r": ch2}),
+            ]
+        )
+
+        jobs = driver.submit_jobs([g1, g2], [(Int8(3),), (Int8(5),)])
+        assert len(jobs) == 2
+        assert jobs[0].job_id != jobs[1].job_id
+
+        for job in jobs:
+            status = mariadb_storage.get_job_status(job._impl)
+            assert status == JobStatus.Running

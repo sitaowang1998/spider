@@ -1085,6 +1085,7 @@ auto update_task_outputs(
     size_t position = 0;  // Track position separately from loop index
     for (auto const& output : outputs) {
         if (output.get_channel_id().has_value()) {
+            ++position;
             continue;
         }
         std::optional<std::string> const& value = output.get_value();
@@ -1175,6 +1176,7 @@ auto propagate_outputs_to_inputs(
     size_t position = 0;  // Track position separately from loop index
     for (auto const& output : outputs) {
         if (output.get_channel_id().has_value()) {
+            ++position;
             continue;
         }
         std::optional<std::string> const& value = output.get_value();

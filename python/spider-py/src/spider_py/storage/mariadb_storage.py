@@ -127,6 +127,18 @@ WHERE
 ORDER BY
   `position`"""
 
+GetJobOutputs = """
+SELECT
+  `type`,
+  `value`,
+  `data_id`
+FROM
+  `task_outputs`
+WHERE
+  `task_id` = ? AND `channel_id` IS NULL
+ORDER BY
+  `position`"""
+
 InsertData = """
 INSERT INTO
   `data` (`id`, `value`, `hard_locality`)
@@ -344,7 +356,7 @@ class MariaDBStorage(Storage):
 
                 results = []
                 for task_id in task_ids:
-                    cursor.execute(GetTaskOutputs, (task_id,))
+                    cursor.execute(GetJobOutputs, (task_id,))
                     for output_type, value, data_id in cursor.fetchall():
                         if value is not None:
                             results.append(
