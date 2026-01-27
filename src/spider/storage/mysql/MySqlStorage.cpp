@@ -305,22 +305,7 @@ auto MySqlMetadataStorage::add_task(
         std::optional<boost::uuids::uuid> const data_id = input.get_data_id();
         std::optional<std::string> const& value = input.get_value();
         std::optional<boost::uuids::uuid> const channel_id = input.get_channel_id();
-        if (task_output.has_value()) {
-            std::tuple<boost::uuids::uuid, std::uint8_t> const pair = task_output.value();
-            std::unique_ptr<sql::PreparedStatement> input_statement(
-                    conn->prepareStatement(mysql::cInsertTaskInputOutput)
-            );
-            // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-            input_statement->setBytes(1, &task_id_bytes);
-            input_statement->setUInt(2, i);
-            input_statement->setString(3, input.get_type());
-            sql::bytes task_output_id = uuid_get_bytes(std::get<0>(pair));
-            input_statement->setBytes(4, &task_output_id);
-            input_statement->setUInt(5, std::get<1>(pair));
-            input_statement->setNull(6, sql::DataType::BINARY);
-            // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-            input_statement->executeUpdate();
-        } else if (data_id.has_value()) {
+        if (data_id.has_value()) {
             std::unique_ptr<sql::PreparedStatement> input_statement(
                     conn->prepareStatement(mysql::cInsertTaskInputData)
             );
@@ -329,8 +314,6 @@ auto MySqlMetadataStorage::add_task(
             input_statement->setString(3, input.get_type());
             sql::bytes data_id_bytes = uuid_get_bytes(data_id.value());
             input_statement->setBytes(4, &data_id_bytes);
-            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-            input_statement->setNull(5, sql::DataType::BINARY);
             input_statement->executeUpdate();
         } else if (value.has_value()) {
             std::unique_ptr<sql::PreparedStatement> input_statement(
@@ -340,8 +323,6 @@ auto MySqlMetadataStorage::add_task(
             input_statement->setUInt(2, i);
             input_statement->setString(3, input.get_type());
             input_statement->setString(4, value.value());
-            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-            input_statement->setNull(5, sql::DataType::BINARY);
             input_statement->executeUpdate();
         } else if (channel_id.has_value()) {
             std::unique_ptr<sql::PreparedStatement> input_statement(
@@ -350,8 +331,27 @@ auto MySqlMetadataStorage::add_task(
             input_statement->setBytes(1, &task_id_bytes);
             input_statement->setUInt(2, i);
             input_statement->setString(3, input.get_type());
+            std::string const input_kind
+                    = input.is_sender() ? "channel_producer" : "channel_consumer";
+            input_statement->setString(4, input_kind);
             sql::bytes channel_id_bytes = uuid_get_bytes(channel_id.value());
-            input_statement->setBytes(4, &channel_id_bytes);
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+            input_statement->setBytes(5, &channel_id_bytes);
+            input_statement->executeUpdate();
+        } else if (task_output.has_value()) {
+            std::tuple<boost::uuids::uuid, std::uint8_t> const pair = task_output.value();
+            std::unique_ptr<sql::PreparedStatement> input_statement(
+                    conn->prepareStatement(mysql::cInsertTaskInputOutput)
+            );
+            // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+            input_statement->setBytes(1, &task_id_bytes);
+            input_statement->setUInt(2, i);
+            input_statement->setString(3, input.get_type());
+            input_statement->setString(4, "value");
+            sql::bytes task_output_id = uuid_get_bytes(std::get<0>(pair));
+            input_statement->setBytes(5, &task_output_id);
+            input_statement->setUInt(6, std::get<1>(pair));
+            // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
             input_statement->executeUpdate();
         }
     }
@@ -413,28 +413,13 @@ auto MySqlMetadataStorage::add_task_batch(
         std::optional<boost::uuids::uuid> const data_id = input.get_data_id();
         std::optional<std::string> const& value = input.get_value();
         std::optional<boost::uuids::uuid> const channel_id = input.get_channel_id();
-        if (task_output.has_value()) {
-            std::tuple<boost::uuids::uuid, std::uint8_t> const pair = task_output.value();
-            sql::PreparedStatement& input_statement = batch.get_task_input_output_stmt();
-            // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-            input_statement.setBytes(1, &task_id_bytes);
-            input_statement.setUInt(2, i);
-            input_statement.setString(3, input.get_type());
-            sql::bytes task_output_id = uuid_get_bytes(std::get<0>(pair));
-            input_statement.setBytes(4, &task_output_id);
-            input_statement.setUInt(5, std::get<1>(pair));
-            input_statement.setNull(6, sql::DataType::BINARY);
-            // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
-            input_statement.addBatch();
-        } else if (data_id.has_value()) {
+        if (data_id.has_value()) {
             sql::PreparedStatement& input_statement = batch.get_task_input_data_stmt();
             input_statement.setBytes(1, &task_id_bytes);
             input_statement.setUInt(2, i);
             input_statement.setString(3, input.get_type());
             sql::bytes data_id_bytes = uuid_get_bytes(data_id.value());
             input_statement.setBytes(4, &data_id_bytes);
-            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-            input_statement.setNull(5, sql::DataType::BINARY);
             input_statement.addBatch();
         } else if (value.has_value()) {
             sql::PreparedStatement& input_statement = batch.get_task_input_value_stmt();
@@ -442,16 +427,31 @@ auto MySqlMetadataStorage::add_task_batch(
             input_statement.setUInt(2, i);
             input_statement.setString(3, input.get_type());
             input_statement.setString(4, value.value());
-            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-            input_statement.setNull(5, sql::DataType::BINARY);
             input_statement.addBatch();
         } else if (channel_id.has_value()) {
             sql::PreparedStatement& input_statement = batch.get_task_input_channel_stmt();
             input_statement.setBytes(1, &task_id_bytes);
             input_statement.setUInt(2, i);
             input_statement.setString(3, input.get_type());
+            std::string const input_kind
+                    = input.is_sender() ? "channel_producer" : "channel_consumer";
+            input_statement.setString(4, input_kind);
             sql::bytes channel_id_bytes = uuid_get_bytes(channel_id.value());
-            input_statement.setBytes(4, &channel_id_bytes);
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+            input_statement.setBytes(5, &channel_id_bytes);
+            input_statement.addBatch();
+        } else if (task_output.has_value()) {
+            std::tuple<boost::uuids::uuid, std::uint8_t> const pair = task_output.value();
+            sql::PreparedStatement& input_statement = batch.get_task_input_output_stmt();
+            // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+            input_statement.setBytes(1, &task_id_bytes);
+            input_statement.setUInt(2, i);
+            input_statement.setString(3, input.get_type());
+            input_statement.setString(4, "value");
+            sql::bytes task_output_id = uuid_get_bytes(std::get<0>(pair));
+            input_statement.setBytes(5, &task_output_id);
+            input_statement.setUInt(6, std::get<1>(pair));
+            // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
             input_statement.addBatch();
         }
     }
@@ -523,21 +523,6 @@ auto add_channel_consumer(
 auto collect_channels(TaskGraph const& task_graph, ChannelMap& channels)
         -> std::optional<std::string> {
     for (auto const& [task_id, task] : task_graph.get_tasks()) {
-        for (TaskOutput const& output : task.get_outputs()) {
-            std::optional<boost::uuids::uuid> const channel_id = output.get_channel_id();
-            if (!channel_id.has_value()) {
-                continue;
-            }
-            if (!add_channel_producer(channels, channel_id.value(), output.get_type(), task_id)) {
-                ChannelInfo const& info = channels.at(channel_id.value());
-                return fmt::format(
-                        "Channel {} has conflicting types: {} vs {}",
-                        boost::uuids::to_string(channel_id.value()),
-                        info.type,
-                        output.get_type()
-                );
-            }
-        }
         for (TaskInput const& input : task.get_inputs()) {
             std::optional<boost::uuids::uuid> const channel_id = input.get_channel_id();
             if (!channel_id.has_value()) {
@@ -548,7 +533,23 @@ auto collect_channels(TaskGraph const& task_graph, ChannelMap& channels)
             {
                 continue;
             }
-            if (!add_channel_consumer(channels, channel_id.value(), input.get_type(), task_id)) {
+            bool success = false;
+            if (input.is_sender()) {
+                success = add_channel_producer(
+                        channels,
+                        channel_id.value(),
+                        input.get_type(),
+                        task_id
+                );
+            } else {
+                success = add_channel_consumer(
+                        channels,
+                        channel_id.value(),
+                        input.get_type(),
+                        task_id
+                );
+            }
+            if (!success) {
                 ChannelInfo const& info = channels.at(channel_id.value());
                 return fmt::format(
                         "Channel {} has conflicting types: {} vs {}",
@@ -957,31 +958,34 @@ auto fetch_task(std::unique_ptr<sql::ResultSet> const& res)
 auto fetch_task_input(Task* task, std::unique_ptr<sql::ResultSet> const& res) {
     // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
     std::string const type = get_sql_string(res->getString(3));
+    std::string const input_kind = get_sql_string(res->getString(4));
     std::optional<boost::uuids::uuid> channel_id;
-    if (!res->isNull(8)) {
-        channel_id = read_id(res->getBinaryStream(8));
+    if (!res->isNull(9)) {
+        channel_id = read_id(res->getBinaryStream(9));
     }
-    if (!res->isNull(4)) {
+    if (!res->isNull(5)) {
         TaskInput input{
-                read_id(res->getBinaryStream(4)),
-                static_cast<std::uint8_t>(res->getUInt(5)),
+                read_id(res->getBinaryStream(5)),
+                static_cast<std::uint8_t>(res->getUInt(6)),
                 type
         };
-        if (!res->isNull(6)) {
-            input.set_value(get_sql_string(res->getString(6)));
-        }
         if (!res->isNull(7)) {
-            input.set_data_id(read_id(res->getBinaryStream(7)));
+            input.set_value(get_sql_string(res->getString(7)));
         }
-        task->add_input(input);
-    } else if (!res->isNull(6)) {
-        TaskInput const input{get_sql_string(res->getString(6)), type};
+        if (!res->isNull(8)) {
+            input.set_data_id(read_id(res->getBinaryStream(8)));
+        }
         task->add_input(input);
     } else if (!res->isNull(7)) {
-        TaskInput const input{read_id(res->getBinaryStream(7))};
+        TaskInput const input{get_sql_string(res->getString(7)), type};
+        task->add_input(input);
+    } else if (!res->isNull(8)) {
+        TaskInput const input{read_id(res->getBinaryStream(8))};
         task->add_input(input);
     } else if (channel_id.has_value()) {
-        TaskInput const input = TaskInput::create_channel_input(type, channel_id.value());
+        bool const is_sender = input_kind == "channel_producer";
+        TaskInput const input
+                = TaskInput::create_channel_input(type, channel_id.value(), is_sender);
         task->add_input(input);
     }
     // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -1008,37 +1012,40 @@ auto fetch_task_graph_task_input(TaskGraph* task_graph, std::unique_ptr<sql::Res
     // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
     boost::uuids::uuid const task_id = read_id(res->getBinaryStream(1));
     std::string const type = get_sql_string(res->getString(3));
+    std::string const input_kind = get_sql_string(res->getString(4));
     std::optional<boost::uuids::uuid> channel_id;
-    if (!res->isNull(8)) {
-        channel_id = read_id(res->getBinaryStream(8));
+    if (!res->isNull(9)) {
+        channel_id = read_id(res->getBinaryStream(9));
     }
     std::optional<Task*> task_option = task_graph->get_task(task_id);
     if (!task_option.has_value()) {
         return false;
     }
     Task* task = task_option.value();
-    if (!res->isNull(4)) {
+    if (!res->isNull(5)) {
         // NOLINTNEXTLINE(misc-const-correctness)
         TaskInput input{
-                read_id(res->getBinaryStream(4)),
-                static_cast<std::uint8_t>(res->getUInt(5)),
+                read_id(res->getBinaryStream(5)),
+                static_cast<std::uint8_t>(res->getUInt(6)),
                 type
         };
-        if (!res->isNull(6)) {
-            input.set_value(get_sql_string(res->getString(6)));
-        }
         if (!res->isNull(7)) {
-            input.set_data_id(read_id(res->getBinaryStream(7)));
+            input.set_value(get_sql_string(res->getString(7)));
         }
-        task->add_input(input);
-    } else if (!res->isNull(6)) {
-        TaskInput const input{get_sql_string(res->getString(6)), type};
+        if (!res->isNull(8)) {
+            input.set_data_id(read_id(res->getBinaryStream(8)));
+        }
         task->add_input(input);
     } else if (!res->isNull(7)) {
-        TaskInput const input{read_id(res->getBinaryStream(7))};
+        TaskInput const input{get_sql_string(res->getString(7)), type};
+        task->add_input(input);
+    } else if (!res->isNull(8)) {
+        TaskInput const input{read_id(res->getBinaryStream(8))};
         task->add_input(input);
     } else if (channel_id.has_value()) {
-        TaskInput const input = TaskInput::create_channel_input(type, channel_id.value());
+        bool const is_sender = input_kind == "channel_producer";
+        TaskInput const input
+                = TaskInput::create_channel_input(type, channel_id.value(), is_sender);
         task->add_input(input);
     }
     // NOLINTEND(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -1240,9 +1247,9 @@ auto MySqlMetadataStorage::fetch_full_task(
 
     // Get task inputs
     std::unique_ptr<sql::PreparedStatement> input_statement{conn->prepareStatement(
-            "SELECT `task_id`, `position`, `type`, `output_task_id`, `output_task_position`, "
-            "`value`, `data_id`, `channel_id` FROM `task_inputs` WHERE `task_id` = ? ORDER BY "
-            "`position`"
+            "SELECT `task_id`, `position`, `type`, `input_kind`, `output_task_id`, "
+            "`output_task_position`, `value`, `data_id`, `channel_id` FROM `task_inputs` WHERE "
+            "`task_id` = ? ORDER BY `position`"
     )};
     input_statement->setBytes(1, &id_bytes);
     std::unique_ptr<sql::ResultSet> const input_res{input_statement->executeQuery()};
@@ -1300,7 +1307,7 @@ auto MySqlMetadataStorage::get_task_graph(
         // Get inputs
         std::unique_ptr<sql::PreparedStatement> input_statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(
-                        "SELECT `t1`.`task_id`, `t1`.`position`, `t1`.`type`, "
+                        "SELECT `t1`.`task_id`, `t1`.`position`, `t1`.`type`, `t1`.`input_kind`, "
                         "`t1`.`output_task_id`, `t1`.`output_task_position`, `t1`.`value`, "
                         "`t1`.`data_id`, `t1`.`channel_id` FROM `task_inputs` AS `t1` JOIN `tasks` "
                         "ON `t1`.`task_id` = `tasks`.`id` WHERE `tasks`.`job_id` = ? ORDER BY "

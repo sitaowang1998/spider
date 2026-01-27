@@ -100,6 +100,7 @@ std::string const cCreateTaskInputTable = R"(CREATE TABLE IF NOT EXISTS `task_in
     `task_id` BINARY(16) NOT NULL,
     `position` INT UNSIGNED NOT NULL,
     `type` VARCHAR(999) NOT NULL,
+    `input_kind` ENUM('value', 'data', 'channel_consumer', 'channel_producer') NOT NULL,
     `output_task_id` BINARY(16),
     `output_task_position` INT UNSIGNED,
     `value` VARBINARY(999), -- Use VARBINARY for all types of values
@@ -257,19 +258,19 @@ std::string const cInsertChannelConsumer
         = R"(INSERT INTO `channel_consumers` (`channel_id`, `task_id`) VALUES (?, ?))";
 
 std::string const cInsertTaskInputOutput
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`, `channel_id`) VALUES (?, ?, ?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `output_task_id`, `output_task_position`) VALUES (?, ?, ?, ?, ?, ?))";
 
 std::string const cInsertTaskInputData
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `data_id`, `channel_id`) VALUES (?, ?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `data_id`) VALUES (?, ?, ?, 'data', ?))";
 
 std::string const cInsertTaskInputValue
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `value`, `channel_id`) VALUES (?, ?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `value`) VALUES (?, ?, ?, 'value', ?))";
 
 std::string const cInsertTaskOutput
         = R"(INSERT INTO `task_outputs` (`task_id`, `position`, `type`, `channel_id`) VALUES (?, ?, ?, ?))";
 
 std::string const cInsertTaskInputChannel
-        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `channel_id`) VALUES (?, ?, ?, ?))";
+        = R"(INSERT INTO `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `channel_id`) VALUES (?, ?, ?, ?, ?))";
 
 std::string const cInsertTaskDependency
         = R"(INSERT INTO `task_dependencies` (parent, child) VALUES (?, ?))";

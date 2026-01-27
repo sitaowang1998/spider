@@ -24,23 +24,22 @@ VALUES
   (?, ?, ?, ?, ?, ?, ?)"""
 
 InsertTaskInputOutput = """
-INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `output_task_id`, `output_task_position`,
-  `channel_id`)
+INSERT INTO `task_inputs`
+  (`task_id`, `position`, `type`, `input_kind`, `output_task_id`, `output_task_position`)
 VALUES
-  (?, ?, ?, ?, ?, ?)"""
+  (?, ?, ?, 'value', ?, ?)"""
 
 InsertTaskInputData = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `data_id`, `channel_id`)
+  `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `data_id`)
 VALUES
-  (?, ?, ?, ?, ?)"""
+  (?, ?, ?, 'data', ?)"""
 
 InsertTaskInputValue = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `value`, `channel_id`)
+  `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `value`)
 VALUES
-  (?, ?, ?, ?, ?)"""
+  (?, ?, ?, 'value', ?)"""
 
 InsertTaskOutput = """
 INSERT INTO
@@ -50,9 +49,9 @@ VALUES
 
 InsertTaskInputChannel = """
 INSERT INTO
-  `task_inputs` (`task_id`, `position`, `type`, `channel_id`)
+  `task_inputs` (`task_id`, `position`, `type`, `input_kind`, `channel_id`)
 VALUES
-  (?, ?, ?, ?)"""
+  (?, ?, ?, ?, ?)"""
 
 InsertTaskDependency = """
 INSERT INTO
@@ -528,23 +527,6 @@ class MariaDBStorage(Storage):
         entry[member_key].add(task_id_bytes)
 
     @staticmethod
-    def _add_task_outputs(
-        channel_info: dict[UUID, _ChannelInfo],
-        task: core.Task,
-        task_id_bytes: bytes,
-    ) -> None:
-        for task_output in task.task_outputs:
-            if task_output.channel_id is None:
-                continue
-            MariaDBStorage._update_channel_info(
-                channel_info,
-                task_output.channel_id,
-                task_output.type,
-                task_id_bytes,
-                "producers",
-            )
-
-    @staticmethod
     def _add_task_inputs(
         channel_info: dict[UUID, _ChannelInfo],
         task: core.Task,
@@ -555,12 +537,15 @@ class MariaDBStorage(Storage):
                 continue
             if task_input.value is not None:
                 continue
+            role: Literal["producers", "consumers"] = (
+                "producers" if task_input.is_sender else "consumers"
+            )
             MariaDBStorage._update_channel_info(
                 channel_info,
                 task_input.channel_id,
                 task_input.type,
                 task_id_bytes,
-                "consumers",
+                role,
             )
 
     @staticmethod
@@ -571,7 +556,6 @@ class MariaDBStorage(Storage):
         channel_info: dict[UUID, _ChannelInfo] = {}
         for task_index, task in enumerate(task_graph.tasks):
             task_id_bytes = task_ids[task_index].bytes
-            MariaDBStorage._add_task_outputs(channel_info, task, task_id_bytes)
             MariaDBStorage._add_task_inputs(channel_info, task, task_id_bytes)
         return channel_info
 
@@ -780,7 +764,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_data_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes, bytes | None]]:
+    ) -> list[tuple[bytes, int, str, bytes]]:
         """
         Generates parameters for inserting task input data into the database.
         :param task_ids: The task IDs.
@@ -792,7 +776,7 @@ class MariaDBStorage(Storage):
             - Type of the input.
             - Input data.
         """
-        input_data_params: list[tuple[bytes, int, str, bytes, bytes | None]] = []
+        input_data_params: list[tuple[bytes, int, str, bytes]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
@@ -806,7 +790,6 @@ class MariaDBStorage(Storage):
                             position,
                             task_input.type,
                             data,
-                            None,
                         )
                     )
         return input_data_params
@@ -815,7 +798,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_value_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes, bytes | None]]:
+    ) -> list[tuple[bytes, int, str, bytes]]:
         """
         Generates parameters for inserting task input values into the database.
         :param task_ids: The task IDs.
@@ -827,7 +810,7 @@ class MariaDBStorage(Storage):
             - Type of the input.
             - Input value.
         """
-        input_value_params: list[tuple[bytes, int, str, bytes, bytes | None]] = []
+        input_value_params: list[tuple[bytes, int, str, bytes]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
@@ -838,7 +821,6 @@ class MariaDBStorage(Storage):
                                 position,
                                 task_input.type,
                                 task_input.value,
-                                None,
                             )
                         )
         return input_value_params
@@ -847,7 +829,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_channel_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes]]:
+    ) -> list[tuple[bytes, int, str, str, bytes]]:
         """
         Generates parameters for inserting task input channels into the database.
         :param task_ids: The task IDs. Must be the same length as `task_graphs`.
@@ -857,9 +839,10 @@ class MariaDBStorage(Storage):
             - Task ID.
             - Positional index of the input.
             - Type of the input.
+            - Input kind ('channel_producer' or 'channel_consumer').
             - Channel ID.
         """
-        input_channel_params = []
+        input_channel_params: list[tuple[bytes, int, str, str, bytes]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for task_index, task in enumerate(task_graph.tasks):
                 for position, task_input in enumerate(task.task_inputs):
@@ -867,11 +850,13 @@ class MariaDBStorage(Storage):
                         continue
                     if task_input.value is not None:
                         continue
+                    input_kind = "channel_producer" if task_input.is_sender else "channel_consumer"
                     input_channel_params.append(
                         (
                             task_ids[graph_index][task_index].bytes,
                             position,
                             task_input.type,
+                            input_kind,
                             task_input.channel_id.bytes,
                         )
                     )
@@ -881,7 +866,7 @@ class MariaDBStorage(Storage):
     def _gen_task_input_output_ref_insertion_params(
         task_ids: Sequence[Sequence[UUID]],
         task_graphs: Sequence[core.TaskGraph],
-    ) -> list[tuple[bytes, int, str, bytes, int, bytes | None]]:
+    ) -> list[tuple[bytes, int, str, bytes, int]]:
         """
         Generates parameters for inserting task input output refs into the database.
         :param task_ids: The task IDs.
@@ -894,7 +879,7 @@ class MariaDBStorage(Storage):
             - Output task ID.
             - Positional index of the output.
         """
-        input_output_params: list[tuple[bytes, int, str, bytes, int, bytes | None]] = []
+        input_output_params: list[tuple[bytes, int, str, bytes, int]] = []
         for graph_index, task_graph in enumerate(task_graphs):
             for input_output_ref in task_graph.task_input_output_refs:
                 task_input = task_graph.tasks[input_output_ref.input_task_index].task_inputs[
@@ -907,7 +892,6 @@ class MariaDBStorage(Storage):
                         task_input.type,
                         task_ids[graph_index][input_output_ref.output_task_index].bytes,
                         input_output_ref.output_position,
-                        None,
                     )
                 )
         return input_output_params

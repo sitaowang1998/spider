@@ -32,6 +32,7 @@ class TaskInput:
     type: str
     value: TaskInputData | TaskInputOutput | TaskInputValue | None
     channel_id: ChannelId | None = None
+    is_sender: bool = False
 
 
 TaskOutputValue = bytes

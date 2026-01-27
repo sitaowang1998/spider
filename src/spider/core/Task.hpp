@@ -37,10 +37,14 @@ public:
      * Creates a channel input.
      * @param type The type of items in the channel.
      * @param channel_id The channel ID.
+     * @param is_sender True if this input is a Sender (producer), false if Receiver (consumer).
      */
-    static auto create_channel_input(std::string type, boost::uuids::uuid channel_id) -> TaskInput {
+    static auto
+    create_channel_input(std::string type, boost::uuids::uuid channel_id, bool is_sender)
+            -> TaskInput {
         TaskInput input{std::move(type)};
         input.m_channel_id = channel_id;
+        input.m_is_sender = is_sender;
         return input;
     }
 
@@ -61,11 +65,15 @@ public:
 
     [[nodiscard]] auto get_type() const -> std::string { return m_type; }
 
+    [[nodiscard]] auto is_sender() const -> bool { return m_is_sender; }
+
     void set_value(std::string const& value) { m_value = value; }
 
     void set_data_id(boost::uuids::uuid data_id) { m_data_id = data_id; }
 
     void set_channel_id(boost::uuids::uuid channel_id) { m_channel_id = channel_id; }
+
+    void set_is_sender(bool is_sender) { m_is_sender = is_sender; }
 
     void
     set_output(boost::uuids::uuid const output_task_id, std::uint8_t const output_task_position) {
@@ -78,6 +86,7 @@ private:
     std::optional<boost::uuids::uuid> m_data_id;
     std::optional<boost::uuids::uuid> m_channel_id;
     std::string m_type;
+    bool m_is_sender = false;
 };
 
 class TaskOutput {
