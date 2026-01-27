@@ -240,15 +240,26 @@ private:
             size_t output_index = 0;
             for_n<std::tuple_size_v<ReturnType>>([&](auto i) {
                 using T = std::tuple_element_t<i.cValue, ReturnType>;
-                if (task_index >= output_task_ids.size()) {
-                    throw ConnectionException{
-                            fmt::format("Not enough output tasks for job result")
-                    };
+                // Skip channel outputs - they don't have return values
+                while (true) {
+                    if (task_index >= output_task_ids.size()) {
+                        throw ConnectionException{
+                                fmt::format("Not enough output tasks for job result")
+                        };
+                    }
+                    if (output_index >= tasks[task_index].get_num_outputs()) {
+                        task_index++;
+                        output_index = 0;
+                        continue;
+                    }
+                    if (false
+                        == tasks[task_index].get_output(output_index).get_channel_id().has_value())
+                    {
+                        break;
+                    }
+                    output_index++;
                 }
                 core::Task const& task = tasks[task_index];
-                if (output_index >= task.get_num_outputs()) {
-                    throw ConnectionException{fmt::format("Not enough outputs for task")};
-                }
                 core::TaskOutput const& output = task.get_output(output_index);
                 if constexpr (cIsSpecializationV<T, Data>) {
                     if (output.get_type() != typeid(core::Data).name()) {
