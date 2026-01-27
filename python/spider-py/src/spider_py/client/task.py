@@ -145,7 +145,11 @@ def create_task(func: TaskFunction) -> core.Task:
     )
 
 
-def _create_channel_input(channel: Channel[Any], annotation: type | GenericAlias) -> TaskInput:
+def _create_channel_input(
+    channel: Channel[Any],
+    annotation: type | GenericAlias,
+    is_sender: bool,
+) -> TaskInput:
     """Creates a TaskInput for a channel parameter."""
     item_type = _get_channel_item_type(annotation)
     tdl_type_str = to_tdl_type_str(item_type)
@@ -153,17 +157,7 @@ def _create_channel_input(channel: Channel[Any], annotation: type | GenericAlias
         type=f"channel:{tdl_type_str}",
         value=None,
         channel_id=channel.id,
-    )
-
-
-def _create_channel_output(channel: Channel[Any], annotation: type | GenericAlias) -> TaskOutput:
-    """Creates a TaskOutput for producer registration."""
-    item_type = _get_channel_item_type(annotation)
-    tdl_type_str = to_tdl_type_str(item_type)
-    return TaskOutput(
-        type=f"channel:{tdl_type_str}",
-        value=None,
-        channel_id=channel.id,
+        is_sender=is_sender,
     )
 
 
@@ -183,14 +177,13 @@ def _process_channel_params(
     params: list[inspect.Parameter],
     senders: dict[str, Channel[Any]],
     receivers: dict[str, Channel[Any]],
-) -> tuple[list[TaskInput], list[TaskOutput]]:
+) -> list[TaskInput]:
     """
-    Processes function parameters and creates TaskInputs and channel TaskOutputs.
+    Processes function parameters and creates TaskInputs.
 
-    :return: Tuple of (task_inputs, channel_outputs)
+    :return: List of task_inputs with is_sender set appropriately for channel inputs.
     """
     task_inputs: list[TaskInput] = []
-    channel_outputs: list[TaskOutput] = []
     used_senders: set[str] = set()
     used_receivers: set[str] = set()
 
@@ -211,15 +204,14 @@ def _process_channel_params(
                 raise TypeError(msg)
             used_senders.add(name)
             channel = senders[name]
-            task_inputs.append(_create_channel_input(channel, annotation))
-            channel_outputs.append(_create_channel_output(channel, annotation))
+            task_inputs.append(_create_channel_input(channel, annotation, is_sender=True))
         elif _is_receiver(annotation):
             if name not in receivers:
                 msg = f"Receiver parameter '{name}' must have channel binding."
                 raise TypeError(msg)
             used_receivers.add(name)
             channel = receivers[name]
-            task_inputs.append(_create_channel_input(channel, annotation))
+            task_inputs.append(_create_channel_input(channel, annotation, is_sender=False))
         else:
             tdl_type_str = to_tdl_type_str(annotation)
             task_inputs.append(TaskInput(tdl_type_str, None))
@@ -227,7 +219,7 @@ def _process_channel_params(
     _validate_channel_bindings(senders, used_senders, "sender")
     _validate_channel_bindings(receivers, used_receivers, "receiver")
 
-    return task_inputs, channel_outputs
+    return task_inputs
 
 
 def channel_task(
@@ -268,10 +260,10 @@ def channel_task(
         msg = "First argument is not a TaskContext."
         raise TypeError(msg)
 
-    task_inputs, channel_outputs = _process_channel_params(params[1:], senders, receivers)
+    task_inputs = _process_channel_params(params[1:], senders, receivers)
 
-    # Process return type and prepend channel outputs
-    task_outputs = channel_outputs + _validate_and_convert_return(signature)
+    # Process return type
+    task_outputs = _validate_and_convert_return(signature)
 
     task = core.Task(
         function_name=f"{func.__module__}.{func.__qualname__}",

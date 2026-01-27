@@ -60,20 +60,17 @@ class TestChannelTaskProducer:
 
         task = graph._impl.tasks[0]
         assert len(task.task_inputs) == 1
-        assert len(task.task_outputs) == 2  # channel output + return value
+        assert len(task.task_outputs) == 1  # return value only
 
         # Verify channel input
         assert task.task_inputs[0].channel_id == channel.id
         assert task.task_inputs[0].type == "channel:bytes"
         assert task.task_inputs[0].value is None
-
-        # Verify channel output (producer registration)
-        assert task.task_outputs[0].channel_id == channel.id
-        assert task.task_outputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is True
 
         # Verify regular return output
-        assert task.task_outputs[1].channel_id is None
-        assert task.task_outputs[1].type == "bytes"
+        assert task.task_outputs[0].channel_id is None
+        assert task.task_outputs[0].type == "bytes"
 
     def test_producer_with_int32_channel(self) -> None:
         """Tests channel_task with Int32 channel type."""
@@ -86,7 +83,8 @@ class TestChannelTaskProducer:
 
         task = graph._impl.tasks[0]
         assert task.task_inputs[0].type == "channel:int32"
-        assert task.task_outputs[0].type == "channel:int32"
+        assert task.task_inputs[0].is_sender is True
+        assert task.task_outputs[0].type == "int32"
 
     def test_producer_multiple_senders(self) -> None:
         """Tests channel_task with multiple Sender parameters."""
@@ -104,18 +102,18 @@ class TestChannelTaskProducer:
 
         task = graph._impl.tasks[0]
         assert len(task.task_inputs) == 2
-        assert len(task.task_outputs) == 3  # 2 channel outputs + 1 return
+        assert len(task.task_outputs) == 1  # return value only
 
         # Verify inputs
         assert task.task_inputs[0].channel_id == ch1.id
         assert task.task_inputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is True
         assert task.task_inputs[1].channel_id == ch2.id
         assert task.task_inputs[1].type == "channel:int32"
+        assert task.task_inputs[1].is_sender is True
 
-        # Verify outputs (channel outputs come first)
-        assert task.task_outputs[0].channel_id == ch1.id
-        assert task.task_outputs[1].channel_id == ch2.id
-        assert task.task_outputs[2].channel_id is None  # return value
+        # Verify outputs (return value only)
+        assert task.task_outputs[0].channel_id is None  # return value
 
 
 class TestChannelTaskConsumer:
@@ -139,6 +137,7 @@ class TestChannelTaskConsumer:
         # Verify channel input
         assert task.task_inputs[0].channel_id == channel.id
         assert task.task_inputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is False
 
         # Verify return output (no channel output for consumer)
         assert task.task_outputs[0].channel_id is None
@@ -184,10 +183,12 @@ class TestChannelTaskMixed:
         # First input: Sender
         assert task.task_inputs[0].channel_id == channel.id
         assert task.task_inputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is True
 
         # Second input: regular Int32
         assert task.task_inputs[1].channel_id is None
         assert task.task_inputs[1].type == "int32"
+        assert task.task_inputs[1].is_sender is False
 
     def test_receiver_with_regular_params(self) -> None:
         """Tests channel_task with Receiver and regular parameters."""
@@ -204,10 +205,12 @@ class TestChannelTaskMixed:
         # First input: Receiver
         assert task.task_inputs[0].channel_id == channel.id
         assert task.task_inputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is False
 
         # Second input: regular Int8
         assert task.task_inputs[1].channel_id is None
         assert task.task_inputs[1].type == "int8"
+        assert task.task_inputs[1].is_sender is False
 
     def test_regular_param_between_channel_params(self) -> None:
         """Tests channel_task with regular param between channel params."""
@@ -406,14 +409,16 @@ class TestChannelTaskComposition:
         # Receiver input
         assert task.task_inputs[0].channel_id == ch_in.id
         assert task.task_inputs[0].type == "channel:bytes"
+        assert task.task_inputs[0].is_sender is False
 
         # Sender input
         assert task.task_inputs[1].channel_id == ch_out.id
         assert task.task_inputs[1].type == "channel:int32"
+        assert task.task_inputs[1].is_sender is True
 
-        # Outputs: channel output for sender + return value
-        assert len(task.task_outputs) == 2
-        assert task.task_outputs[0].channel_id == ch_out.id
+        # Outputs: return value only
+        assert len(task.task_outputs) == 1
+        assert task.task_outputs[0].channel_id is None
 
     def test_pipeline_pattern(self) -> None:
         """Tests pipeline: producer -> passthrough -> consumer."""

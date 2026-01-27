@@ -171,6 +171,7 @@ _TABLE_CREATORS = [
       `task_id` BINARY(16) NOT NULL,
       `position` INT UNSIGNED NOT NULL,
       `type` VARCHAR(999) NOT NULL,
+      `input_kind` ENUM('value', 'data', 'channel_consumer', 'channel_producer') NOT NULL,
       `output_task_id` BINARY(16),
       `output_task_position` INT UNSIGNED,
       `value` VARBINARY(999),

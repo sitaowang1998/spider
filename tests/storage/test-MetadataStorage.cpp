@@ -626,6 +626,9 @@ TEMPLATE_LIST_TEST_CASE(
     boost::uuids::uuid const channel_id = gen();
 
     spider::core::Task producer{"producer"};
+    spider::core::TaskInput const producer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, true);
+    producer.add_input(producer_input);
     spider::core::TaskOutput producer_output_one{"int"};
     producer_output_one.set_channel_id(channel_id);
     producer.add_output(producer_output_one);
@@ -634,8 +637,8 @@ TEMPLATE_LIST_TEST_CASE(
     producer.add_output(producer_output_two);
 
     spider::core::Task consumer{"consumer"};
-    spider::core::TaskInput consumer_input{"int"};
-    consumer_input.set_channel_id(channel_id);
+    spider::core::TaskInput const consumer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, false);
     consumer.add_input(consumer_input);
 
     spider::core::TaskGraph graph;
@@ -743,18 +746,24 @@ TEMPLATE_LIST_TEST_CASE(
 
     // Create two producer tasks and one consumer
     spider::core::Task producer1{"producer1"};
+    spider::core::TaskInput const producer1_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, true);
+    producer1.add_input(producer1_input);
     spider::core::TaskOutput producer1_output{"int"};
     producer1_output.set_channel_id(channel_id);
     producer1.add_output(producer1_output);
 
     spider::core::Task producer2{"producer2"};
+    spider::core::TaskInput const producer2_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, true);
+    producer2.add_input(producer2_input);
     spider::core::TaskOutput producer2_output{"int"};
     producer2_output.set_channel_id(channel_id);
     producer2.add_output(producer2_output);
 
     spider::core::Task consumer{"consumer"};
-    spider::core::TaskInput consumer_input{"int"};
-    consumer_input.set_channel_id(channel_id);
+    spider::core::TaskInput const consumer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, false);
     consumer.add_input(consumer_input);
 
     spider::core::TaskGraph graph;
@@ -856,6 +865,9 @@ TEMPLATE_LIST_TEST_CASE(
 
     // Create one producer and two consumer tasks
     spider::core::Task producer{"producer"};
+    spider::core::TaskInput const producer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, true);
+    producer.add_input(producer_input);
     spider::core::TaskOutput producer_output1{"int"};
     producer_output1.set_channel_id(channel_id);
     producer.add_output(producer_output1);
@@ -864,13 +876,13 @@ TEMPLATE_LIST_TEST_CASE(
     producer.add_output(producer_output2);
 
     spider::core::Task consumer1{"consumer1"};
-    spider::core::TaskInput consumer1_input{"int"};
-    consumer1_input.set_channel_id(channel_id);
+    spider::core::TaskInput const consumer1_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, false);
     consumer1.add_input(consumer1_input);
 
     spider::core::Task consumer2{"consumer2"};
-    spider::core::TaskInput consumer2_input{"int"};
-    consumer2_input.set_channel_id(channel_id);
+    spider::core::TaskInput const consumer2_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, false);
     consumer2.add_input(consumer2_input);
 
     spider::core::TaskGraph graph;
