@@ -212,6 +212,8 @@ auto setup_task(
         spider::core::Task& task
 ) -> std::optional<std::vector<msgpack::sbuffer>> {
     // Get task details
+    auto const fetch_start = std::chrono::steady_clock::now();
+
     auto const err = metadata_store->get_task(conn, instance.task_id, &task);
     if (!err.success()) {
         spdlog::error("Failed to fetch task detail: {}", err.description);
@@ -219,6 +221,24 @@ auto setup_task(
     }
 
     std::optional<std::vector<msgpack::sbuffer>> optional_arg_buffers = task.get_arg_buffers();
+
+    auto const fetch_end = std::chrono::steady_clock::now();
+    auto const fetch_duration_ms
+            = std::chrono::duration_cast<std::chrono::milliseconds>(fetch_end - fetch_start)
+                      .count();
+
+    spdlog::info(
+            "[TIMING] task_id={} func={} fetch_input_start={} fetch_input_end={} "
+            "fetch_input_duration_ms={}",
+            boost::uuids::to_string(instance.task_id),
+            task.get_function_name(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(fetch_start.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(fetch_end.time_since_epoch())
+                    .count(),
+            fetch_duration_ms
+    );
+
     if (!optional_arg_buffers.has_value()) {
         spdlog::error("Failed to fetch task arguments");
         metadata_store->task_fail(conn, instance, fmt::format("Failed to fetch task arguments"));
@@ -497,6 +517,9 @@ auto handle_executor_result(
 
     // Submit result
     spdlog::debug("Submitting result for task {}", boost::uuids::to_string(task.get_id()));
+
+    auto const submit_start = std::chrono::steady_clock::now();
+
     spider::core::StorageErr err;
     for (int i = 0; i < cRetryCount; ++i) {
         err = metadata_store->task_finish(*conn, instance, outputs);
@@ -508,6 +531,24 @@ auto handle_executor_result(
             break;
         }
     }
+
+    auto const submit_end = std::chrono::steady_clock::now();
+    auto const submit_duration_ms
+            = std::chrono::duration_cast<std::chrono::milliseconds>(submit_end - submit_start)
+                      .count();
+
+    spdlog::info(
+            "[TIMING] task_id={} func={} submit_output_start={} submit_output_end={} "
+            "submit_output_duration_ms={}",
+            boost::uuids::to_string(task.get_id()),
+            task.get_function_name(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(submit_start.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(submit_end.time_since_epoch())
+                    .count(),
+            submit_duration_ms
+    );
+
     if (!err.success()) {
         spdlog::error("Submit task {} fails: {}", task.get_function_name(), err.description);
         return false;
@@ -573,8 +614,27 @@ auto task_loop(
             kill(pid, SIGTERM);
         }
 
+        auto const exec_start = std::chrono::steady_clock::now();
+
         context.run();
         executor->wait();
+
+        auto const exec_end = std::chrono::steady_clock::now();
+        auto const exec_duration_ms
+                = std::chrono::duration_cast<std::chrono::milliseconds>(exec_end - exec_start)
+                          .count();
+
+        spdlog::info(
+                "[TIMING] task_id={} func={} execution_start={} execution_end={} "
+                "execution_duration_ms={}",
+                boost::uuids::to_string(task.get_id()),
+                task.get_function_name(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(exec_start.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(exec_end.time_since_epoch())
+                        .count(),
+                exec_duration_ms
+        );
 
         spider::core::ChildPid::set_pid(0);
 
