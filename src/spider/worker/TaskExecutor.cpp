@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -130,6 +131,8 @@ auto TaskExecutor::spawn_python_executor(
         process_args.emplace_back(storage_url);
     }
 
+    auto const spawn_start = std::chrono::steady_clock::now();
+
     // Must use `new` because `make_unique` cannot access the private constructor.
     auto executor = std::unique_ptr<TaskExecutor>(new TaskExecutor(
             context,
@@ -143,8 +146,22 @@ auto TaskExecutor::spawn_python_executor(
                     std::nullopt,
                     {input_pipe_read_end, output_pipe_write_end}
             )),
-            args_buffers
+            args_buffers,
+            task_id,
+            func_name
     ));
+
+    auto const spawn_end = std::chrono::steady_clock::now();
+    spdlog::info(
+            "[TIMING] task_id={} func={} spawn_start={} spawn_end={} spawn_duration_ms={}",
+            boost::uuids::to_string(task_id),
+            func_name,
+            std::chrono::duration_cast<std::chrono::milliseconds>(spawn_start.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(spawn_end.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(spawn_end - spawn_start).count()
+    );
 
     // Close the following fds since they're no longer needed by the parent process.
     close(input_pipe_read_end);
@@ -283,7 +300,9 @@ TaskExecutor::TaskExecutor(
         int const read_pipe_fd,
         int const write_pipe_fd,
         std::unique_ptr<Process> process,
-        std::vector<msgpack::sbuffer> const& args_buffers
+        std::vector<msgpack::sbuffer> const& args_buffers,
+        std::optional<boost::uuids::uuid> const& task_id,
+        std::optional<std::string> const& func_name
 )
         : m_read_pipe{context},
           m_write_pipe{context},
@@ -295,7 +314,25 @@ TaskExecutor::TaskExecutor(
     boost::asio::co_spawn(context, process_output_handler(), boost::asio::detached);
 
     // Send args
+    auto const send_start = std::chrono::steady_clock::now();
     auto const args_request = core::create_args_request(args_buffers);
     send_message(m_write_pipe, args_request);
+    auto const send_end = std::chrono::steady_clock::now();
+
+    if (task_id.has_value() && func_name.has_value()) {
+        spdlog::info(
+                "[TIMING] task_id={} func={} input_send_start={} input_send_end={} "
+                "input_send_duration_ms={} bytes={}",
+                boost::uuids::to_string(task_id.value()),
+                func_name.value(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(send_start.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(send_end.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(send_end - send_start)
+                        .count(),
+                args_request.size()
+        );
+    }
 }
 }  // namespace spider::worker

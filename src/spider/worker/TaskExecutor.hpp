@@ -99,7 +99,9 @@ private:
             int read_pipe_fd,
             int write_pipe_fd,
             std::unique_ptr<Process> process,
-            std::vector<msgpack::sbuffer> const& args_buffers
+            std::vector<msgpack::sbuffer> const& args_buffers,
+            std::optional<boost::uuids::uuid> const& task_id = std::nullopt,
+            std::optional<std::string> const& func_name = std::nullopt
     );
 
     auto process_output_handler() -> boost::asio::awaitable<void>;

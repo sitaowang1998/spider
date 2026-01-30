@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import logging
+import time
 from collections.abc import Sequence
 from os import fdopen, getenv
 from pydoc import locate
@@ -307,6 +308,9 @@ def get_return_types(
 
 def main() -> None:
     """Main function to execute the task."""
+    # Record process start immediately
+    process_start_ms = int(time.monotonic() * 1000)
+
     # Parses arguments
     args = parse_args()
     function_name = args.func
@@ -336,9 +340,46 @@ def main() -> None:
     storage_params = parse_jdbc_url(storage_url)
     storage = MariaDBStorage(storage_params)
 
+    # After storage setup
+    init_end_ms = int(time.monotonic() * 1000)
+    logger.info(
+        "[TIMING] task_id=%s func=%s python_init_start=%d python_init_end=%d "
+        "python_init_duration_ms=%d",
+        task_id,
+        function_name,
+        process_start_ms,
+        init_end_ms,
+        init_end_ms - process_start_ms,
+    )
+
     with fdopen(input_pipe_fd, "rb") as input_pipe, fdopen(output_pipe_fd, "wb") as output_pipe:
+        # Time input receiving
+        recv_start_ms = int(time.monotonic() * 1000)
         input_message = receive_message(input_pipe)
+        recv_end_ms = int(time.monotonic() * 1000)
+        logger.info(
+            "[TIMING] task_id=%s func=%s input_recv_start=%d input_recv_end=%d "
+            "input_recv_duration_ms=%d bytes=%d",
+            task_id,
+            function_name,
+            recv_start_ms,
+            recv_end_ms,
+            recv_end_ms - recv_start_ms,
+            len(input_message),
+        )
+
+        # Time deserialization
+        deser_start_ms = int(time.monotonic() * 1000)
         arguments = get_request_body(input_message)
+        deser_end_ms = int(time.monotonic() * 1000)
+        logger.info(
+            "[TIMING] task_id=%s func=%s deser_start=%d deser_end=%d deser_duration_ms=%d",
+            task_id,
+            function_name,
+            deser_start_ms,
+            deser_end_ms,
+            deser_end_ms - deser_start_ms,
+        )
         logger.debug("Args buffer parsed")
 
         # Get the function to run
@@ -356,10 +397,36 @@ def main() -> None:
             raise ValueError(msg)
         task_context = client.TaskContext(task_id, storage)
         params = list(signature.parameters.values())[1:]
+
+        # Time argument parsing
+        arg_parse_start_ms = int(time.monotonic() * 1000)
         parsed_args = parse_task_arguments(storage, task_context, params, arguments)
+        arg_parse_end_ms = int(time.monotonic() * 1000)
+        logger.info(
+            "[TIMING] task_id=%s func=%s arg_parse_start=%d arg_parse_end=%d "
+            "arg_parse_duration_ms=%d",
+            task_id,
+            function_name,
+            arg_parse_start_ms,
+            arg_parse_end_ms,
+            arg_parse_end_ms - arg_parse_start_ms,
+        )
+
         func_arguments = [task_context, *parsed_args]
         try:
+            # Time function execution
+            func_start_ms = int(time.monotonic() * 1000)
             results = function(*func_arguments)
+            func_end_ms = int(time.monotonic() * 1000)
+            logger.info(
+                "[TIMING] task_id=%s func=%s func_exec_start=%d func_exec_end=%d "
+                "func_exec_duration_ms=%d",
+                task_id,
+                function_name,
+                func_start_ms,
+                func_end_ms,
+                func_end_ms - func_start_ms,
+            )
             logger.debug("Function %s executed", function_name)
             return_types = get_return_types(function)
             responses = parse_task_execution_results(results, return_types, params, parsed_args)
@@ -370,10 +437,23 @@ def main() -> None:
                 {"type": e.__class__.__name__, "message": str(e)},
             ]
 
+        # Time output sending
+        output_start_ms = int(time.monotonic() * 1000)
         packed_responses = msgpack.packb(responses)
         output_pipe.write(f"{len(packed_responses):0{HeaderSize}d}".encode())
         output_pipe.write(packed_responses)
         output_pipe.flush()
+        output_end_ms = int(time.monotonic() * 1000)
+        logger.info(
+            "[TIMING] task_id=%s func=%s output_send_start=%d output_send_end=%d "
+            "output_send_duration_ms=%d bytes=%d",
+            task_id,
+            function_name,
+            output_start_ms,
+            output_end_ms,
+            output_end_ms - output_start_ms,
+            len(packed_responses),
+        )
 
 
 if __name__ == "__main__":
