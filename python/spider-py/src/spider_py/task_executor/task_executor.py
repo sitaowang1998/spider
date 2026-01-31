@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import inspect
 import logging
+import os
+import time
 from collections.abc import Sequence
 from os import fdopen, getenv
 from pydoc import locate
@@ -24,6 +26,47 @@ if TYPE_CHECKING:
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+
+def setup_logging(task_id: str) -> None:
+    """
+    Configure logging to match C++ task executor behavior.
+
+    If SPIDER_LOG_DIR is set, logs to $SPIDER_LOG_DIR/task_<task_id>.log
+    Otherwise, logs to stderr.
+    """
+    log_dir = os.environ.get("SPIDER_LOG_DIR")
+
+    # Configure root logger for this process
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+
+    # Create formatter matching C++ format: [timestamp] [level] [tag] message
+    formatter = logging.Formatter(
+        "[%(asctime)s.%(msecs)03d] [%(levelname)s] [spider.executor] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    if log_dir:
+        # Write to file: $SPIDER_LOG_DIR/task_<task_id>.log
+        log_file = os.path.join(log_dir, f"task_{task_id}.log")
+        try:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+            return
+        except OSError:
+            pass  # Fall through to console logging
+
+    # Fallback: log to stderr
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
 
 HeaderSize = 16
@@ -180,6 +223,10 @@ def main() -> None:
     """Main function to execute the task."""
     # Parses arguments
     args = parse_args()
+
+    # Set up logging before any other operations
+    setup_logging(args.task_id)
+
     function_name = args.func
     task_id = args.task_id
     task_id = UUID(task_id)
@@ -231,7 +278,22 @@ def main() -> None:
             *parse_task_arguments(storage, list(signature.parameters.values())[1:], arguments),
         ]
         try:
+            func_entry_ms = time.monotonic_ns() // 1_000_000
+            logger.info(
+                "[TIMING] task_id=%s func=%s func_entry=%d", task_id, function_name, func_entry_ms
+            )
+
             results = function(*arguments)
+
+            func_exit_ms = time.monotonic_ns() // 1_000_000
+            logger.info(
+                "[TIMING] task_id=%s func=%s func_entry=%d func_exit=%d func_duration_ms=%d",
+                task_id,
+                function_name,
+                func_entry_ms,
+                func_exit_ms,
+                func_exit_ms - func_entry_ms,
+            )
             logger.debug("Function %s executed", function_name)
             return_types = get_return_types(function)
             responses = parse_task_execution_results(results, return_types)

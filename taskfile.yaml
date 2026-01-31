@@ -65,3 +65,36 @@ tasks:
     cmds:
       - "mkdir -p '{{.G_BUILD_DIR}}'"
       - "mkdir -p '{{.G_BUILD_SPIDER_DIR}}'"
+
+  benchmark:executor-overhead:
+    desc: "Run executor overhead benchmark comparing C++ vs Python task startup"
+    cmds:
+      - task: "test:mariadb-storage-task-executor"
+        vars:
+          STORAGE_TASK: "benchmark-executor-overhead-executor"
+
+  # Internal task to configure the benchmark cmake project.
+  config-benchmark-cmake:
+    internal: true
+    vars:
+      G_BENCHMARK_BUILD_DIR: "{{.G_BUILD_DIR}}/benchmarks/executor_overhead"
+      G_BENCHMARK_CMAKE_CACHE: "{{.G_BUILD_DIR}}/benchmarks/executor_overhead/CMakeCache.txt"
+    sources:
+      - "{{.TASKFILE}}"
+      - "benchmarks/executor_overhead/CMakeLists.txt"
+    generates:
+      - "{{.G_BENCHMARK_CMAKE_CACHE}}"
+    cmds:
+      - >-
+        cmake -S '{{.ROOT_DIR}}/benchmarks/executor_overhead'
+        -B '{{.G_BENCHMARK_BUILD_DIR}}'
+
+  # Internal task to build the benchmark targets.
+  build-benchmark:
+    internal: true
+    vars:
+      G_BENCHMARK_BUILD_DIR: "{{.G_BUILD_DIR}}/benchmarks/executor_overhead"
+    deps:
+      - "config-benchmark-cmake"
+    cmds:
+      - "cmake --build '{{.G_BENCHMARK_BUILD_DIR}}' --parallel"

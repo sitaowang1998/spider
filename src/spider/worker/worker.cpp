@@ -4,6 +4,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -63,6 +64,17 @@ constexpr int cTaskErr = 6;
 constexpr int cRetryCount = 5;
 
 namespace {
+/**
+ * Gets the current time in milliseconds since the epoch using steady_clock.
+ * Used for timing instrumentation in benchmarks.
+ * @return Current time in milliseconds.
+ */
+auto get_epoch_ms() -> int64_t {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
 /*
  * Signal handler for SIGTERM. It sets the stop flag to request a stop and sends SIGTERM to the task
  * executor.
@@ -209,6 +221,8 @@ auto setup_task(
         spider::core::TaskInstance const& instance,
         spider::core::Task& task
 ) -> std::optional<std::vector<msgpack::sbuffer>> {
+    auto const fetch_input_start = get_epoch_ms();
+
     // Get task details
     auto const err = metadata_store->get_task(conn, instance.task_id, &task);
     if (!err.success()) {
@@ -222,6 +236,18 @@ auto setup_task(
         metadata_store->task_fail(conn, instance, fmt::format("Failed to fetch task arguments"));
         return std::nullopt;
     }
+
+    auto const fetch_input_end = get_epoch_ms();
+    spdlog::info(
+            "[TIMING] task_id={} func={} fetch_input_start={} fetch_input_end={} "
+            "fetch_input_duration_ms={}",
+            boost::uuids::to_string(instance.task_id),
+            task.get_function_name(),
+            fetch_input_start,
+            fetch_input_end,
+            fetch_input_end - fetch_input_start
+    );
+
     return optional_arg_buffers;
 }
 
@@ -271,6 +297,8 @@ auto setup_task(
 
     auto const language = task.get_language();
 
+    auto const spawn_start = get_epoch_ms();
+
     std::unique_ptr<spider::worker::TaskExecutor> executor;
     // Execute task
     switch (language) {
@@ -303,6 +331,16 @@ auto setup_task(
             return task.get_id();
         }
     }
+
+    auto const spawn_end = get_epoch_ms();
+    spdlog::info(
+            "[TIMING] task_id={} func={} spawn_start={} spawn_end={} spawn_duration_ms={}",
+            boost::uuids::to_string(instance.task_id),
+            task.get_function_name(),
+            spawn_start,
+            spawn_end,
+            spawn_end - spawn_start
+    );
 
     if (nullptr != executor) {
         return std::make_pair(std::move(executor), task);
@@ -488,16 +526,42 @@ auto task_loop(
             kill(pid, SIGTERM);
         }
 
+        auto const execution_start = get_epoch_ms();
+
         context.run();
         executor->wait();
 
+        auto const execution_end = get_epoch_ms();
+        spdlog::info(
+                "[TIMING] task_id={} func={} execution_start={} execution_end={} "
+                "execution_duration_ms={}",
+                boost::uuids::to_string(instance.task_id),
+                task.get_function_name(),
+                execution_start,
+                execution_end,
+                execution_end - execution_start
+        );
+
         spider::core::ChildPid::set_pid(0);
+
+        auto const submit_output_start = get_epoch_ms();
 
         if (handle_executor_result(storage_factory, metadata_store, instance, task, *executor)) {
             fail_task_id = std::nullopt;
         } else {
             fail_task_id = task.get_id();
         }
+
+        auto const submit_output_end = get_epoch_ms();
+        spdlog::info(
+                "[TIMING] task_id={} func={} submit_output_start={} submit_output_end={} "
+                "submit_output_duration_ms={}",
+                boost::uuids::to_string(instance.task_id),
+                task.get_function_name(),
+                submit_output_start,
+                submit_output_end,
+                submit_output_end - submit_output_start
+        );
     }
 }
 

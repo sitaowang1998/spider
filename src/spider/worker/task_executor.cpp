@@ -1,3 +1,5 @@
+#include <chrono>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -30,6 +32,17 @@
 #include <spider/worker/TaskExecutorMessage.hpp>
 
 namespace {
+/**
+ * Gets the current time in milliseconds since the epoch using steady_clock.
+ * Used for timing instrumentation in benchmarks.
+ * @return Current time in milliseconds.
+ */
+auto get_epoch_ms() -> int64_t {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
 auto parse_arg(int const argc, char** const& argv) -> boost::program_options::variables_map {
     boost::program_options::options_description desc;
     desc.add_options()("help", "spider task executor");
@@ -206,7 +219,26 @@ auto main(int const argc, char** argv) -> int {
                 metadata_store,
                 storage_factory
         );
+
+        auto const func_entry = get_epoch_ms();
+        spdlog::info(
+                "[TIMING] task_id={} func={} func_entry={}",
+                task_id_string,
+                func_name,
+                func_entry
+        );
+
         msgpack::sbuffer const result_buffer = (*function)(task_context, task_id, args_buffer);
+
+        auto const func_exit = get_epoch_ms();
+        spdlog::info(
+                "[TIMING] task_id={} func={} func_entry={} func_exit={} func_duration_ms={}",
+                task_id_string,
+                func_name,
+                func_entry,
+                func_exit,
+                func_exit - func_entry
+        );
         spdlog::debug("Function executed");
 
         // Write result buffer to stdout

@@ -181,3 +181,94 @@ tasks:
     cmd: |-
         . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
         cargo nextest run --all --all-features --run-ignored all --release
+
+  # Internal task that runs the executor overhead benchmark.
+  #
+  # @param {string} SPIDER_STORAGE_URL An URL pointing to the MariaDB instance.
+  benchmark-executor-overhead-executor:
+    internal: true
+    env:
+      SPIDER_STORAGE_URL: "{{.SPIDER_STORAGE_URL}}"
+      # Don't create __pycache__ directories in the source tree.
+      PYTHONDONTWRITEBYTECODE: "1"
+    vars:
+      TIMESTAMP:
+        sh: "date +%Y%m%d_%H%M%S"
+      BENCHMARK_LOG_DIR: "{{.G_BUILD_DIR}}/benchmark_logs/{{.TIMESTAMP}}"
+      NUM_WORKERS: 16
+      TASK_LIB: "{{.G_BUILD_DIR}}/benchmarks/executor_overhead/libsleep_tasks.so"
+      PROCESS_MANAGER: "{{.ROOT_DIR}}/benchmarks/executor_overhead/scripts/process_manager.py"
+    requires:
+      vars: ["SPIDER_STORAGE_URL"]
+    dir: "{{.ROOT_DIR}}"
+    deps:
+      - ":build-benchmark"
+      - task: ":build:cpp-target"
+        vars:
+          TARGETS: ["spider_scheduler", "spider_worker", "spider_task_executor"]
+    cmds:
+      # Create log directory
+      - "mkdir -p '{{.BENCHMARK_LOG_DIR}}'"
+
+      # Start process manager (spawns scheduler and workers, handles cleanup on exit)
+      # Use bash -c to ensure $! captures the PID correctly
+      - |
+        bash -c '
+          python3 "{{.PROCESS_MANAGER}}" \
+            --build-dir "{{.G_BUILD_DIR}}" \
+            --log-dir "{{.BENCHMARK_LOG_DIR}}" \
+            --task-lib "{{.TASK_LIB}}" \
+            --num-workers "{{.NUM_WORKERS}}" \
+            --wait &
+          echo $! > "{{.BENCHMARK_LOG_DIR}}/process_manager.pid"
+        '
+
+      # Defer: Kill process manager (which cleans up scheduler and workers)
+      - defer: |
+          if [[ -f "{{.BENCHMARK_LOG_DIR}}/process_manager.pid" ]]; then
+            kill "$(cat '{{.BENCHMARK_LOG_DIR}}/process_manager.pid')" 2>/dev/null || true
+            rm -f "{{.BENCHMARK_LOG_DIR}}/process_manager.pid"
+          fi
+
+      # Wait for processes to start (process manager waits internally, but we need output)
+      - "sleep 8"
+
+      # Run C++ benchmark
+      - |
+        echo "=========================================="
+        echo "Running C++ Benchmark"
+        echo "=========================================="
+        "{{.G_BUILD_DIR}}/benchmarks/executor_overhead/benchmark_client" \
+          "{{.SPIDER_STORAGE_URL}}" cpp 2>&1 | tee "{{.BENCHMARK_LOG_DIR}}/cpp_benchmark.log"
+
+      # Wait between benchmarks
+      - "sleep 3"
+
+      # Run Python benchmark
+      - |
+        echo "=========================================="
+        echo "Running Python Benchmark"
+        echo "=========================================="
+        cd "{{.G_SRC_PYTHON_DIR}}"
+        PYTHONPATH="{{.ROOT_DIR}}/benchmarks/executor_overhead/python:${PYTHONPATH:-}" \
+        uv run python "{{.ROOT_DIR}}/benchmarks/executor_overhead/python/benchmark_client.py" \
+          "{{.SPIDER_STORAGE_URL}}" 2>&1 | tee "{{.BENCHMARK_LOG_DIR}}/python_benchmark.log"
+
+      # Generate visualization (uses inline script dependencies via PEP 723)
+      - |
+        echo "=========================================="
+        echo "Generating visualization"
+        echo "=========================================="
+        uv run --script "{{.ROOT_DIR}}/benchmarks/executor_overhead/scripts/visualize_timeline.py" \
+          "{{.BENCHMARK_LOG_DIR}}" \
+          -o "{{.ROOT_DIR}}/executor_overhead_timeline.png"
+
+      # Print summary
+      - |
+        echo ""
+        echo "=========================================="
+        echo "Benchmark Complete"
+        echo "=========================================="
+        echo "Logs: {{.BENCHMARK_LOG_DIR}}"
+        echo "Timelines:"
+        ls -1 "{{.ROOT_DIR}}/executor_overhead_timeline"*.png 2>/dev/null || echo "  (no timeline generated)"
