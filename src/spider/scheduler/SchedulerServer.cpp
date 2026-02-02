@@ -1,5 +1,6 @@
 #include "SchedulerServer.hpp"
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -114,18 +115,26 @@ auto deserialize_message(msgpack::sbuffer const& buffer) -> std::optional<Schedu
 
 auto SchedulerServer::process_message(boost::asio::ip::tcp::socket socket)
         -> boost::asio::awaitable<void> {
+    auto const request_start = std::chrono::steady_clock::now();
+
+    // Phase 1: Receive message
     // NOLINTBEGIN(clang-analyzer-core.CallAndMessage)
     std::optional<msgpack::sbuffer> const& optional_message_buffer
             = co_await core::receive_message_async(socket);
     // NOLINTEND(clang-analyzer-core.CallAndMessage)
+    auto const receive_end = std::chrono::steady_clock::now();
 
     if (false == optional_message_buffer.has_value()) {
         spdlog::error("Cannot receive message from worker");
         co_return;
     }
+
+    // Phase 2: Deserialize
     msgpack::sbuffer const& message_buffer = optional_message_buffer.value();
     std::optional<ScheduleTaskRequest> const& optional_request
             = deserialize_message(message_buffer);
+    auto const deserialize_end = std::chrono::steady_clock::now();
+
     if (false == optional_request.has_value()) {
         spdlog::error("Cannot parse message into schedule task request");
         co_return;
@@ -152,16 +161,85 @@ auto SchedulerServer::process_message(boost::asio::ip::tcp::socket socket)
         }
     }
 
+    // Phase 3: Schedule
+    auto const schedule_start = std::chrono::steady_clock::now();
     std::optional<boost::uuids::uuid> const task_id
             = m_policy->schedule_next(request.get_worker_id(), request.get_worker_addr());
+    auto const schedule_end = std::chrono::steady_clock::now();
+
+    // Phase 4: Serialize response
     ScheduleTaskResponse response{};
     if (task_id.has_value()) {
         response = ScheduleTaskResponse{task_id.value()};
     }
     msgpack::sbuffer response_buffer;
     msgpack::pack(response_buffer, response);
+    auto const serialize_end = std::chrono::steady_clock::now();
 
+    // Phase 5: Send response
     bool const success = co_await core::send_message_async(socket, response_buffer);
+    auto const send_end = std::chrono::steady_clock::now();
+
+    // Log timing
+    auto const epoch_ms = [](auto tp) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch())
+                .count();
+    };
+    auto const duration_ms = [](auto start, auto end) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    };
+
+    std::string const task_id_str
+            = task_id.has_value() ? boost::uuids::to_string(task_id.value()) : "none";
+
+    spdlog::info(
+            "[TIMING] worker_id={} schedule_request receive_start={} receive_end={} "
+            "receive_duration_ms={}",
+            boost::uuids::to_string(request.get_worker_id()),
+            epoch_ms(request_start),
+            epoch_ms(receive_end),
+            duration_ms(request_start, receive_end)
+    );
+
+    spdlog::info(
+            "[TIMING] worker_id={} schedule_request deserialize_start={} deserialize_end={} "
+            "deserialize_duration_ms={}",
+            boost::uuids::to_string(request.get_worker_id()),
+            epoch_ms(receive_end),
+            epoch_ms(deserialize_end),
+            duration_ms(receive_end, deserialize_end)
+    );
+
+    spdlog::info(
+            "[TIMING] worker_id={} task_id={} schedule_request schedule_start={} schedule_end={} "
+            "schedule_duration_ms={}",
+            boost::uuids::to_string(request.get_worker_id()),
+            task_id_str,
+            epoch_ms(schedule_start),
+            epoch_ms(schedule_end),
+            duration_ms(schedule_start, schedule_end)
+    );
+
+    spdlog::info(
+            "[TIMING] worker_id={} task_id={} schedule_request send_start={} send_end={} "
+            "send_duration_ms={}",
+            boost::uuids::to_string(request.get_worker_id()),
+            task_id_str,
+            epoch_ms(serialize_end),
+            epoch_ms(send_end),
+            duration_ms(serialize_end, send_end)
+    );
+
+    spdlog::info(
+            "[TIMING] worker_id={} task_id={} schedule_request total_start={} total_end={} "
+            "total_duration_ms={}",
+            boost::uuids::to_string(request.get_worker_id()),
+            task_id_str,
+            epoch_ms(request_start),
+            epoch_ms(send_end),
+            duration_ms(request_start, send_end)
+    );
+
     if (!success) {
         spdlog::error(
                 "Cannot send message to worker {} at {}",
