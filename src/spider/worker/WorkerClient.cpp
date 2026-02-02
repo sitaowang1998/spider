@@ -1,6 +1,7 @@
 #include "WorkerClient.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <spdlog/spdlog.h>
 
 #include <spider/core/Driver.hpp>
@@ -99,6 +101,8 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
     std::ranges::shuffle(schedulers, rng);
 
     try {
+        auto const request_start = std::chrono::steady_clock::now();
+
         // Create socket to scheduler
         boost::asio::io_context context;
         boost::asio::ip::tcp::socket socket(context);
@@ -120,6 +124,7 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         }
 
         boost::asio::connect(socket, endpoints);
+        auto const connect_end = std::chrono::steady_clock::now();
 
         scheduler::ScheduleTaskRequest request{m_worker_id, m_worker_addr};
         if (fail_task_id.has_value()) {
@@ -133,10 +138,13 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         msgpack::pack(request_buffer, request);
 
         core::send_message(socket, request_buffer);
+        auto const send_end = std::chrono::steady_clock::now();
 
         // Receive response
         std::optional<msgpack::sbuffer> const optional_response_buffer
                 = core::receive_message(socket);
+        auto const receive_end = std::chrono::steady_clock::now();
+
         if (!optional_response_buffer.has_value()) {
             return std::nullopt;
         }
@@ -147,7 +155,35 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
                 = msgpack::unpack(response_buffer.data(), response_buffer.size());
         response_handle.get().convert(response);
 
+        auto const epoch_ms = [](auto tp) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch())
+                    .count();
+        };
+
         if (!response.has_task_id()) {
+            spdlog::info(
+                    "[TIMING] worker_id={} task_id=none get_next_task "
+                    "request_start={} connect_end={} send_end={} receive_end={} "
+                    "connect_duration_ms={} send_duration_ms={} receive_duration_ms={} "
+                    "total_duration_ms={}",
+                    boost::uuids::to_string(m_worker_id),
+                    epoch_ms(request_start),
+                    epoch_ms(connect_end),
+                    epoch_ms(send_end),
+                    epoch_ms(receive_end),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                            connect_end - request_start
+                    )
+                            .count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(send_end - connect_end)
+                            .count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - send_end)
+                            .count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                            receive_end - request_start
+                    )
+                            .count()
+            );
             return std::nullopt;
         }
         boost::uuids::uuid const task_id = response.get_task_id();
@@ -168,6 +204,28 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         if (!err.success()) {
             return std::nullopt;
         }
+
+        spdlog::info(
+                "[TIMING] worker_id={} task_id={} get_next_task "
+                "request_start={} connect_end={} send_end={} receive_end={} "
+                "connect_duration_ms={} send_duration_ms={} receive_duration_ms={} "
+                "total_duration_ms={}",
+                boost::uuids::to_string(m_worker_id),
+                boost::uuids::to_string(task_id),
+                epoch_ms(request_start),
+                epoch_ms(connect_end),
+                epoch_ms(send_end),
+                epoch_ms(receive_end),
+                std::chrono::duration_cast<std::chrono::milliseconds>(connect_end - request_start)
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(send_end - connect_end)
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - send_end)
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - request_start)
+                        .count()
+        );
+
         return std::make_tuple(task_id, instance.id);
     } catch (boost::system::system_error const& e) {
         return std::nullopt;
