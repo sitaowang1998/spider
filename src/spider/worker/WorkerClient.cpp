@@ -159,6 +159,7 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         msgpack::object_handle const response_handle
                 = msgpack::unpack(response_buffer.data(), response_buffer.size());
         response_handle.get().convert(response);
+        auto const deserialize_end = std::chrono::steady_clock::now();
 
         auto const epoch_ms = [](auto tp) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch())
@@ -201,6 +202,7 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         }
         boost::uuids::uuid const task_id = response.get_task_id();
 
+        auto const instance_conn_start = std::chrono::steady_clock::now();
         std::variant<std::unique_ptr<core::StorageConnection>, core::StorageErr> conn_result
                 = m_storage_factory->provide_storage_connection();
         if (std::holds_alternative<core::StorageErr>(conn_result)) {
@@ -211,9 +213,11 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
             return std::nullopt;
         }
         auto conn = std::move(std::get<std::unique_ptr<core::StorageConnection>>(conn_result));
+        auto const instance_conn_end = std::chrono::steady_clock::now();
 
         core::TaskInstance const instance{task_id};
         core::StorageErr const err = m_metadata_store->create_task_instance(*conn, instance);
+        auto const instance_create_end = std::chrono::steady_clock::now();
         if (!err.success()) {
             return std::nullopt;
         }
@@ -222,8 +226,11 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
                 "[TIMING] worker_id={} task_id={} get_next_task "
                 "sched_fetch_start={} sched_fetch_end={} "
                 "request_start={} connect_end={} send_end={} receive_end={} "
+                "deserialize_end={} instance_conn_end={} instance_create_end={} "
                 "sched_fetch_duration_ms={} "
                 "connect_duration_ms={} send_duration_ms={} receive_duration_ms={} "
+                "deserialize_duration_ms={} instance_conn_duration_ms={} "
+                "instance_create_duration_ms={} "
                 "total_duration_ms={}",
                 boost::uuids::to_string(m_worker_id),
                 boost::uuids::to_string(task_id),
@@ -233,6 +240,9 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
                 epoch_ms(connect_end),
                 epoch_ms(send_end),
                 epoch_ms(receive_end),
+                epoch_ms(deserialize_end),
+                epoch_ms(instance_conn_end),
+                epoch_ms(instance_create_end),
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                         sched_fetch_end - sched_fetch_start
                 )
@@ -243,8 +253,18 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
                         .count(),
                 std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - send_end)
                         .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(deserialize_end - receive_end)
+                        .count(),
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                        receive_end - sched_fetch_start
+                        instance_conn_end - instance_conn_start
+                )
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                        instance_create_end - instance_conn_end
+                )
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                        instance_create_end - sched_fetch_start
                 )
                         .count()
         );
