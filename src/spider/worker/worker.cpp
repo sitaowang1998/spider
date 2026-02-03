@@ -463,8 +463,21 @@ auto handle_executor_result(
         spider::core::Task const& task,
         spider::worker::TaskExecutor& executor
 ) -> bool {
+    auto const conn_start = std::chrono::steady_clock::now();
     std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
             conn_result = storage_factory->provide_storage_connection();
+    auto const conn_end = std::chrono::steady_clock::now();
+    spdlog::info(
+            "[TIMING] task_id={} func={} storage_connect_start={} storage_connect_end={} "
+            "storage_connect_duration_ms={} phase=handle_result",
+            boost::uuids::to_string(task.get_id()),
+            task.get_function_name(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(conn_start.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(conn_end.time_since_epoch())
+                    .count(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(conn_end - conn_start).count()
+    );
     if (std::holds_alternative<spider::core::StorageErr>(conn_result)) {
         spdlog::error(
                 "Failed to connect to storage: {}",
@@ -579,7 +592,19 @@ auto task_loop(
         auto const [task_id, task_instance_id] = optional_task.value();
         spider::core::TaskInstance const instance{task_instance_id, task_id};
 
+        auto const conn_start = std::chrono::steady_clock::now();
         auto conn_result = storage_factory->provide_storage_connection();
+        auto const conn_end = std::chrono::steady_clock::now();
+        spdlog::info(
+                "[TIMING] task_id={} storage_connect_start={} storage_connect_end={} "
+                "storage_connect_duration_ms={} phase=pre_execution",
+                boost::uuids::to_string(task_id),
+                std::chrono::duration_cast<std::chrono::milliseconds>(conn_start.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(conn_end.time_since_epoch())
+                        .count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(conn_end - conn_start).count()
+        );
         if (std::holds_alternative<spider::core::StorageErr>(conn_result)) {
             spdlog::error(
                     "Failed to connect to storage: {}",
