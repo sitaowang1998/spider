@@ -74,6 +74,8 @@ WorkerClient::WorkerClient(
 
 auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_task_id)
         -> std::optional<std::tuple<boost::uuids::uuid, boost::uuids::uuid>> {
+    auto const sched_fetch_start = std::chrono::steady_clock::now();
+
     // Get schedulers
     std::vector<core::Scheduler> schedulers;
 
@@ -92,6 +94,9 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
             return std::nullopt;
         }
     }
+
+    auto const sched_fetch_end = std::chrono::steady_clock::now();
+
     if (schedulers.empty()) {
         return std::nullopt;
     }
@@ -163,14 +168,22 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
         if (!response.has_task_id()) {
             spdlog::info(
                     "[TIMING] worker_id={} task_id=none get_next_task "
+                    "sched_fetch_start={} sched_fetch_end={} "
                     "request_start={} connect_end={} send_end={} receive_end={} "
+                    "sched_fetch_duration_ms={} "
                     "connect_duration_ms={} send_duration_ms={} receive_duration_ms={} "
                     "total_duration_ms={}",
                     boost::uuids::to_string(m_worker_id),
+                    epoch_ms(sched_fetch_start),
+                    epoch_ms(sched_fetch_end),
                     epoch_ms(request_start),
                     epoch_ms(connect_end),
                     epoch_ms(send_end),
                     epoch_ms(receive_end),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                            sched_fetch_end - sched_fetch_start
+                    )
+                            .count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                             connect_end - request_start
                     )
@@ -180,7 +193,7 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
                     std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - send_end)
                             .count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(
-                            receive_end - request_start
+                            receive_end - sched_fetch_start
                     )
                             .count()
             );
@@ -207,22 +220,32 @@ auto WorkerClient::get_next_task(std::optional<boost::uuids::uuid> const& fail_t
 
         spdlog::info(
                 "[TIMING] worker_id={} task_id={} get_next_task "
+                "sched_fetch_start={} sched_fetch_end={} "
                 "request_start={} connect_end={} send_end={} receive_end={} "
+                "sched_fetch_duration_ms={} "
                 "connect_duration_ms={} send_duration_ms={} receive_duration_ms={} "
                 "total_duration_ms={}",
                 boost::uuids::to_string(m_worker_id),
                 boost::uuids::to_string(task_id),
+                epoch_ms(sched_fetch_start),
+                epoch_ms(sched_fetch_end),
                 epoch_ms(request_start),
                 epoch_ms(connect_end),
                 epoch_ms(send_end),
                 epoch_ms(receive_end),
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                        sched_fetch_end - sched_fetch_start
+                )
+                        .count(),
                 std::chrono::duration_cast<std::chrono::milliseconds>(connect_end - request_start)
                         .count(),
                 std::chrono::duration_cast<std::chrono::milliseconds>(send_end - connect_end)
                         .count(),
                 std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - send_end)
                         .count(),
-                std::chrono::duration_cast<std::chrono::milliseconds>(receive_end - request_start)
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                        receive_end - sched_fetch_start
+                )
                         .count()
         );
 
