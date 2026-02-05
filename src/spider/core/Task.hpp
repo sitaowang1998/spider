@@ -207,6 +207,10 @@ public:
         m_soft_localities.push_back(locality);
     }
 
+    [[nodiscard]] auto is_channel_consumer() const -> bool { return m_is_channel_consumer; }
+
+    auto set_is_channel_consumer(bool is_consumer) -> void { m_is_channel_consumer = is_consumer; }
+
 private:
     boost::uuids::uuid m_id;
     std::string m_function_name;
@@ -215,6 +219,7 @@ private:
     std::chrono::system_clock::time_point m_job_creation_time;
     std::vector<std::string> m_hard_localities;
     std::vector<std::string> m_soft_localities;
+    bool m_is_channel_consumer = false;
 };
 
 class Task {
