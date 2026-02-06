@@ -84,5 +84,5 @@ class TestClient:
             "--storage_url",
             get_storage_url(),
         ]
-        p = subprocess.run(client_cmds, check=True, timeout=60)
+        p = subprocess.run(client_cmds, check=True, timeout=30)
         assert p.returncode == 0
