@@ -66,9 +66,14 @@ def scheduler_worker(
     # Wait for 5 second to make sure the scheduler and worker are started
     time.sleep(5)
     yield
-    scheduler_process.kill()
-    for worker in workers:
-        worker.kill()
+    for process in [scheduler_process, *workers]:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 class TestClient:

@@ -2114,8 +2114,10 @@ auto MySqlMetadataStorage::task_finish(
         update_downstream_states(mysql_conn, task_id_bytes);
     } catch (sql::SQLException& e) {
         mysql_conn->rollback();
-        spdlog::warn("Failed to update downstream states for task: {}", e.what());
-        return StorageErr{};
+        if (e.getErrorCode() == ErDeadLock) {
+            return StorageErr{StorageErrType::DeadLockErr, e.what()};
+        }
+        return StorageErr{StorageErrType::OtherErr, e.what()};
     }
     mysql_conn->commit();
     return StorageErr{};
