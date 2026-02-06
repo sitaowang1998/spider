@@ -111,6 +111,7 @@ std::string const cCreateTaskInputTable = R"(CREATE TABLE IF NOT EXISTS `task_in
     CONSTRAINT `input_data_id` FOREIGN KEY (`data_id`) REFERENCES `data` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION,
     CONSTRAINT `input_channel_id` FOREIGN KEY (`channel_id`) REFERENCES `channels` (`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
     INDEX (`channel_id`),
+    INDEX (`input_kind`, `task_id`),
     PRIMARY KEY (`task_id`, `position`)
 ))";
 

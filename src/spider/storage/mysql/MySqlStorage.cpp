@@ -1843,6 +1843,25 @@ auto MySqlMetadataStorage::get_ready_tasks(
             }
         }
 
+        // Get channel consumer status for tasks
+        std::unique_ptr<sql::Statement> channel_statement{
+                static_cast<MySqlConnection&>(conn)->createStatement()
+        };
+        std::unique_ptr<sql::ResultSet> const channel_res{channel_statement->executeQuery(
+                "SELECT DISTINCT `task_id` FROM `task_inputs` "
+                "WHERE `input_kind` = 'channel_consumer' AND `task_id` IN "
+                "(SELECT `id` FROM `tasks` WHERE `state` = 'ready' "
+                "AND `job_id` NOT IN (SELECT `id` FROM `jobs` WHERE `state` != 'running')) "
+                "AND `task_id` NOT IN (SELECT `task_id` FROM `scheduler_leases`)"
+        )};
+
+        while (channel_res->next()) {
+            boost::uuids::uuid const task_id = read_id(channel_res->getBinaryStream("task_id"));
+            if (new_tasks.find(task_id) != new_tasks.end()) {
+                new_tasks[task_id].set_is_channel_consumer(true);
+            }
+        }
+
         // Add scheduler lease
         std::unique_ptr<sql::PreparedStatement> lease_statement(
                 static_cast<MySqlConnection&>(conn)->prepareStatement(

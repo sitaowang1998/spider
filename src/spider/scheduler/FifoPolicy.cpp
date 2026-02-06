@@ -70,11 +70,19 @@ auto FifoPolicy::fetch_tasks() -> void {
     m_metadata_store->get_ready_tasks(*m_conn, m_scheduler_id, &m_tasks);
     m_metadata_store->get_task_timeout(*m_conn, &m_tasks);
 
-    // Sort tasks based on job creation time in descending order.
+    // Sort tasks based on job creation time in descending order, with channel consumers
+    // prioritized.
     std::ranges::sort(
             m_tasks,
             [&](core::ScheduleTaskMetadata const& a, core::ScheduleTaskMetadata const& b) {
-                return a.get_job_creation_time() > b.get_job_creation_time();
+                // Primary: job creation time descending (earlier jobs at end, popped first)
+                if (a.get_job_creation_time() != b.get_job_creation_time()) {
+                    return a.get_job_creation_time() > b.get_job_creation_time();
+                }
+                // Secondary: channel consumers should be scheduled first within same job
+                // Since we iterate in reverse, put consumers AFTER non-consumers
+                // so they get popped first
+                return a.is_channel_consumer() < b.is_channel_consumer();
             }
     );
 }
