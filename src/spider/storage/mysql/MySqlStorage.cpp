@@ -1116,7 +1116,7 @@ auto update_task_outputs(
 }
 
 /**
- * Inserts channel items produced by the task and closes channels when all producers are done.
+ * Inserts channel items produced by the task.
  */
 auto insert_channel_items(
         MySqlConnection& conn,
@@ -1127,14 +1127,12 @@ auto insert_channel_items(
             "INSERT INTO `channel_items` (`id`, `channel_id`, `producer_task_id`, "
             "`value`) VALUES(?, ?, ?, ?)"
     ));
-    absl::flat_hash_set<boost::uuids::uuid> channel_ids;
     boost::uuids::random_generator gen;
     for (auto const& output : outputs) {
         std::optional<boost::uuids::uuid> const channel_id = output.get_channel_id();
         if (!channel_id.has_value()) {
             continue;
         }
-        channel_ids.insert(channel_id.value());
         sql::bytes channel_id_bytes = uuid_get_bytes(channel_id.value());
         boost::uuids::uuid const item_id = gen();
         sql::bytes item_id_bytes = uuid_get_bytes(item_id);
@@ -1149,21 +1147,35 @@ auto insert_channel_items(
         }
         channel_statement->executeUpdate();
     }
+}
 
-    // Close channels when all producers have finished
-    if (!channel_ids.empty()) {
-        std::unique_ptr<sql::PreparedStatement> close_channel_statement(conn->prepareStatement(
-                "UPDATE `channels` SET `sender_closed` = TRUE WHERE `id` = ? AND "
-                "NOT EXISTS (SELECT `task_id` FROM `channel_producers` AS `cp` JOIN "
-                "`tasks` AS `t` ON `cp`.`task_id` = `t`.`id` WHERE `cp`.`channel_id` = "
-                "? AND `t`.`state` != 'success')"
-        ));
-        for (boost::uuids::uuid const& channel_id : channel_ids) {
-            sql::bytes channel_id_bytes = uuid_get_bytes(channel_id);
-            close_channel_statement->setBytes(1, &channel_id_bytes);
-            close_channel_statement->setBytes(2, &channel_id_bytes);
-            close_channel_statement->executeUpdate();
-        }
+/**
+ * Closes channels for a task by checking if all producers have reached a terminal state.
+ */
+auto close_channels_for_task(
+        MySqlConnection& conn,
+        sql::bytes& task_id_bytes
+) -> void {
+    std::unique_ptr<sql::PreparedStatement> find_channels_statement(conn->prepareStatement(
+            "SELECT `channel_id` FROM `channel_producers` WHERE `task_id` = ?"
+    ));
+    find_channels_statement->setBytes(1, &task_id_bytes);
+    std::unique_ptr<sql::ResultSet> channel_res(find_channels_statement->executeQuery());
+    if (channel_res->rowsCount() == 0) {
+        return;
+    }
+    std::unique_ptr<sql::PreparedStatement> close_channel_statement(conn->prepareStatement(
+            "UPDATE `channels` SET `sender_closed` = TRUE WHERE `id` = ? AND "
+            "NOT EXISTS (SELECT `task_id` FROM `channel_producers` AS `cp` JOIN "
+            "`tasks` AS `t` ON `cp`.`task_id` = `t`.`id` WHERE `cp`.`channel_id` = "
+            "? AND `t`.`state` NOT IN ('success', 'fail', 'cancel'))"
+    ));
+    while (channel_res->next()) {
+        boost::uuids::uuid const channel_id = read_id(channel_res->getBinaryStream(1));
+        sql::bytes channel_id_bytes = uuid_get_bytes(channel_id);
+        close_channel_statement->setBytes(1, &channel_id_bytes);
+        close_channel_statement->setBytes(2, &channel_id_bytes);
+        close_channel_statement->executeUpdate();
     }
 }
 
@@ -2081,6 +2093,7 @@ auto MySqlMetadataStorage::task_finish(
 
         update_task_outputs(mysql_conn, task_id_bytes, outputs);
         insert_channel_items(mysql_conn, task_id_bytes, outputs);
+        close_channels_for_task(mysql_conn, task_id_bytes);
         propagate_outputs_to_inputs(mysql_conn, task_id_bytes, outputs);
         update_downstream_states(mysql_conn, task_id_bytes);
 
@@ -2134,6 +2147,12 @@ auto MySqlMetadataStorage::task_fail(
             );
             task_statement->setBytes(1, &task_id_bytes);
             task_statement->executeUpdate();
+
+            close_channels_for_task(
+                    static_cast<MySqlConnection&>(conn),
+                    task_id_bytes
+            );
+
             // Set the job fails
             std::unique_ptr<sql::PreparedStatement> const job_statement(
                     static_cast<MySqlConnection&>(conn)->prepareStatement(

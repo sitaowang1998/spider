@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Generic, TYPE_CHECKING, TypeVar
 
 import msgpack
 
+from spider_py.storage.storage import StorageError
+
 if TYPE_CHECKING:
     from uuid import UUID
 
     from spider_py.storage import Storage
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -55,10 +60,26 @@ class Receiver(Generic[T]):
 
         while True:
             # Try to dequeue an item
-            item, drained = self._storage.dequeue_channel_item(
-                self._channel_id,
-                self._task_id,
-            )
+            try:
+                item, drained = self._storage.dequeue_channel_item(
+                    self._channel_id,
+                    self._task_id,
+                )
+            except StorageError:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout_sec:
+                    raise
+                logger.warning(
+                    "Transient storage error during channel recv, retrying "
+                    "(elapsed=%.2fs, timeout=%.2fs)",
+                    elapsed,
+                    timeout_sec,
+                    exc_info=True,
+                )
+                remaining = timeout_sec - elapsed
+                sleep_time = min(poll_interval_sec, remaining)
+                time.sleep(sleep_time)
+                continue
 
             # If we got an item, deserialize and return it
             if item is not None:
