@@ -215,6 +215,84 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(metadata_store->remove_driver(*conn, scheduler_id).success());
     REQUIRE(metadata_store->remove_driver(*conn, client_id).success());
 }
+
+TEMPLATE_LIST_TEST_CASE(
+        "Schedule channel consumer before producer",
+        "[scheduler][storage]",
+        spider::test::StorageFactoryTypeList
+) {
+    std::shared_ptr<spider::core::StorageFactory> const storage_factory
+            = spider::test::create_storage_factory<TestType>();
+    std::shared_ptr<spider::core::MetadataStorage> const metadata_store
+            = storage_factory->provide_metadata_storage();
+    std::shared_ptr<spider::core::DataStorage> const data_store
+            = storage_factory->provide_data_storage();
+
+    std::variant<std::unique_ptr<spider::core::StorageConnection>, spider::core::StorageErr>
+            conn_result = storage_factory->provide_storage_connection();
+    REQUIRE(std::holds_alternative<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+    std::shared_ptr<spider::core::StorageConnection> const conn
+            = std::move(std::get<std::unique_ptr<spider::core::StorageConnection>>(conn_result));
+
+    boost::uuids::random_generator gen;
+
+    // Add scheduler
+    boost::uuids::uuid const scheduler_id = gen();
+    REQUIRE(metadata_store
+                    ->add_scheduler(*conn, spider::core::Scheduler{scheduler_id, "127.0.0.1", 8080})
+                    .success());
+
+    boost::uuids::uuid const job_id = gen();
+    boost::uuids::uuid const client_id = gen();
+    boost::uuids::uuid const channel_id = gen();
+
+    // Create producer task (sender)
+    spider::core::Task producer{"producer"};
+    spider::core::TaskInput const producer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, true);
+    producer.add_input(producer_input);
+    spider::core::TaskOutput producer_output{"int"};
+    producer_output.set_channel_id(channel_id);
+    producer.add_output(producer_output);
+
+    // Create consumer task (receiver)
+    spider::core::Task consumer{"consumer"};
+    spider::core::TaskInput const consumer_input
+            = spider::core::TaskInput::create_channel_input("int", channel_id, false);
+    consumer.add_input(consumer_input);
+
+    // Create task graph with both tasks ready (both are input tasks)
+    spider::core::TaskGraph graph;
+    graph.add_task(producer);
+    graph.add_task(consumer);
+    graph.add_input_task(producer.get_id());
+    graph.add_input_task(consumer.get_id());
+    graph.add_output_task(producer.get_id());
+    graph.add_output_task(consumer.get_id());
+
+    REQUIRE(metadata_store->add_job(*conn, job_id, client_id, graph).success());
+
+    spider::scheduler::FifoPolicy policy{scheduler_id, metadata_store, data_store, conn};
+
+    // Schedule first task - should be the consumer (channel consumer prioritized)
+    std::optional<boost::uuids::uuid> optional_task_id = policy.schedule_next(gen(), "");
+    REQUIRE(optional_task_id.has_value());
+    if (optional_task_id.has_value()) {
+        boost::uuids::uuid const& task_id = optional_task_id.value();
+        REQUIRE(task_id == consumer.get_id());
+    }
+
+    // Schedule second task - should be the producer
+    optional_task_id = policy.schedule_next(gen(), "");
+    REQUIRE(optional_task_id.has_value());
+    if (optional_task_id.has_value()) {
+        boost::uuids::uuid const& task_id = optional_task_id.value();
+        REQUIRE(task_id == producer.get_id());
+    }
+
+    REQUIRE(metadata_store->remove_job(*conn, job_id).success());
+    REQUIRE(metadata_store->remove_driver(*conn, scheduler_id).success());
+}
 }  // namespace
 
 // NOLINTEND(cert-err58-cpp,cppcoreguidelines-avoid-do-while,readability-function-cognitive-complexity,cppcoreguidelines-avoid-non-const-global-variables,cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays,clang-analyzer-optin.core.EnumCastOutOfRange)
