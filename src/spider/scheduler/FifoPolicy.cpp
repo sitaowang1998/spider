@@ -68,7 +68,8 @@ auto FifoPolicy::fetch_tasks() -> void {
     m_metadata_store->get_ready_tasks(*m_conn, m_scheduler_id, &m_tasks);
     m_metadata_store->get_task_timeout(*m_conn, &m_tasks);
 
-    // Sort tasks based on job creation time in descending order, with channel consumers prioritized.
+    // Sort tasks based on job creation time in descending order, with channel consumers
+    // prioritized.
     std::ranges::sort(
             m_tasks,
             [&](core::ScheduleTaskMetadata const& a, core::ScheduleTaskMetadata const& b) {
