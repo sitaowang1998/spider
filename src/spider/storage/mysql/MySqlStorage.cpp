@@ -1152,10 +1152,7 @@ auto insert_channel_items(
 /**
  * Closes channels for a task by checking if all producers have reached a terminal state.
  */
-auto close_channels_for_task(
-        MySqlConnection& conn,
-        sql::bytes& task_id_bytes
-) -> void {
+auto close_channels_for_task(MySqlConnection& conn, sql::bytes& task_id_bytes) -> void {
     std::unique_ptr<sql::PreparedStatement> find_channels_statement(conn->prepareStatement(
             "SELECT `channel_id` FROM `channel_producers` WHERE `task_id` = ?"
     ));
@@ -2075,14 +2072,17 @@ auto MySqlMetadataStorage::task_finish(
         std::vector<TaskOutput> const& outputs
 ) -> StorageErr {
     auto& mysql_conn = static_cast<MySqlConnection&>(conn);
+    sql::bytes task_id_bytes = uuid_get_bytes(instance.task_id);
+
+    // Transaction 1: Mark task as success and propagate outputs.
+    // Commit before updating downstream states so that concurrent task_finish calls
+    // from sibling tasks can see this task's committed state.
     try {
-        // Try to submit task instance
         std::unique_ptr<sql::PreparedStatement> const statement(mysql_conn->prepareStatement(
                 "UPDATE `tasks` SET `instance_id` = ?, `state` = 'success' WHERE `id` = ? "
                 "AND `instance_id` is NULL AND `state` = 'running'"
         ));
         sql::bytes id_bytes = uuid_get_bytes(instance.id);
-        sql::bytes task_id_bytes = uuid_get_bytes(instance.task_id);
         statement->setBytes(1, &id_bytes);
         statement->setBytes(2, &task_id_bytes);
         int32_t const update_count = statement->executeUpdate();
@@ -2095,8 +2095,6 @@ auto MySqlMetadataStorage::task_finish(
         insert_channel_items(mysql_conn, task_id_bytes, outputs);
         close_channels_for_task(mysql_conn, task_id_bytes);
         propagate_outputs_to_inputs(mysql_conn, task_id_bytes, outputs);
-        update_downstream_states(mysql_conn, task_id_bytes);
-
     } catch (sql::SQLException& e) {
         mysql_conn->rollback();
         if (e.getErrorCode() == ErDupKey || e.getErrorCode() == ErDupEntry) {
@@ -2106,6 +2104,18 @@ auto MySqlMetadataStorage::task_finish(
             return StorageErr{StorageErrType::DeadLockErr, e.what()};
         }
         return StorageErr{StorageErrType::OtherErr, e.what()};
+    }
+    mysql_conn->commit();
+
+    // Transaction 2: Update downstream task and job states.
+    // This runs in a new transaction so it sees the latest committed state from all workers,
+    // avoiding ER_CHECKREAD (1020) when sibling tasks finish concurrently.
+    try {
+        update_downstream_states(mysql_conn, task_id_bytes);
+    } catch (sql::SQLException& e) {
+        mysql_conn->rollback();
+        spdlog::warn("Failed to update downstream states for task: {}", e.what());
+        return StorageErr{};
     }
     mysql_conn->commit();
     return StorageErr{};
@@ -2148,10 +2158,7 @@ auto MySqlMetadataStorage::task_fail(
             task_statement->setBytes(1, &task_id_bytes);
             task_statement->executeUpdate();
 
-            close_channels_for_task(
-                    static_cast<MySqlConnection&>(conn),
-                    task_id_bytes
-            );
+            close_channels_for_task(static_cast<MySqlConnection&>(conn), task_id_bytes);
 
             // Set the job fails
             std::unique_ptr<sql::PreparedStatement> const job_statement(

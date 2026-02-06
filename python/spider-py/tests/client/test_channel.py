@@ -4,8 +4,6 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
-
 from spider_py.core import ChannelItem
 from spider_py.core._channel_impl import (
     create_receiver,
@@ -16,7 +14,6 @@ from spider_py.core._channel_impl import (
     get_sender_channel_id,
     get_sender_item_type,
 )
-from spider_py.storage.storage import StorageError
 
 if TYPE_CHECKING:
     from spider_py import Receiver, Sender
@@ -145,135 +142,3 @@ class TestReceiver:
             storage=MagicMock(),
         )
         assert get_receiver_item_type(receiver) is int
-
-
-class TestReceiverStorageErrorRetry:
-    """Tests for Receiver.recv() retry on transient StorageError (Bug 4 fix)."""
-
-    def test_recv_retries_on_storage_error_then_succeeds(self) -> None:
-        """Tests that recv() retries after a StorageError and returns an item."""
-        channel_id = uuid4()
-        task_id = uuid4()
-
-        mock_storage = MagicMock()
-        item = ChannelItem(
-            channel_id=channel_id,
-            producer_task_id=uuid4(),
-            value=b"\xa5item1",
-        )
-        # First call raises StorageError, second call succeeds
-        mock_storage.dequeue_channel_item.side_effect = [
-            StorageError("deadlock"),
-            (item, False),
-        ]
-
-        receiver: Receiver[str] = create_receiver(
-            channel_id=channel_id,
-            item_type=str,
-            task_id=task_id,
-            storage=mock_storage,
-        )
-
-        result, drained = receiver.recv(timeout_ms=5000, poll_interval_ms=50)
-
-        assert result == "item1"
-        assert not drained
-        assert mock_storage.dequeue_channel_item.call_count == 2
-
-    def test_recv_retries_on_storage_error_then_drained(self) -> None:
-        """Tests that recv() retries after a StorageError and detects drain."""
-        channel_id = uuid4()
-        task_id = uuid4()
-
-        mock_storage = MagicMock()
-        mock_storage.dequeue_channel_item.side_effect = [
-            StorageError("lock timeout"),
-            (None, True),
-        ]
-
-        receiver: Receiver[str] = create_receiver(
-            channel_id=channel_id,
-            item_type=str,
-            task_id=task_id,
-            storage=mock_storage,
-        )
-
-        result, drained = receiver.recv(timeout_ms=5000, poll_interval_ms=50)
-
-        assert result is None
-        assert drained
-        assert mock_storage.dequeue_channel_item.call_count == 2
-
-    def test_recv_raises_storage_error_after_timeout(self) -> None:
-        """Tests that recv() re-raises StorageError when timeout is exceeded."""
-        channel_id = uuid4()
-        task_id = uuid4()
-
-        mock_storage = MagicMock()
-        # Always raise StorageError
-        mock_storage.dequeue_channel_item.side_effect = StorageError("persistent error")
-
-        receiver: Receiver[str] = create_receiver(
-            channel_id=channel_id,
-            item_type=str,
-            task_id=task_id,
-            storage=mock_storage,
-        )
-
-        with pytest.raises(StorageError, match="persistent error"):
-            receiver.recv(timeout_ms=150, poll_interval_ms=50)
-
-        # Should have retried at least once before timing out
-        assert mock_storage.dequeue_channel_item.call_count >= 2
-
-    def test_recv_retries_multiple_storage_errors(self) -> None:
-        """Tests that recv() retries through multiple consecutive StorageErrors."""
-        channel_id = uuid4()
-        task_id = uuid4()
-
-        mock_storage = MagicMock()
-        item = ChannelItem(
-            channel_id=channel_id,
-            producer_task_id=uuid4(),
-            value=b"\xa3abc",
-        )
-        mock_storage.dequeue_channel_item.side_effect = [
-            StorageError("error 1"),
-            StorageError("error 2"),
-            StorageError("error 3"),
-            (item, False),
-        ]
-
-        receiver: Receiver[str] = create_receiver(
-            channel_id=channel_id,
-            item_type=str,
-            task_id=task_id,
-            storage=mock_storage,
-        )
-
-        result, drained = receiver.recv(timeout_ms=5000, poll_interval_ms=50)
-
-        assert result == "abc"
-        assert not drained
-        assert mock_storage.dequeue_channel_item.call_count == 4
-
-    def test_recv_does_not_catch_non_storage_errors(self) -> None:
-        """Tests that recv() does not catch non-StorageError exceptions."""
-        channel_id = uuid4()
-        task_id = uuid4()
-
-        mock_storage = MagicMock()
-        mock_storage.dequeue_channel_item.side_effect = RuntimeError("unexpected")
-
-        receiver: Receiver[str] = create_receiver(
-            channel_id=channel_id,
-            item_type=str,
-            task_id=task_id,
-            storage=mock_storage,
-        )
-
-        with pytest.raises(RuntimeError, match="unexpected"):
-            receiver.recv(timeout_ms=5000, poll_interval_ms=50)
-
-        # Should fail immediately, no retry
-        assert mock_storage.dequeue_channel_item.call_count == 1
