@@ -134,7 +134,7 @@ def cpp_channel_with_dependency_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(5)),
         ],
         outputs=[TaskOutput(type="int")],
@@ -180,7 +180,7 @@ def cpp_channel_no_dependency_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(5)),
         ],
         outputs=[TaskOutput(type="int")],
@@ -225,7 +225,7 @@ def cpp_multi_producer_with_dependency_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(3)),
         ],
         outputs=[TaskOutput(type="int")],
@@ -236,7 +236,7 @@ def cpp_multi_producer_with_dependency_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(3)),
         ],
         outputs=[TaskOutput(type="int")],
@@ -282,7 +282,7 @@ def cpp_multi_consumer_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(6)),
         ],
         outputs=[TaskOutput(type="int")],
@@ -473,8 +473,8 @@ def cpp_multi_sender_job(
         id=uuid.uuid4(),
         function_name="multi_channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id1),  # sender1
-            TaskInput(type="channel", channel_id=channel_id2),  # sender2
+            TaskInput(type="channel", channel_id=channel_id1, is_sender=True),  # sender1
+            TaskInput(type="channel", channel_id=channel_id2, is_sender=True),  # sender2
             TaskInput(type="int", value=msgpack.packb(3)),  # count
         ],
         outputs=[TaskOutput(type="int")],  # returns count
@@ -530,7 +530,7 @@ def cpp_passthrough_job(
         id=uuid.uuid4(),
         function_name="channel_producer_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id1),
+            TaskInput(type="channel", channel_id=channel_id1, is_sender=True),
             TaskInput(type="int", value=msgpack.packb(3)),  # count=3 -> sends 0,1,2
         ],
         outputs=[TaskOutput(type="int")],
@@ -543,7 +543,7 @@ def cpp_passthrough_job(
         function_name="channel_passthrough_test",
         inputs=[
             TaskInput(type="channel", channel_id=channel_id1),  # receiver
-            TaskInput(type="channel", channel_id=channel_id2),  # sender
+            TaskInput(type="channel", channel_id=channel_id2, is_sender=True),  # sender
         ],
         outputs=[TaskOutput(type="int")],
         language="cpp",
@@ -673,7 +673,7 @@ def cpp_mixed_output_tuple_with_sender_job(
         id=uuid.uuid4(),
         function_name="mixed_output_tuple_with_sender_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id),  # Sender argument
+            TaskInput(type="channel", channel_id=channel_id, is_sender=True),  # Sender argument
             TaskInput(type="int", value=msgpack.packb(4)),  # count=4
         ],
         outputs=[
@@ -724,8 +724,8 @@ def cpp_mixed_output_multi_sender_job(
         id=uuid.uuid4(),
         function_name="mixed_output_multi_sender_test",
         inputs=[
-            TaskInput(type="channel", channel_id=channel_id1),  # sender1
-            TaskInput(type="channel", channel_id=channel_id2),  # sender2
+            TaskInput(type="channel", channel_id=channel_id1, is_sender=True),  # sender1
+            TaskInput(type="channel", channel_id=channel_id2, is_sender=True),  # sender2
             TaskInput(type="int", value=msgpack.packb(3)),  # count=3
         ],
         outputs=[TaskOutput(type="int")],  # return value: count

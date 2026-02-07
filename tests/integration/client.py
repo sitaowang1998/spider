@@ -24,6 +24,7 @@ class TaskInput:
     value: bytes | None = None
     data_id: uuid.UUID | None = None
     channel_id: uuid.UUID | None = None
+    is_sender: bool = False
 
 
 @dataclass
@@ -153,17 +154,27 @@ def _collect_channels(graph: TaskGraph) -> dict[uuid.UUID, str]:
     return channels
 
 
+def _get_input_kind(task_input: TaskInput) -> str:
+    """Returns the input_kind for a task input matching the C++ storage schema."""
+    if task_input.channel_id is not None:
+        return "channel_producer" if task_input.is_sender else "channel_consumer"
+    if task_input.data_id is not None:
+        return "data"
+    return "value"
+
+
 def _insert_task_inputs(cursor: mysql.connector.abstracts.MySQLCursorAbstract, task: Task) -> None:
     """Inserts task inputs into the database."""
     for i, task_input in enumerate(task.inputs):
         cursor.execute(
-            "INSERT INTO task_inputs (type, task_id, position, output_task_id,"
+            "INSERT INTO task_inputs (type, task_id, position, input_kind, output_task_id,"
             " output_task_position, value, data_id, channel_id)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 task_input.type,
                 task.id.bytes,
                 i,
+                _get_input_kind(task_input),
                 task_input.task_output[0].bytes if task_input.task_output is not None else None,
                 task_input.task_output[1] if task_input.task_output is not None else None,
                 task_input.value,
@@ -192,21 +203,19 @@ def _insert_channel_associations(
     cursor: mysql.connector.abstracts.MySQLCursorAbstract, task: Task
 ) -> None:
     """Inserts channel producer and consumer associations for a task."""
-    # Create producer entries for tasks with channel outputs
-    channel_output_ids = {o.channel_id for o in task.outputs if o.channel_id is not None}
-    for channel_id in channel_output_ids:
-        cursor.execute(
-            "INSERT INTO channel_producers (channel_id, task_id) VALUES (%s, %s)",
-            (channel_id.bytes, task.id.bytes),
-        )
-
-    # Create consumer entries for tasks with channel inputs
-    channel_input_ids = {inp.channel_id for inp in task.inputs if inp.channel_id is not None}
-    for channel_id in channel_input_ids:
-        cursor.execute(
-            "INSERT INTO channel_consumers (channel_id, task_id) VALUES (%s, %s)",
-            (channel_id.bytes, task.id.bytes),
-        )
+    for inp in task.inputs:
+        if inp.channel_id is None:
+            continue
+        if inp.is_sender:
+            cursor.execute(
+                "INSERT INTO channel_producers (channel_id, task_id) VALUES (%s, %s)",
+                (inp.channel_id.bytes, task.id.bytes),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO channel_consumers (channel_id, task_id) VALUES (%s, %s)",
+                (inp.channel_id.bytes, task.id.bytes),
+            )
 
 
 def submit_job(conn: SQLConnection, client_id: uuid.UUID, graph: TaskGraph) -> None:
