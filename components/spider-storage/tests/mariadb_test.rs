@@ -57,6 +57,7 @@ async fn register_test_em(storage: &MariaDbStorageConnector) -> ExecutionManager
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_register_job() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -78,6 +79,7 @@ async fn test_register_job() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_register_job_invalid_resource_group() {
     let storage = create_mariadb_connector().await;
     let fake_rg_id = ResourceGroupId::new();
@@ -95,6 +97,7 @@ async fn test_register_job_invalid_resource_group() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_start_job() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -118,6 +121,7 @@ async fn test_start_job() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_start_job_wrong_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -141,6 +145,7 @@ async fn test_start_job_wrong_state() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_cancel_job_without_cleanup_transitions_to_cancelled() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -169,6 +174,7 @@ async fn test_cancel_job_without_cleanup_transitions_to_cancelled() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_outputs_succeeded_job() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -197,6 +203,7 @@ async fn test_get_outputs_succeeded_job() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_outputs_wrong_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -218,6 +225,7 @@ async fn test_get_outputs_wrong_state() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_error_failed_job() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -245,6 +253,7 @@ async fn test_get_error_failed_job() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_error_wrong_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -266,6 +275,7 @@ async fn test_get_error_wrong_state() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_cancel_job_with_cleanup_transitions_to_cleanup_ready() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -293,6 +303,7 @@ async fn test_cancel_job_with_cleanup_transitions_to_cleanup_ready() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_cancel_already_terminal() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -323,6 +334,7 @@ async fn test_cancel_already_terminal() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_set_state_valid_transition() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -348,6 +360,7 @@ async fn test_set_state_valid_transition() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_set_state_invalid_transition() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -373,6 +386,7 @@ async fn test_set_state_invalid_transition() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_commit_outputs_without_commit_task() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -400,6 +414,7 @@ async fn test_commit_outputs_without_commit_task() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_commit_outputs_with_commit_task() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -430,6 +445,7 @@ async fn test_commit_outputs_with_commit_task() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_commit_outputs_wrong_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -456,6 +472,7 @@ async fn test_commit_outputs_wrong_state() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_fail_job() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -483,6 +500,7 @@ async fn test_fail_job() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_fail_terminal_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -553,6 +571,7 @@ async fn test_delete_expired_terminated_jobs() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_add_duplicate_resource_group() {
     let storage = create_mariadb_connector().await;
     let external_id = uuid::Uuid::new_v4().to_string();
@@ -571,6 +590,7 @@ async fn test_add_duplicate_resource_group() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_verify_correct_password() {
     let storage = create_mariadb_connector().await;
 
@@ -590,6 +610,7 @@ async fn test_verify_correct_password() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_verify_wrong_password() {
     let storage = create_mariadb_connector().await;
 
@@ -610,6 +631,7 @@ async fn test_verify_wrong_password() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_verify_nonexistent_resource_group() {
     let storage = create_mariadb_connector().await;
     let fake_rg_id = ResourceGroupId::new();
@@ -623,6 +645,7 @@ async fn test_verify_nonexistent_resource_group() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_start_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -636,6 +659,7 @@ async fn test_start_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_set_state_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -650,6 +674,7 @@ async fn test_set_state_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_state_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -663,6 +688,7 @@ async fn test_get_state_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_outputs_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -676,6 +702,7 @@ async fn test_get_outputs_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_get_error_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -689,6 +716,7 @@ async fn test_get_error_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_commit_outputs_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -703,6 +731,7 @@ async fn test_commit_outputs_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_cancel_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -716,6 +745,7 @@ async fn test_cancel_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_fail_job_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_job_id = JobId::new();
@@ -729,6 +759,7 @@ async fn test_fail_job_not_found() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_cancel_from_ready_state() {
     let storage = create_mariadb_connector().await;
     let rg_id = create_test_resource_group(&storage).await;
@@ -792,6 +823,7 @@ async fn test_delete_expired_terminated_jobs_no_match() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_register_execution_manager() {
     let storage = create_mariadb_connector().await;
     let em_id = storage
@@ -808,6 +840,7 @@ async fn test_register_execution_manager() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_update_execution_manager_heartbeat() {
     let storage = create_mariadb_connector().await;
     let em_id = register_test_em(&storage).await;
@@ -820,6 +853,7 @@ async fn test_update_execution_manager_heartbeat() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_update_execution_manager_heartbeat_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_em_id = ExecutionManagerId::new();
@@ -858,6 +892,7 @@ async fn test_update_execution_manager_heartbeat_already_dead() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_is_execution_manager_alive_em_alive() {
     let storage = create_mariadb_connector().await;
     let em_id = register_test_em(&storage).await;
@@ -871,6 +906,7 @@ async fn test_is_execution_manager_alive_em_alive() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_is_execution_manager_alive_em_not_found() {
     let storage = create_mariadb_connector().await;
     let fake_em_id = ExecutionManagerId::new();
@@ -1007,6 +1043,7 @@ async fn test_get_dead_execution_managers_multiple() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_session_id_returned_after_connect() {
     let storage = create_mariadb_connector().await;
     let session_id = storage.session_id();
@@ -1018,6 +1055,7 @@ async fn test_session_id_returned_after_connect() {
 
 #[tokio::test]
 #[ignore = "requires MariaDB"]
+#[serial_test::file_serial]
 async fn test_session_id_bumps_on_reconnect() {
     let storage1 = create_mariadb_connector().await;
     let session_id1 = storage1.session_id();
