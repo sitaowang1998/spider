@@ -110,6 +110,21 @@ pub struct SessionResponse {
     pub session_id: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct StartMetricsSessionRequest {
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StartMetricsSessionResponse {
+    pub metrics_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EndMetricsSessionRequest {
+    pub metrics_session_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AddResourceGroupRequest {
     pub external_id: String,

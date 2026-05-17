@@ -1,36 +1,52 @@
 use async_trait::async_trait;
 
-use crate::api::{
-    AddResourceGroupRequest,
-    ApiResult,
-    CreateTaskInstanceRequest,
-    EmptyResponse,
-    ExecutionContextResponse,
-    ExecutionManagerRequest,
-    ExecutionManagerResponse,
-    FailTaskInstanceRequest,
-    GetSessionRequest,
-    JobErrorResponse,
-    JobIdRequest,
-    JobIdResponse,
-    JobOutputsResponse,
-    JobStateResponse,
-    PollReadyTasksRequest,
-    ReadyTasksResponse,
-    RegisterExecutionManagerRequest,
-    RegisterJobRequest,
-    ResourceGroupResponse,
-    SessionResponse,
-    SucceedTaskInstanceRequest,
-    SucceedTerminationTaskInstanceRequest,
-    TerminationTasksResponse,
-    VerifyResourceGroupRequest,
+use crate::{
+    api::{
+        AddResourceGroupRequest,
+        ApiResult,
+        CreateTaskInstanceRequest,
+        EmptyResponse,
+        EndMetricsSessionRequest,
+        ExecutionContextResponse,
+        ExecutionManagerRequest,
+        ExecutionManagerResponse,
+        FailTaskInstanceRequest,
+        GetSessionRequest,
+        JobErrorResponse,
+        JobIdRequest,
+        JobIdResponse,
+        JobOutputsResponse,
+        JobStateResponse,
+        PollReadyTasksRequest,
+        ReadyTasksResponse,
+        RegisterExecutionManagerRequest,
+        RegisterJobRequest,
+        ResourceGroupResponse,
+        SessionResponse,
+        StartMetricsSessionRequest,
+        StartMetricsSessionResponse,
+        SucceedTaskInstanceRequest,
+        SucceedTerminationTaskInstanceRequest,
+        TerminationTasksResponse,
+        VerifyResourceGroupRequest,
+    },
+    metrics::ServerMetricsSessionReport,
 };
 
 /// Protocol-neutral storage API client used by benchmark workloads.
 #[async_trait]
 pub trait StorageApiClient: Clone + Send + Sync + 'static {
     async fn get_session(&self, request: GetSessionRequest) -> ApiResult<SessionResponse>;
+
+    async fn start_metrics_session(
+        &self,
+        request: StartMetricsSessionRequest,
+    ) -> ApiResult<StartMetricsSessionResponse>;
+
+    async fn end_metrics_session(
+        &self,
+        request: EndMetricsSessionRequest,
+    ) -> ApiResult<ServerMetricsSessionReport>;
 
     async fn add_resource_group(
         &self,

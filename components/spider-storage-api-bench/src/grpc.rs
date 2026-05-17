@@ -11,6 +11,7 @@ use crate::{
         ApiResult,
         CreateTaskInstanceRequest,
         EmptyResponse,
+        EndMetricsSessionRequest,
         ErrorCode,
         ExecutionContextResponse,
         ExecutionManagerRequest,
@@ -28,6 +29,8 @@ use crate::{
         RegisterJobRequest,
         ResourceGroupResponse,
         SessionResponse,
+        StartMetricsSessionRequest,
+        StartMetricsSessionResponse,
         SucceedTaskInstanceRequest,
         SucceedTerminationTaskInstanceRequest,
         TerminationTaskEntryDto,
@@ -35,6 +38,7 @@ use crate::{
         VerifyResourceGroupRequest,
     },
     client::StorageApiClient,
+    metrics::{RequestLatencySummary, ServerMetricsSessionReport},
     server::StorageApiService,
 };
 
@@ -79,6 +83,26 @@ impl proto::storage_api_server::StorageApi for GrpcStorageApiService {
             .add_resource_group(request.into_inner().into())
             .await?;
         Ok(Response::new(response.into()))
+    }
+
+    async fn start_metrics_session(
+        &self,
+        request: Request<proto::StartMetricsSessionRequest>,
+    ) -> Result<Response<proto::StartMetricsSessionResponse>, Status> {
+        let response = self
+            .service
+            .start_metrics_session(request.into_inner().into());
+        Ok(Response::new(response.into()))
+    }
+
+    async fn end_metrics_session(
+        &self,
+        request: Request<proto::EndMetricsSessionRequest>,
+    ) -> Result<Response<proto::ServerMetricsSessionReport>, Status> {
+        let response = self
+            .service
+            .end_metrics_session(request.into_inner().into())?;
+        Ok(Response::new(response.try_into()?))
     }
 
     async fn verify_resource_group(
@@ -321,6 +345,30 @@ impl StorageApiClient for GrpcStorageApiClient {
             .into())
     }
 
+    async fn start_metrics_session(
+        &self,
+        request: StartMetricsSessionRequest,
+    ) -> ApiResult<StartMetricsSessionResponse> {
+        let mut client = self.client.clone();
+        Ok(client
+            .start_metrics_session(proto::StartMetricsSessionRequest::from(request))
+            .await?
+            .into_inner()
+            .into())
+    }
+
+    async fn end_metrics_session(
+        &self,
+        request: EndMetricsSessionRequest,
+    ) -> ApiResult<ServerMetricsSessionReport> {
+        let mut client = self.client.clone();
+        Ok(client
+            .end_metrics_session(proto::EndMetricsSessionRequest::from(request))
+            .await?
+            .into_inner()
+            .into())
+    }
+
     async fn add_resource_group(
         &self,
         request: AddResourceGroupRequest,
@@ -546,6 +594,135 @@ impl From<proto::SessionResponse> for SessionResponse {
     fn from(response: proto::SessionResponse) -> Self {
         Self {
             session_id: response.session_id,
+        }
+    }
+}
+
+impl From<proto::StartMetricsSessionRequest> for StartMetricsSessionRequest {
+    fn from(request: proto::StartMetricsSessionRequest) -> Self {
+        Self {
+            label: if request.label.is_empty() {
+                None
+            } else {
+                Some(request.label)
+            },
+        }
+    }
+}
+
+impl From<StartMetricsSessionRequest> for proto::StartMetricsSessionRequest {
+    fn from(request: StartMetricsSessionRequest) -> Self {
+        Self {
+            label: request.label.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<StartMetricsSessionResponse> for proto::StartMetricsSessionResponse {
+    fn from(response: StartMetricsSessionResponse) -> Self {
+        Self {
+            metrics_session_id: response.metrics_session_id,
+        }
+    }
+}
+
+impl From<proto::StartMetricsSessionResponse> for StartMetricsSessionResponse {
+    fn from(response: proto::StartMetricsSessionResponse) -> Self {
+        Self {
+            metrics_session_id: response.metrics_session_id,
+        }
+    }
+}
+
+impl From<proto::EndMetricsSessionRequest> for EndMetricsSessionRequest {
+    fn from(request: proto::EndMetricsSessionRequest) -> Self {
+        Self {
+            metrics_session_id: request.metrics_session_id,
+        }
+    }
+}
+
+impl From<EndMetricsSessionRequest> for proto::EndMetricsSessionRequest {
+    fn from(request: EndMetricsSessionRequest) -> Self {
+        Self {
+            metrics_session_id: request.metrics_session_id,
+        }
+    }
+}
+
+impl TryFrom<ServerMetricsSessionReport> for proto::ServerMetricsSessionReport {
+    type Error = Status;
+
+    fn try_from(report: ServerMetricsSessionReport) -> Result<Self, Self::Error> {
+        Ok(Self {
+            metrics_session_id: report.metrics_session_id,
+            label: report.label.unwrap_or_default(),
+            elapsed_micros: u64::try_from(report.elapsed_micros)
+                .map_err(|_| Status::internal("elapsed_micros overflows u64"))?,
+            request_latency: report
+                .request_latency
+                .into_iter()
+                .map(proto::RequestLatencySummary::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl From<proto::ServerMetricsSessionReport> for ServerMetricsSessionReport {
+    fn from(report: proto::ServerMetricsSessionReport) -> Self {
+        Self {
+            metrics_session_id: report.metrics_session_id,
+            label: if report.label.is_empty() {
+                None
+            } else {
+                Some(report.label)
+            },
+            elapsed_micros: u128::from(report.elapsed_micros),
+            request_latency: report
+                .request_latency
+                .into_iter()
+                .map(RequestLatencySummary::from)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<RequestLatencySummary> for proto::RequestLatencySummary {
+    type Error = Status;
+
+    fn try_from(summary: RequestLatencySummary) -> Result<Self, Self::Error> {
+        Ok(Self {
+            category: summary.category,
+            operation: summary.operation,
+            count: u64::try_from(summary.count)
+                .map_err(|_| Status::internal("count overflows u64"))?,
+            errors: u64::try_from(summary.errors)
+                .map_err(|_| Status::internal("errors overflows u64"))?,
+            p50_us: u64::try_from(summary.p50_us)
+                .map_err(|_| Status::internal("p50_us overflows u64"))?,
+            p90_us: u64::try_from(summary.p90_us)
+                .map_err(|_| Status::internal("p90_us overflows u64"))?,
+            p99_us: u64::try_from(summary.p99_us)
+                .map_err(|_| Status::internal("p99_us overflows u64"))?,
+            max_us: u64::try_from(summary.max_us)
+                .map_err(|_| Status::internal("max_us overflows u64"))?,
+        })
+    }
+}
+
+impl From<proto::RequestLatencySummary> for RequestLatencySummary {
+    fn from(summary: proto::RequestLatencySummary) -> Self {
+        Self {
+            category: summary.category,
+            operation: summary.operation,
+            count: usize::try_from(summary.count)
+                .expect("server request count should fit in usize"),
+            errors: usize::try_from(summary.errors)
+                .expect("server request errors should fit in usize"),
+            p50_us: u128::from(summary.p50_us),
+            p90_us: u128::from(summary.p90_us),
+            p99_us: u128::from(summary.p99_us),
+            max_us: u128::from(summary.max_us),
         }
     }
 }

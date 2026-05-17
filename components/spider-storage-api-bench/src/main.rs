@@ -12,11 +12,13 @@ use spider_storage_api_bench::{
     api::{
         AddResourceGroupRequest,
         CreateTaskInstanceRequest,
+        EndMetricsSessionRequest,
         GetSessionRequest,
         JobIdRequest,
         PollReadyTasksRequest,
         RegisterExecutionManagerRequest,
         RegisterJobRequest,
+        StartMetricsSessionRequest,
         SucceedTaskInstanceRequest,
     },
     client::StorageApiClient,
@@ -28,6 +30,7 @@ use spider_storage_api_bench::{
         RequestCategory,
         RequestLatencySample,
         RequestLatencySummary,
+        ServerMetricsSessionReport,
         render_request_summary,
         render_summary,
         summarize,
@@ -90,6 +93,7 @@ struct BenchmarkReport {
     setup: BenchmarkSetup,
     job_latency: JobLatencySummary,
     request_latency: Vec<RequestLatencySummary>,
+    server_metrics: ServerMetricsSessionReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +118,12 @@ struct BenchmarkSetup {
 }
 
 struct WorkloadMeasurements {
+    job_latency: Vec<JobLatencySample>,
+    request_latency: Vec<RequestLatencySample>,
+    server_metrics: ServerMetricsSessionReport,
+}
+
+struct ClientWorkloadMeasurements {
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
 }
@@ -165,11 +175,11 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
         ServerProtocol::Rest => {
             let client = RestStorageApiClient::new(&target)?;
             let clients = vec![client; total_connection_count(&config)];
-            run_workload(clients, args.workload, &config).await?
+            run_measured_workload(clients, args.protocol, args.workload, &config).await?
         }
         ServerProtocol::Grpc => {
             let clients = connect_grpc_clients(&target, total_connection_count(&config)).await?;
-            run_workload(clients, args.workload, &config).await?
+            run_measured_workload(clients, args.protocol, args.workload, &config).await?
         }
     };
     let job_latency = summarize(&measurements.job_latency);
@@ -178,11 +188,17 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
         setup: BenchmarkSetup::new(args.protocol, target, args.workload, &config),
         job_latency,
         request_latency,
+        server_metrics: measurements.server_metrics,
     };
     println!("job_e2e_latency");
     println!("{}", render_summary(&report.job_latency));
-    println!("storage_request_latency");
+    println!("client_storage_request_latency");
     println!("{}", render_request_summary(&report.request_latency));
+    println!("server_storage_request_latency");
+    println!(
+        "{}",
+        render_request_summary(&report.server_metrics.request_latency)
+    );
 
     if let Some(output_path) = args.output {
         if let Some(parent) = output_path.parent() {
@@ -223,11 +239,40 @@ impl BenchmarkSetup {
     }
 }
 
+async fn run_measured_workload<ClientType: StorageApiClient>(
+    clients: Vec<ClientType>,
+    protocol: ServerProtocol,
+    workload_kind: WorkloadKind,
+    config: &BenchConfig,
+) -> anyhow::Result<WorkloadMeasurements> {
+    let control_client = clients
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("client_count plus worker_count must be greater than 0"))?
+        .clone();
+    let metrics_session = control_client
+        .start_metrics_session(StartMetricsSessionRequest {
+            label: Some(format!("{protocol:?}_{workload_kind:?}")),
+        })
+        .await?;
+    let client_measurements = run_workload(clients, workload_kind, config).await;
+    let server_metrics = control_client
+        .end_metrics_session(EndMetricsSessionRequest {
+            metrics_session_id: metrics_session.metrics_session_id,
+        })
+        .await?;
+    let client_measurements = client_measurements?;
+    Ok(WorkloadMeasurements {
+        job_latency: client_measurements.job_latency,
+        request_latency: client_measurements.request_latency,
+        server_metrics,
+    })
+}
+
 async fn run_workload<ClientType: StorageApiClient>(
     mut clients: Vec<ClientType>,
     workload_kind: WorkloadKind,
     config: &BenchConfig,
-) -> anyhow::Result<WorkloadMeasurements> {
+) -> anyhow::Result<ClientWorkloadMeasurements> {
     let mut request_latency_samples = Vec::new();
     let worker_clients = clients.split_off(config.benchmark.client_count);
     let submit_clients = clients;
@@ -288,7 +333,7 @@ async fn run_workload<ClientType: StorageApiClient>(
         request_latency_samples.extend(result??);
     }
     request_latency_samples.append(&mut measurements.request_latency);
-    Ok(WorkloadMeasurements {
+    Ok(ClientWorkloadMeasurements {
         job_latency: measurements.job_latency,
         request_latency: request_latency_samples,
     })
@@ -340,7 +385,7 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
     completed: &Arc<Mutex<HashSet<String>>>,
     resource_group_id: String,
     poll_wait_ms: u64,
-) -> anyhow::Result<WorkloadMeasurements> {
+) -> anyhow::Result<ClientWorkloadMeasurements> {
     let mut submit_tasks = JoinSet::new();
     for client in clients {
         submit_tasks.spawn(run_submit_client(SubmitClient {
@@ -351,7 +396,7 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
             resource_group_id: resource_group_id.clone(),
         }));
     }
-    let mut measurements = WorkloadMeasurements {
+    let mut measurements = ClientWorkloadMeasurements {
         job_latency: Vec::new(),
         request_latency: Vec::new(),
     };
@@ -369,8 +414,8 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
 
 async fn run_submit_client<ClientType: StorageApiClient>(
     client: SubmitClient<ClientType>,
-) -> anyhow::Result<WorkloadMeasurements> {
-    let mut measurements = WorkloadMeasurements {
+) -> anyhow::Result<ClientWorkloadMeasurements> {
+    let mut measurements = ClientWorkloadMeasurements {
         job_latency: Vec::new(),
         request_latency: Vec::new(),
     };
@@ -559,10 +604,19 @@ async fn connect_grpc_clients(
 
 #[cfg(test)]
 mod tests {
-    use spider_storage_api_bench::workload::WorkloadKind;
+    use spider_storage_api_bench::{
+        metrics::{
+            JobLatencySummary,
+            RequestLatencySummary,
+            ServerMetricsSessionReport,
+            render_request_summary,
+        },
+        workload::WorkloadKind,
+    };
 
     use super::{
         BenchConfig,
+        BenchmarkReport,
         BenchmarkSetup,
         ServerProtocol,
         execution_manager_worker_count,
@@ -593,5 +647,71 @@ mod tests {
         assert_eq!(value["worker_count"], config.benchmark.worker_count);
         assert!(value.get("database_password").is_none());
         Ok(())
+    }
+
+    #[test]
+    fn benchmark_report_serializes_server_metrics() -> anyhow::Result<()> {
+        let config = BenchConfig::load("config/default.toml".as_ref())?;
+        let server_row = RequestLatencySummary {
+            category: "non_blocking".to_owned(),
+            operation: "register_job".to_owned(),
+            count: 7,
+            errors: 1,
+            p50_us: 10,
+            p90_us: 20,
+            p99_us: 30,
+            max_us: 40,
+        };
+        let report = BenchmarkReport {
+            setup: BenchmarkSetup::new(
+                ServerProtocol::Grpc,
+                "http://127.0.0.1:50051".to_owned(),
+                WorkloadKind::Flat,
+                &config,
+            ),
+            job_latency: JobLatencySummary {
+                count: 1,
+                failed_jobs: 0,
+                p50_us: 100,
+                p90_us: 100,
+                p99_us: 100,
+                max_us: 100,
+            },
+            request_latency: Vec::new(),
+            server_metrics: ServerMetricsSessionReport {
+                metrics_session_id: "session-1".to_owned(),
+                label: Some("Grpc_Flat".to_owned()),
+                elapsed_micros: 1234,
+                request_latency: vec![server_row],
+            },
+        };
+
+        let value = serde_json::to_value(report)?;
+        assert_eq!("session-1", value["server_metrics"]["metrics_session_id"]);
+        assert_eq!("Grpc_Flat", value["server_metrics"]["label"]);
+        assert_eq!(1234, value["server_metrics"]["elapsed_micros"]);
+        assert_eq!(
+            "register_job",
+            value["server_metrics"]["request_latency"][0]["operation"]
+        );
+        assert_eq!(7, value["server_metrics"]["request_latency"][0]["count"]);
+        Ok(())
+    }
+
+    #[test]
+    fn server_metrics_render_as_console_table() {
+        let table = render_request_summary(&[RequestLatencySummary {
+            category: "blocking".to_owned(),
+            operation: "poll_ready_tasks".to_owned(),
+            count: 3,
+            errors: 0,
+            p50_us: 11,
+            p90_us: 22,
+            p99_us: 33,
+            max_us: 44,
+        }]);
+        assert!(table.contains("poll_ready_tasks"));
+        assert!(table.contains("blocking"));
+        assert!(table.contains("p99_us"));
     }
 }

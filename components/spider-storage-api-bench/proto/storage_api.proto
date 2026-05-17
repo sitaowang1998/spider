@@ -4,6 +4,8 @@ package spider.storage_api_bench.v1;
 
 service StorageApi {
   rpc GetSession(GetSessionRequest) returns (SessionResponse);
+  rpc StartMetricsSession(StartMetricsSessionRequest) returns (StartMetricsSessionResponse);
+  rpc EndMetricsSession(EndMetricsSessionRequest) returns (ServerMetricsSessionReport);
   rpc AddResourceGroup(AddResourceGroupRequest) returns (ResourceGroupResponse);
   rpc VerifyResourceGroup(VerifyResourceGroupRequest) returns (EmptyResponse);
   rpc RegisterJob(RegisterJobRequest) returns (JobIdResponse);
@@ -30,6 +32,36 @@ message GetSessionRequest {}
 
 message SessionResponse {
   uint64 session_id = 1;
+}
+
+message StartMetricsSessionRequest {
+  string label = 1;
+}
+
+message StartMetricsSessionResponse {
+  string metrics_session_id = 1;
+}
+
+message EndMetricsSessionRequest {
+  string metrics_session_id = 1;
+}
+
+message RequestLatencySummary {
+  string category = 1;
+  string operation = 2;
+  uint64 count = 3;
+  uint64 errors = 4;
+  uint64 p50_us = 5;
+  uint64 p90_us = 6;
+  uint64 p99_us = 7;
+  uint64 max_us = 8;
+}
+
+message ServerMetricsSessionReport {
+  string metrics_session_id = 1;
+  string label = 2;
+  uint64 elapsed_micros = 3;
+  repeated RequestLatencySummary request_latency = 4;
 }
 
 message AddResourceGroupRequest {

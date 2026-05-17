@@ -20,6 +20,7 @@ use crate::{
         ApiResult,
         CreateTaskInstanceRequest,
         EmptyResponse,
+        EndMetricsSessionRequest,
         ErrorCode,
         ExecutionContextResponse,
         ExecutionManagerRequest,
@@ -37,12 +38,15 @@ use crate::{
         RegisterJobRequest,
         ResourceGroupResponse,
         SessionResponse,
+        StartMetricsSessionRequest,
+        StartMetricsSessionResponse,
         SucceedTaskInstanceRequest,
         SucceedTerminationTaskInstanceRequest,
         TerminationTasksResponse,
         VerifyResourceGroupRequest,
     },
     client::StorageApiClient,
+    metrics::ServerMetricsSessionReport,
     server::StorageApiService,
 };
 
@@ -60,6 +64,8 @@ pub(crate) fn router(service: Arc<StorageApiService>) -> Router {
     Router::new()
         .route("/resource-groups", post(add_resource_group))
         .route("/session", get(get_session))
+        .route("/metrics-sessions", post(start_metrics_session))
+        .route("/metrics-sessions/end", post(end_metrics_session))
         .route("/resource-groups/verify", post(verify_resource_group))
         .route("/jobs/register", post(register_job))
         .route("/jobs/:job_id/start", post(start_job))
@@ -113,6 +119,20 @@ async fn add_resource_group(
     Json(request): Json<AddResourceGroupRequest>,
 ) -> Result<Json<ResourceGroupResponse>, ApiError> {
     service.add_resource_group(request).await.map(Json)
+}
+
+async fn start_metrics_session(
+    State(service): State<Arc<StorageApiService>>,
+    Json(request): Json<StartMetricsSessionRequest>,
+) -> Result<Json<StartMetricsSessionResponse>, ApiError> {
+    Ok(Json(service.start_metrics_session(request)))
+}
+
+async fn end_metrics_session(
+    State(service): State<Arc<StorageApiService>>,
+    Json(request): Json<EndMetricsSessionRequest>,
+) -> Result<Json<ServerMetricsSessionReport>, ApiError> {
+    service.end_metrics_session(request).map(Json)
 }
 
 async fn verify_resource_group(
@@ -348,6 +368,20 @@ where
 impl StorageApiClient for RestStorageApiClient {
     async fn get_session(&self, _request: GetSessionRequest) -> ApiResult<SessionResponse> {
         self.get("session").await
+    }
+
+    async fn start_metrics_session(
+        &self,
+        request: StartMetricsSessionRequest,
+    ) -> ApiResult<StartMetricsSessionResponse> {
+        self.post("metrics-sessions", &request).await
+    }
+
+    async fn end_metrics_session(
+        &self,
+        request: EndMetricsSessionRequest,
+    ) -> ApiResult<ServerMetricsSessionReport> {
+        self.post("metrics-sessions/end", &request).await
     }
 
     async fn add_resource_group(

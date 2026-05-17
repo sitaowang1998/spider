@@ -1,5 +1,16 @@
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
+
 use serde::{Deserialize, Serialize};
 use tabled::{Table, Tabled};
+use uuid::Uuid;
 
 /// Whether a storage request can wait inside the storage service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +117,118 @@ pub struct RequestLatencySummary {
     pub max_us: u128,
 }
 
+/// Server-side metrics summary for one benchmark session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerMetricsSessionReport {
+    pub metrics_session_id: String,
+    pub label: Option<String>,
+    pub elapsed_micros: u128,
+    pub request_latency: Vec<RequestLatencySummary>,
+}
+
+/// In-memory server-side metrics sessions for benchmark runs.
+#[derive(Clone, Default)]
+pub struct ServerMetricsRegistry {
+    inner: Arc<ServerMetricsRegistryInner>,
+}
+
+#[derive(Default)]
+struct ServerMetricsRegistryInner {
+    active_count: AtomicUsize,
+    sessions: Mutex<HashMap<String, ServerMetricsSession>>,
+}
+
+struct ServerMetricsSession {
+    label: Option<String>,
+    started_at: Instant,
+    samples: Vec<RequestLatencySample>,
+}
+
+impl ServerMetricsRegistry {
+    /// Starts collecting request metrics for a benchmark session.
+    ///
+    /// # Returns
+    ///
+    /// A newly generated metrics session ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metrics session lock is poisoned.
+    #[must_use]
+    pub fn start_session(&self, label: Option<String>) -> String {
+        let session_id = Uuid::new_v4().to_string();
+        let session = ServerMetricsSession {
+            label,
+            started_at: Instant::now(),
+            samples: Vec::new(),
+        };
+        self.inner
+            .sessions
+            .lock()
+            .expect("server metrics sessions lock should not be poisoned")
+            .insert(session_id.clone(), session);
+        self.inner.active_count.fetch_add(1, Ordering::Relaxed);
+        session_id
+    }
+
+    /// Stops collecting request metrics for a benchmark session.
+    ///
+    /// # Returns
+    ///
+    /// The finalized session report if the session exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metrics session lock is poisoned.
+    #[must_use]
+    pub fn end_session(&self, session_id: &str) -> Option<ServerMetricsSessionReport> {
+        let session = self
+            .inner
+            .sessions
+            .lock()
+            .expect("server metrics sessions lock should not be poisoned")
+            .remove(session_id)?;
+        self.inner.active_count.fetch_sub(1, Ordering::Relaxed);
+        Some(ServerMetricsSessionReport {
+            metrics_session_id: session_id.to_owned(),
+            label: session.label,
+            elapsed_micros: session.started_at.elapsed().as_micros(),
+            request_latency: summarize_requests(&session.samples),
+        })
+    }
+
+    /// Records one storage request observation into all active sessions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metrics session lock is poisoned.
+    pub fn record_request(
+        &self,
+        operation: &'static str,
+        category: RequestCategory,
+        latency: std::time::Duration,
+        succeeded: bool,
+    ) {
+        if self.inner.active_count.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let sample = if succeeded {
+            RequestLatencySample::success(operation, category, latency)
+        } else {
+            RequestLatencySample::failure(operation, category, latency)
+        };
+        for session in self
+            .inner
+            .sessions
+            .lock()
+            .expect("server metrics sessions lock should not be poisoned")
+            .values_mut()
+        {
+            session.samples.push(sample.clone());
+        }
+    }
+}
+
 /// Aggregates job latency samples into a summary row.
 #[must_use]
 pub fn summarize(samples: &[JobLatencySample]) -> JobLatencySummary {
@@ -185,7 +308,7 @@ fn percentile(sorted_values: &[u128], percentile_value: usize) -> u128 {
 mod tests {
     use std::time::Duration;
 
-    use super::{JobLatencySample, summarize};
+    use super::{JobLatencySample, RequestCategory, ServerMetricsRegistry, summarize};
 
     #[test]
     fn summarize_computes_job_latency_percentiles_and_failures() {
@@ -231,5 +354,58 @@ mod tests {
         assert_eq!("register_job", rows[1].operation);
         assert_eq!(2, rows[1].count);
         assert_eq!(1, rows[1].errors);
+    }
+
+    #[test]
+    fn server_metrics_session_reports_only_samples_inside_session() {
+        let registry = ServerMetricsRegistry::default();
+        registry.record_request(
+            "register_job",
+            RequestCategory::NonBlocking,
+            Duration::from_micros(5),
+            true,
+        );
+
+        let session_id = registry.start_session(Some("flat".to_owned()));
+        registry.record_request(
+            "register_job",
+            RequestCategory::NonBlocking,
+            Duration::from_micros(10),
+            true,
+        );
+        registry.record_request(
+            "register_job",
+            RequestCategory::NonBlocking,
+            Duration::from_micros(30),
+            false,
+        );
+        registry.record_request(
+            "poll_ready_tasks",
+            RequestCategory::Blocking,
+            Duration::from_micros(100),
+            true,
+        );
+
+        let report = registry
+            .end_session(&session_id)
+            .expect("started session should end");
+        assert_eq!(session_id, report.metrics_session_id);
+        assert_eq!(Some("flat".to_owned()), report.label);
+        assert_eq!(2, report.request_latency.len());
+        assert_eq!("blocking", report.request_latency[0].category);
+        assert_eq!("poll_ready_tasks", report.request_latency[0].operation);
+        assert_eq!(1, report.request_latency[0].count);
+        assert_eq!("non_blocking", report.request_latency[1].category);
+        assert_eq!("register_job", report.request_latency[1].operation);
+        assert_eq!(2, report.request_latency[1].count);
+        assert_eq!(1, report.request_latency[1].errors);
+    }
+
+    #[test]
+    fn server_metrics_session_can_only_end_once() {
+        let registry = ServerMetricsRegistry::default();
+        let session_id = registry.start_session(None);
+        assert!(registry.end_session(&session_id).is_some());
+        assert!(registry.end_session(&session_id).is_none());
     }
 }
