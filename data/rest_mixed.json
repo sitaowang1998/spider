@@ -21,101 +21,216 @@
   "job_latency": {
     "count": 10,
     "failed_jobs": 0,
-    "p50_us": 6410316,
-    "p90_us": 10337432,
-    "p99_us": 10337432,
-    "max_us": 10337432
+    "p50_us": 5028141,
+    "p90_us": 7085925,
+    "p99_us": 7085925,
+    "max_us": 7085925
   },
   "request_latency": [
     {
       "category": "blocking",
       "operation": "poll_ready_tasks",
-      "count": 8863,
+      "count": 8091,
       "errors": 0,
-      "p50_us": 12695,
-      "p90_us": 13534,
-      "p99_us": 14330,
-      "max_us": 46895
+      "avg_us": 11237,
+      "p50_us": 11301,
+      "p90_us": 11942,
+      "p99_us": 12403,
+      "max_us": 13066
     },
     {
       "category": "non_blocking",
       "operation": "add_resource_group",
       "count": 1,
       "errors": 0,
-      "p50_us": 27643,
-      "p90_us": 27643,
-      "p99_us": 27643,
-      "max_us": 27643
+      "avg_us": 7147,
+      "p50_us": 7147,
+      "p90_us": 7147,
+      "p99_us": 7147,
+      "max_us": 7147
     },
     {
       "category": "non_blocking",
       "operation": "create_task_instance",
       "count": 10000,
       "errors": 0,
-      "p50_us": 2034,
-      "p90_us": 2931,
-      "p99_us": 3530,
-      "max_us": 85725
+      "avg_us": 356,
+      "p50_us": 341,
+      "p90_us": 484,
+      "p99_us": 663,
+      "max_us": 2042
     },
     {
       "category": "non_blocking",
       "operation": "get_job_state",
-      "count": 4416,
+      "count": 2986,
       "errors": 0,
-      "p50_us": 1574,
-      "p90_us": 2190,
-      "p99_us": 2994,
-      "max_us": 73610
+      "avg_us": 404,
+      "p50_us": 382,
+      "p90_us": 508,
+      "p99_us": 686,
+      "max_us": 9083
     },
     {
       "category": "non_blocking",
       "operation": "get_session",
       "count": 1,
       "errors": 0,
-      "p50_us": 2143,
-      "p90_us": 2143,
-      "p99_us": 2143,
-      "max_us": 2143
+      "avg_us": 294,
+      "p50_us": 294,
+      "p90_us": 294,
+      "p99_us": 294,
+      "max_us": 294
     },
     {
       "category": "non_blocking",
       "operation": "register_execution_manager",
       "count": 8,
       "errors": 0,
-      "p50_us": 60086,
-      "p90_us": 136976,
-      "p99_us": 136976,
-      "max_us": 136976
+      "avg_us": 12968,
+      "p50_us": 12975,
+      "p90_us": 13126,
+      "p99_us": 13126,
+      "max_us": 13126
     },
     {
       "category": "non_blocking",
       "operation": "register_job",
       "count": 10,
       "errors": 0,
-      "p50_us": 238519,
-      "p90_us": 268332,
-      "p99_us": 268332,
-      "max_us": 268332
+      "avg_us": 22442,
+      "p50_us": 24376,
+      "p90_us": 33609,
+      "p99_us": 33609,
+      "max_us": 33609
     },
     {
       "category": "non_blocking",
       "operation": "start_job",
       "count": 10,
       "errors": 0,
-      "p50_us": 39349,
-      "p90_us": 60734,
-      "p99_us": 60734,
-      "max_us": 60734
+      "avg_us": 8270,
+      "p50_us": 7791,
+      "p90_us": 11718,
+      "p99_us": 11718,
+      "max_us": 11718
     },
     {
       "category": "non_blocking",
       "operation": "succeed_task_instance",
       "count": 10000,
       "errors": 0,
-      "p50_us": 1846,
-      "p90_us": 2649,
-      "p99_us": 3230,
-      "max_us": 74915
+      "avg_us": 323,
+      "p50_us": 303,
+      "p90_us": 416,
+      "p99_us": 591,
+      "max_us": 12505
     }
-  ]
+  ],
+  "server_metrics": {
+    "metrics_session_id": "a21720a9-eac6-4acb-be78-2fd72a39c9ed",
+    "label": "Rest_Mixed",
+    "elapsed_micros": 12267162,
+    "request_latency": [
+      {
+        "category": "blocking",
+        "operation": "poll_ready_tasks",
+        "count": 8091,
+        "errors": 0,
+        "avg_us": 10818,
+        "p50_us": 10901,
+        "p90_us": 11483,
+        "p99_us": 11942,
+        "max_us": 12162
+      },
+      {
+        "category": "non_blocking",
+        "operation": "add_resource_group",
+        "count": 1,
+        "errors": 0,
+        "avg_us": 6778,
+        "p50_us": 6778,
+        "p90_us": 6778,
+        "p99_us": 6778,
+        "max_us": 6778
+      },
+      {
+        "category": "non_blocking",
+        "operation": "create_task_instance",
+        "count": 10000,
+        "errors": 0,
+        "avg_us": 8,
+        "p50_us": 8,
+        "p90_us": 11,
+        "p99_us": 20,
+        "max_us": 349
+      },
+      {
+        "category": "non_blocking",
+        "operation": "get_job_state",
+        "count": 2986,
+        "errors": 0,
+        "avg_us": 17,
+        "p50_us": 3,
+        "p90_us": 4,
+        "p99_us": 12,
+        "max_us": 8639
+      },
+      {
+        "category": "non_blocking",
+        "operation": "get_session",
+        "count": 1,
+        "errors": 0,
+        "avg_us": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "max_us": 0
+      },
+      {
+        "category": "non_blocking",
+        "operation": "register_execution_manager",
+        "count": 8,
+        "errors": 0,
+        "avg_us": 12084,
+        "p50_us": 12089,
+        "p90_us": 12344,
+        "p99_us": 12344,
+        "max_us": 12344
+      },
+      {
+        "category": "non_blocking",
+        "operation": "register_job",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 14667,
+        "p50_us": 15044,
+        "p90_us": 18235,
+        "p99_us": 18235,
+        "max_us": 18235
+      },
+      {
+        "category": "non_blocking",
+        "operation": "start_job",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 7915,
+        "p50_us": 7481,
+        "p90_us": 11507,
+        "p99_us": 11507,
+        "max_us": 11507
+      },
+      {
+        "category": "non_blocking",
+        "operation": "succeed_task_instance",
+        "count": 10000,
+        "errors": 0,
+        "avg_us": 15,
+        "p50_us": 6,
+        "p90_us": 11,
+        "p99_us": 20,
+        "max_us": 12203
+      }
+    ]
+  }
 }
