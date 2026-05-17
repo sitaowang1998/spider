@@ -16,6 +16,7 @@ def main() -> int:
     cmd = [
         "cargo",
         "run",
+        "--release",
         "--package",
         "spider-storage-api-bench",
         "--",
