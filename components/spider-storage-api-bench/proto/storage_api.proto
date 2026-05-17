@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package spider.storage_api_bench.v1;
+
+service StorageApi {
+  rpc GetSession(GetSessionRequest) returns (SessionResponse);
+  rpc AddResourceGroup(AddResourceGroupRequest) returns (ResourceGroupResponse);
+  rpc VerifyResourceGroup(VerifyResourceGroupRequest) returns (EmptyResponse);
+  rpc RegisterJob(RegisterJobRequest) returns (JobIdResponse);
+  rpc StartJob(JobIdRequest) returns (EmptyResponse);
+  rpc CancelJob(JobIdRequest) returns (JobStateResponse);
+  rpc GetJobState(JobIdRequest) returns (JobStateResponse);
+  rpc GetJobOutputs(JobIdRequest) returns (JobOutputsResponse);
+  rpc GetJobError(JobIdRequest) returns (JobErrorResponse);
+  rpc PollReadyTasks(PollReadyTasksRequest) returns (ReadyTasksResponse);
+  rpc PollCommitReadyTasks(PollReadyTasksRequest) returns (TerminationTasksResponse);
+  rpc PollCleanupReadyTasks(PollReadyTasksRequest) returns (TerminationTasksResponse);
+  rpc CreateTaskInstance(CreateTaskInstanceRequest) returns (ExecutionContextResponse);
+  rpc SucceedTaskInstance(SucceedTaskInstanceRequest) returns (JobStateResponse);
+  rpc SucceedCommitTaskInstance(SucceedTerminationTaskInstanceRequest) returns (JobStateResponse);
+  rpc SucceedCleanupTaskInstance(SucceedTerminationTaskInstanceRequest) returns (JobStateResponse);
+  rpc FailTaskInstance(FailTaskInstanceRequest) returns (JobStateResponse);
+  rpc RegisterExecutionManager(RegisterExecutionManagerRequest) returns (ExecutionManagerResponse);
+  rpc UpdateExecutionManagerHeartbeat(ExecutionManagerRequest) returns (EmptyResponse);
+}
+
+message EmptyResponse {}
+
+message GetSessionRequest {}
+
+message SessionResponse {
+  uint64 session_id = 1;
+}
+
+message AddResourceGroupRequest {
+  string external_id = 1;
+  bytes password = 2;
+}
+
+message VerifyResourceGroupRequest {
+  string resource_group_id = 1;
+  bytes password = 2;
+}
+
+message ResourceGroupResponse {
+  string resource_group_id = 1;
+}
+
+message RegisterJobRequest {
+  string resource_group_id = 1;
+  string serialized_task_graph = 2;
+  bytes serialized_inputs = 3;
+}
+
+message JobIdRequest {
+  string job_id = 1;
+}
+
+message JobIdResponse {
+  string job_id = 1;
+}
+
+message JobStateResponse {
+  string state = 1;
+}
+
+message JobOutputsResponse {
+  repeated bytes outputs = 1;
+}
+
+message JobErrorResponse {
+  string error = 1;
+}
+
+message PollReadyTasksRequest {
+  uint64 max_tasks = 1;
+  uint64 wait_ms = 2;
+}
+
+message ReadyTaskEntry {
+  string resource_group_id = 1;
+  string job_id = 2;
+  uint64 task_index = 3;
+}
+
+message ReadyTasksResponse {
+  repeated ReadyTaskEntry tasks = 1;
+}
+
+message TerminationTaskEntry {
+  string resource_group_id = 1;
+  string job_id = 2;
+}
+
+message TerminationTasksResponse {
+  repeated TerminationTaskEntry tasks = 1;
+}
+
+message TaskIdDto {
+  oneof kind {
+    uint64 task_index = 1;
+    bool commit = 2;
+    bool cleanup = 3;
+  }
+}
+
+message CreateTaskInstanceRequest {
+  uint64 session_id = 1;
+  string job_id = 2;
+  TaskIdDto task_id = 3;
+  string execution_manager_id = 4;
+}
+
+message ExecutionContextResponse {
+  uint64 task_instance_id = 1;
+  string package = 2;
+  string task_func = 3;
+  uint64 soft_timeout_ms = 4;
+  uint64 hard_timeout_ms = 5;
+  bytes serialized_inputs = 6;
+}
+
+message SucceedTaskInstanceRequest {
+  uint64 session_id = 1;
+  string job_id = 2;
+  uint64 task_instance_id = 3;
+  uint64 task_index = 4;
+  bytes serialized_outputs = 5;
+}
+
+message SucceedTerminationTaskInstanceRequest {
+  uint64 session_id = 1;
+  string job_id = 2;
+  uint64 task_instance_id = 3;
+}
+
+message FailTaskInstanceRequest {
+  uint64 session_id = 1;
+  string job_id = 2;
+  uint64 task_instance_id = 3;
+  TaskIdDto task_id = 4;
+  string error = 5;
+}
+
+message RegisterExecutionManagerRequest {
+  string ip_address = 1;
+}
+
+message ExecutionManagerRequest {
+  string execution_manager_id = 1;
+}
+
+message ExecutionManagerResponse {
+  string execution_manager_id = 1;
+}
