@@ -88,7 +88,6 @@ struct ClientArgs {
 #[derive(Debug, Serialize)]
 struct BenchmarkReport {
     setup: BenchmarkSetup,
-    optimal_baseline_e2e_latency: JobLatencySummary,
     job_latency: JobLatencySummary,
     request_latency: Vec<RequestLatencySummary>,
 }
@@ -115,7 +114,6 @@ struct BenchmarkSetup {
 }
 
 struct WorkloadMeasurements {
-    optimal_baseline: Vec<JobLatencySample>,
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
 }
@@ -174,17 +172,13 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
             run_workload(clients, args.workload, &config).await?
         }
     };
-    let optimal_baseline_e2e_latency = summarize(&measurements.optimal_baseline);
     let job_latency = summarize(&measurements.job_latency);
     let request_latency = summarize_requests(&measurements.request_latency);
     let report = BenchmarkReport {
         setup: BenchmarkSetup::new(args.protocol, target, args.workload, &config),
-        optimal_baseline_e2e_latency,
         job_latency,
         request_latency,
     };
-    println!("optimal_baseline_e2e_latency");
-    println!("{}", render_summary(&report.optimal_baseline_e2e_latency));
     println!("job_e2e_latency");
     println!("{}", render_summary(&report.job_latency));
     println!("storage_request_latency");
@@ -266,8 +260,6 @@ async fn run_workload<ClientType: StorageApiClient>(
         config.benchmark.payload_bytes,
         config.benchmark.flat_percent,
     )?;
-    let optimal_baseline_samples =
-        optimal_baseline_e2e_samples(&jobs, config.benchmark.poll_wait_ms);
     let completed = Arc::new(Mutex::new(HashSet::new()));
     let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
     let mut worker_tasks = spawn_worker_tasks(
@@ -297,7 +289,6 @@ async fn run_workload<ClientType: StorageApiClient>(
     }
     request_latency_samples.append(&mut measurements.request_latency);
     Ok(WorkloadMeasurements {
-        optimal_baseline: optimal_baseline_samples,
         job_latency: measurements.job_latency,
         request_latency: request_latency_samples,
     })
@@ -361,15 +352,11 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
         }));
     }
     let mut measurements = WorkloadMeasurements {
-        optimal_baseline: Vec::new(),
         job_latency: Vec::new(),
         request_latency: Vec::new(),
     };
     while let Some(result) = submit_tasks.join_next().await {
         let mut task_measurements = result??;
-        measurements
-            .optimal_baseline
-            .append(&mut task_measurements.optimal_baseline);
         measurements
             .job_latency
             .append(&mut task_measurements.job_latency);
@@ -384,7 +371,6 @@ async fn run_submit_client<ClientType: StorageApiClient>(
     client: SubmitClient<ClientType>,
 ) -> anyhow::Result<WorkloadMeasurements> {
     let mut measurements = WorkloadMeasurements {
-        optimal_baseline: Vec::new(),
         job_latency: Vec::new(),
         request_latency: Vec::new(),
     };
@@ -540,27 +526,6 @@ where
     result
 }
 
-fn optimal_baseline_e2e_samples(jobs: &[JobPayload], poll_wait_ms: u64) -> Vec<JobLatencySample> {
-    jobs.iter()
-        .map(|job| {
-            let dependency_waves = match job.workload_kind {
-                WorkloadKind::Flat => 1,
-                WorkloadKind::Deep => job.task_count,
-                WorkloadKind::Mixed => {
-                    unreachable!("mixed is expanded before job construction")
-                }
-            };
-            let dependency_waves =
-                u64::try_from(dependency_waves).expect("task count should fit in u64");
-            JobLatencySample::success(Duration::from_millis(
-                poll_wait_ms
-                    .checked_mul(dependency_waves)
-                    .expect("baseline duration should fit in u64 milliseconds"),
-            ))
-        })
-        .collect()
-}
-
 async fn pop_job(job_queue: &Arc<Mutex<VecDeque<JobPayload>>>) -> Option<JobPayload> {
     job_queue.lock().await.pop_front()
 }
@@ -594,14 +559,13 @@ async fn connect_grpc_clients(
 
 #[cfg(test)]
 mod tests {
-    use spider_storage_api_bench::workload::{WorkloadKind, build_deep_job, build_flat_job};
+    use spider_storage_api_bench::workload::WorkloadKind;
 
     use super::{
         BenchConfig,
         BenchmarkSetup,
         ServerProtocol,
         execution_manager_worker_count,
-        optimal_baseline_e2e_samples,
         total_connection_count,
     };
 
@@ -628,16 +592,6 @@ mod tests {
         assert_eq!(value["client_count"], config.benchmark.client_count);
         assert_eq!(value["worker_count"], config.benchmark.worker_count);
         assert!(value.get("database_password").is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn optimal_baseline_uses_dependency_waves_and_poll_wait() -> anyhow::Result<()> {
-        let jobs = vec![build_flat_job(8, 16)?, build_deep_job(8, 16)?];
-        let samples = optimal_baseline_e2e_samples(&jobs, 10);
-        assert_eq!(2, samples.len());
-        assert_eq!(10_000, samples[0].latency_micros);
-        assert_eq!(80_000, samples[1].latency_micros);
         Ok(())
     }
 }

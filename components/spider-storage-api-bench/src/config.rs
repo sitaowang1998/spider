@@ -138,8 +138,8 @@ mod tests {
         let config = BenchConfig::load("config/default.toml".as_ref())?;
         config.benchmark.validate()?;
         assert_eq!(80, config.benchmark.flat_percent);
-        assert_eq!(4, config.benchmark.client_count);
-        assert_eq!(8, config.benchmark.worker_count);
+        assert_eq!(8, config.benchmark.client_count);
+        assert_eq!(16, config.benchmark.worker_count);
         assert_eq!("spider-db", config.database.name);
         Ok(())
     }

@@ -18,14 +18,6 @@
     "database_username": "spider-user",
     "database_max_connections": 32
   },
-  "optimal_baseline_e2e_latency": {
-    "count": 10,
-    "failed_jobs": 0,
-    "p50_us": 10000000,
-    "p90_us": 10000000,
-    "p99_us": 10000000,
-    "max_us": 10000000
-  },
   "job_latency": {
     "count": 10,
     "failed_jobs": 0,
