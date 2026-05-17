@@ -1,0 +1,129 @@
+{
+  "setup": {
+    "protocol": "Grpc",
+    "target": "http://10.1.0.3:50051",
+    "workload": "flat",
+    "flat_percent": 50,
+    "task_count": 1000,
+    "job_count": 10,
+    "payload_bytes": 128,
+    "client_count": 4,
+    "worker_count": 8,
+    "channel_count": 12,
+    "poll_batch": 64,
+    "poll_wait_ms": 10,
+    "database_host": "127.0.0.1",
+    "database_port": 3410,
+    "database_name": "spider-db",
+    "database_username": "spider-user",
+    "database_max_connections": 32
+  },
+  "optimal_baseline_e2e_latency": {
+    "count": 10,
+    "failed_jobs": 0,
+    "p50_us": 10000,
+    "p90_us": 10000,
+    "p99_us": 10000,
+    "max_us": 10000
+  },
+  "job_latency": {
+    "count": 10,
+    "failed_jobs": 0,
+    "p50_us": 2204517,
+    "p90_us": 2334294,
+    "p99_us": 2334294,
+    "max_us": 2334294
+  },
+  "request_latency": [
+    {
+      "category": "blocking",
+      "operation": "poll_ready_tasks",
+      "count": 370,
+      "errors": 0,
+      "p50_us": 12271,
+      "p90_us": 13493,
+      "p99_us": 14425,
+      "max_us": 14808
+    },
+    {
+      "category": "non_blocking",
+      "operation": "add_resource_group",
+      "count": 1,
+      "errors": 0,
+      "p50_us": 8505,
+      "p90_us": 8505,
+      "p99_us": 8505,
+      "max_us": 8505
+    },
+    {
+      "category": "non_blocking",
+      "operation": "create_task_instance",
+      "count": 10000,
+      "errors": 0,
+      "p50_us": 2261,
+      "p90_us": 2721,
+      "p99_us": 3315,
+      "max_us": 5451
+    },
+    {
+      "category": "non_blocking",
+      "operation": "get_job_state",
+      "count": 1489,
+      "errors": 0,
+      "p50_us": 2193,
+      "p90_us": 2623,
+      "p99_us": 3306,
+      "max_us": 42587
+    },
+    {
+      "category": "non_blocking",
+      "operation": "get_session",
+      "count": 1,
+      "errors": 0,
+      "p50_us": 2156,
+      "p90_us": 2156,
+      "p99_us": 2156,
+      "max_us": 2156
+    },
+    {
+      "category": "non_blocking",
+      "operation": "register_execution_manager",
+      "count": 8,
+      "errors": 0,
+      "p50_us": 26436,
+      "p90_us": 26601,
+      "p99_us": 26601,
+      "max_us": 26601
+    },
+    {
+      "category": "non_blocking",
+      "operation": "register_job",
+      "count": 10,
+      "errors": 0,
+      "p50_us": 125401,
+      "p90_us": 262376,
+      "p99_us": 262376,
+      "max_us": 262376
+    },
+    {
+      "category": "non_blocking",
+      "operation": "start_job",
+      "count": 10,
+      "errors": 0,
+      "p50_us": 14569,
+      "p90_us": 77217,
+      "p99_us": 77217,
+      "max_us": 77217
+    },
+    {
+      "category": "non_blocking",
+      "operation": "succeed_task_instance",
+      "count": 10000,
+      "errors": 0,
+      "p50_us": 2210,
+      "p90_us": 2676,
+      "p99_us": 3261,
+      "max_us": 50763
+    }
+  ]
+}
