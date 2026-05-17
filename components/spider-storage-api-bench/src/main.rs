@@ -657,6 +657,7 @@ mod tests {
             operation: "register_job".to_owned(),
             count: 7,
             errors: 1,
+            avg_us: 15,
             p50_us: 10,
             p90_us: 20,
             p99_us: 30,
@@ -690,6 +691,7 @@ mod tests {
         assert_eq!("session-1", value["server_metrics"]["metrics_session_id"]);
         assert_eq!("Grpc_Flat", value["server_metrics"]["label"]);
         assert_eq!(1234, value["server_metrics"]["elapsed_micros"]);
+        assert_eq!(15, value["server_metrics"]["request_latency"][0]["avg_us"]);
         assert_eq!(
             "register_job",
             value["server_metrics"]["request_latency"][0]["operation"]
@@ -705,6 +707,7 @@ mod tests {
             operation: "poll_ready_tasks".to_owned(),
             count: 3,
             errors: 0,
+            avg_us: 12,
             p50_us: 11,
             p90_us: 22,
             p99_us: 33,
@@ -712,6 +715,7 @@ mod tests {
         }]);
         assert!(table.contains("poll_ready_tasks"));
         assert!(table.contains("blocking"));
+        assert!(table.contains("avg_us"));
         assert!(table.contains("p99_us"));
     }
 }

@@ -111,6 +111,7 @@ pub struct RequestLatencySummary {
     pub operation: String,
     pub count: usize,
     pub errors: usize,
+    pub avg_us: u128,
     pub p50_us: u128,
     pub p90_us: u128,
     pub p99_us: u128,
@@ -275,6 +276,7 @@ pub fn summarize_requests(samples: &[RequestLatencySample]) -> Vec<RequestLatenc
                             && !sample.succeeded
                     })
                     .count(),
+                avg_us: average(&latencies),
                 p50_us: percentile(&latencies, 50),
                 p90_us: percentile(&latencies, 90),
                 p99_us: percentile(&latencies, 99),
@@ -302,6 +304,13 @@ fn percentile(sorted_values: &[u128], percentile_value: usize) -> u128 {
     }
     let index = ((sorted_values.len() - 1) * percentile_value).div_ceil(100);
     sorted_values[index]
+}
+
+fn average(values: &[u128]) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.iter().sum::<u128>() / values.len() as u128
 }
 
 #[cfg(test)]
@@ -354,6 +363,7 @@ mod tests {
         assert_eq!("register_job", rows[1].operation);
         assert_eq!(2, rows[1].count);
         assert_eq!(1, rows[1].errors);
+        assert_eq!(15, rows[1].avg_us);
     }
 
     #[test]

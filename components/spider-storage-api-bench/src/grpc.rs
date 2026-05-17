@@ -698,6 +698,8 @@ impl TryFrom<RequestLatencySummary> for proto::RequestLatencySummary {
                 .map_err(|_| Status::internal("count overflows u64"))?,
             errors: u64::try_from(summary.errors)
                 .map_err(|_| Status::internal("errors overflows u64"))?,
+            avg_us: u64::try_from(summary.avg_us)
+                .map_err(|_| Status::internal("avg_us overflows u64"))?,
             p50_us: u64::try_from(summary.p50_us)
                 .map_err(|_| Status::internal("p50_us overflows u64"))?,
             p90_us: u64::try_from(summary.p90_us)
@@ -719,6 +721,7 @@ impl From<proto::RequestLatencySummary> for RequestLatencySummary {
                 .expect("server request count should fit in usize"),
             errors: usize::try_from(summary.errors)
                 .expect("server request errors should fit in usize"),
+            avg_us: u128::from(summary.avg_us),
             p50_us: u128::from(summary.p50_us),
             p90_us: u128::from(summary.p90_us),
             p99_us: u128::from(summary.p99_us),
