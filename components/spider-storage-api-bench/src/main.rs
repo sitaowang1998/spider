@@ -684,6 +684,7 @@ mod tests {
                 label: Some("Grpc_Flat".to_owned()),
                 elapsed_micros: 1234,
                 request_latency: vec![server_row],
+                low_count_request_latency: Vec::new(),
             },
         };
 

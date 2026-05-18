@@ -38,7 +38,7 @@ use crate::{
         VerifyResourceGroupRequest,
     },
     client::StorageApiClient,
-    metrics::{RequestLatencySummary, ServerMetricsSessionReport},
+    metrics::{RequestLatencySample, RequestLatencySummary, ServerMetricsSessionReport},
     server::StorageApiService,
 };
 
@@ -664,6 +664,11 @@ impl TryFrom<ServerMetricsSessionReport> for proto::ServerMetricsSessionReport {
                 .into_iter()
                 .map(proto::RequestLatencySummary::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
+            low_count_request_latency: report
+                .low_count_request_latency
+                .into_iter()
+                .map(proto::RequestLatencySample::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -683,6 +688,36 @@ impl From<proto::ServerMetricsSessionReport> for ServerMetricsSessionReport {
                 .into_iter()
                 .map(RequestLatencySummary::from)
                 .collect(),
+            low_count_request_latency: report
+                .low_count_request_latency
+                .into_iter()
+                .map(RequestLatencySample::from)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<RequestLatencySample> for proto::RequestLatencySample {
+    type Error = Status;
+
+    fn try_from(sample: RequestLatencySample) -> Result<Self, Self::Error> {
+        Ok(Self {
+            category: sample.category,
+            operation: sample.operation,
+            latency_micros: u64::try_from(sample.latency_micros)
+                .map_err(|_| Status::internal("latency_micros overflows u64"))?,
+            succeeded: sample.succeeded,
+        })
+    }
+}
+
+impl From<proto::RequestLatencySample> for RequestLatencySample {
+    fn from(sample: proto::RequestLatencySample) -> Self {
+        Self {
+            category: sample.category,
+            operation: sample.operation,
+            latency_micros: u128::from(sample.latency_micros),
+            succeeded: sample.succeeded,
         }
     }
 }

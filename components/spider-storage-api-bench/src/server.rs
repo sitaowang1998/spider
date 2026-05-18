@@ -59,11 +59,13 @@ pub struct StorageApiService {
 
 impl StorageApiService {
     #[must_use]
-    pub fn new(state: StorageServiceState) -> Self {
-        Self {
-            state,
-            metrics: ServerMetricsRegistry::default(),
-        }
+    pub fn new(state: &StorageServiceState) -> Self {
+        let metrics = ServerMetricsRegistry::default();
+        let phase_metrics = metrics.clone();
+        let state = state.with_phase_timing_sink(Arc::new(move |operation, latency, succeeded| {
+            phase_metrics.record_request(operation, RequestCategory::Phase, latency, succeeded);
+        }));
+        Self { state, metrics }
     }
 
     pub(crate) fn get_session(&self, _request: GetSessionRequest) -> SessionResponse {
@@ -465,7 +467,7 @@ pub async fn run_server(
 ) -> anyhow::Result<()> {
     let runtime = create_server_runtime(&config.database_config()).await?;
     let state = runtime.service_state();
-    let service = Arc::new(StorageApiService::new(state));
+    let service = Arc::new(StorageApiService::new(&state));
     let bind = bind_override.unwrap_or(match protocol {
         ServerProtocol::Rest => config.server.rest_bind,
         ServerProtocol::Grpc => config.server.grpc_bind,

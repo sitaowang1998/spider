@@ -1,4 +1,8 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use spider_core::{
     job::JobState,
@@ -32,6 +36,9 @@ use crate::{
     task_instance_pool::TaskInstancePoolConnector,
 };
 
+/// Callback used to record phase-level storage service timings.
+pub type PhaseTimingSink = Arc<dyn Fn(&'static str, Duration, bool) + Send + Sync>;
+
 /// Per-request service state providing access to the storage layer.
 ///
 /// Internally wraps a single [`Arc`] around [`ServiceStateInner`] so that cloning is cheap (one
@@ -51,6 +58,7 @@ pub struct ServiceState<
     inner: Arc<
         ServiceStateInner<ReadyQueueSenderType, DbConnectorType, TaskInstancePoolConnectorType>,
     >,
+    phase_timing_sink: Option<PhaseTimingSink>,
 }
 
 impl<
@@ -81,6 +89,20 @@ impl<
                 ready_queue_receiver,
                 task_instance_pool_connector,
             }),
+            phase_timing_sink: None,
+        }
+    }
+
+    /// Creates a clone of this service state with phase-level timing enabled.
+    ///
+    /// # Returns
+    ///
+    /// A [`ServiceState`] sharing the same storage services and using `sink` for phase timings.
+    #[must_use]
+    pub fn with_phase_timing_sink(&self, sink: PhaseTimingSink) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            phase_timing_sink: Some(sink),
         }
     }
 
@@ -114,27 +136,38 @@ impl<
         serialized_task_graph: String,
         serialized_inputs: Vec<u8>,
     ) -> Result<JobId, StorageServerError> {
+        let started_at = Instant::now();
         let task_graph =
             TaskGraph::from_json(&serialized_task_graph).map_err(StorageServerError::Task)?;
+        self.record_phase("register_job.parse_graph", started_at, true);
+
+        let started_at = Instant::now();
         let inputs = unframe(&serialized_inputs)
             .map_err(|e| StorageServerError::Tdl(TdlError::DeserializationError(e.to_string())))?
             .into_iter()
             .map(TaskInput::ValuePayload)
             .collect();
+        self.record_phase("register_job.unframe_inputs", started_at, true);
+
+        let started_at = Instant::now();
         let job_submission =
             ValidatedJobSubmission::create(task_graph, inputs).map_err(CacheError::from)?;
+        self.record_phase("register_job.validate", started_at, true);
 
+        let started_at = Instant::now();
         let job_id = self
             .inner
             .db
             .register(resource_group_id, &job_submission)
             .await?;
+        self.record_phase("register_job.db_register", started_at, true);
         tracing::info!(
             job_id = ? job_id,
             rg_id = ? resource_group_id,
             "Job registered in DB."
         );
 
+        let started_at = Instant::now();
         let jcb = SharedJobControlBlock::create(
             job_id,
             resource_group_id,
@@ -144,8 +177,11 @@ impl<
             self.inner.task_instance_pool_connector.clone(),
         )
         .await?;
+        self.record_phase("register_job.create_jcb", started_at, true);
 
+        let started_at = Instant::now();
         self.inner.job_cache.insert(jcb).await?;
+        self.record_phase("register_job.cache_insert", started_at, true);
         tracing::info!(
             job_id = ? job_id,
             rg_id = ? resource_group_id,
@@ -164,13 +200,18 @@ impl<
     /// * [`StorageServerError::JobNotFound`] if the job is not in the cache.
     /// * Forwards [`SharedJobControlBlock::start`]'s return values on failure.
     pub async fn start_job(&self, job_id: JobId) -> Result<(), StorageServerError> {
+        let started_at = Instant::now();
         let jcb = self
             .inner
             .job_cache
             .get(job_id)
             .await
             .ok_or(StorageServerError::JobNotFound(job_id))?;
+        self.record_phase("start_job.cache_get", started_at, true);
+
+        let started_at = Instant::now();
         jcb.start().await?;
+        self.record_phase("start_job.jcb_start", started_at, true);
         tracing::info!(
             job_id = ? job_id,
             "Job started.",
@@ -490,7 +531,9 @@ impl<
         external_id: String,
         password: Vec<u8>,
     ) -> Result<ResourceGroupId, StorageServerError> {
+        let started_at = Instant::now();
         let rg_id = self.inner.db.add(external_id, password).await?;
+        self.record_phase("add_resource_group.db_add", started_at, true);
         tracing::info!(
             rg_id = ? rg_id,
             "Resource group added.",
@@ -603,13 +646,21 @@ impl<
         &self,
         ip_address: IpAddr,
     ) -> Result<ExecutionManagerId, StorageServerError> {
+        let started_at = Instant::now();
         let em_id = self.inner.db.register_execution_manager(ip_address).await?;
+        self.record_phase("register_execution_manager.db_register", started_at, true);
         tracing::info!(
             em_id = ? em_id,
             ip = ? ip_address,
             "Execution manager registered.",
         );
         Ok(em_id)
+    }
+
+    fn record_phase(&self, operation: &'static str, started_at: Instant, succeeded: bool) {
+        if let Some(sink) = &self.phase_timing_sink {
+            sink(operation, started_at.elapsed(), succeeded);
+        }
     }
 
     /// Updates the heartbeat of an execution manager.

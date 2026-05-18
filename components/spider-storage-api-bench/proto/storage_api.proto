@@ -63,6 +63,14 @@ message ServerMetricsSessionReport {
   string label = 2;
   uint64 elapsed_micros = 3;
   repeated RequestLatencySummary request_latency = 4;
+  repeated RequestLatencySample low_count_request_latency = 5;
+}
+
+message RequestLatencySample {
+  string category = 1;
+  string operation = 2;
+  uint64 latency_micros = 3;
+  bool succeeded = 4;
 }
 
 message AddResourceGroupRequest {

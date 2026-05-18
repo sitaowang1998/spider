@@ -17,6 +17,7 @@ use uuid::Uuid;
 pub enum RequestCategory {
     NonBlocking,
     Blocking,
+    Phase,
 }
 
 impl RequestCategory {
@@ -25,6 +26,7 @@ impl RequestCategory {
         match self {
             Self::NonBlocking => "non_blocking",
             Self::Blocking => "blocking",
+            Self::Phase => "phase",
         }
     }
 }
@@ -32,36 +34,36 @@ impl RequestCategory {
 /// Completed latency observation for one storage request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequestLatencySample {
-    pub operation: &'static str,
-    pub category: &'static str,
+    pub operation: String,
+    pub category: String,
     pub latency_micros: u128,
     pub succeeded: bool,
 }
 
 impl RequestLatencySample {
     #[must_use]
-    pub const fn success(
+    pub fn success(
         operation: &'static str,
         category: RequestCategory,
         latency: std::time::Duration,
     ) -> Self {
         Self {
-            operation,
-            category: category.as_str(),
+            operation: operation.to_owned(),
+            category: category.as_str().to_owned(),
             latency_micros: latency.as_micros(),
             succeeded: true,
         }
     }
 
     #[must_use]
-    pub const fn failure(
+    pub fn failure(
         operation: &'static str,
         category: RequestCategory,
         latency: std::time::Duration,
     ) -> Self {
         Self {
-            operation,
-            category: category.as_str(),
+            operation: operation.to_owned(),
+            category: category.as_str().to_owned(),
             latency_micros: latency.as_micros(),
             succeeded: false,
         }
@@ -125,6 +127,7 @@ pub struct ServerMetricsSessionReport {
     pub label: Option<String>,
     pub elapsed_micros: u128,
     pub request_latency: Vec<RequestLatencySummary>,
+    pub low_count_request_latency: Vec<RequestLatencySample>,
 }
 
 /// In-memory server-side metrics sessions for benchmark runs.
@@ -195,6 +198,7 @@ impl ServerMetricsRegistry {
             label: session.label,
             elapsed_micros: session.started_at.elapsed().as_micros(),
             request_latency: summarize_requests(&session.samples),
+            low_count_request_latency: low_count_samples(&session.samples),
         })
     }
 
@@ -230,6 +234,26 @@ impl ServerMetricsRegistry {
     }
 }
 
+fn low_count_samples(samples: &[RequestLatencySample]) -> Vec<RequestLatencySample> {
+    let mut counts: HashMap<(&str, &str), usize> = HashMap::new();
+    for sample in samples {
+        *counts
+            .entry((sample.category.as_str(), sample.operation.as_str()))
+            .or_default() += 1;
+    }
+    samples
+        .iter()
+        .filter(|sample| {
+            counts
+                .get(&(sample.category.as_str(), sample.operation.as_str()))
+                .is_some_and(|count| *count <= LOW_COUNT_SAMPLE_LIMIT)
+        })
+        .cloned()
+        .collect()
+}
+
+const LOW_COUNT_SAMPLE_LIMIT: usize = 100;
+
 /// Aggregates job latency samples into a summary row.
 #[must_use]
 pub fn summarize(samples: &[JobLatencySample]) -> JobLatencySummary {
@@ -250,7 +274,7 @@ pub fn summarize(samples: &[JobLatencySample]) -> JobLatencySummary {
 pub fn summarize_requests(samples: &[RequestLatencySample]) -> Vec<RequestLatencySummary> {
     let mut groups: Vec<(&str, &str)> = samples
         .iter()
-        .map(|sample| (sample.category, sample.operation))
+        .map(|sample| (sample.category.as_str(), sample.operation.as_str()))
         .collect();
     groups.sort_unstable();
     groups.dedup();
@@ -402,6 +426,7 @@ mod tests {
         assert_eq!(session_id, report.metrics_session_id);
         assert_eq!(Some("flat".to_owned()), report.label);
         assert_eq!(2, report.request_latency.len());
+        assert_eq!(3, report.low_count_request_latency.len());
         assert_eq!("blocking", report.request_latency[0].category);
         assert_eq!("poll_ready_tasks", report.request_latency[0].operation);
         assert_eq!(1, report.request_latency[0].count);
