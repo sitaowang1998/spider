@@ -1,0 +1,1196 @@
+{
+  "setup": {
+    "protocol": "Rest",
+    "target": "http://127.0.0.1:8091",
+    "workload": "mixed",
+    "flat_percent": 80,
+    "task_count": 1000,
+    "job_count": 10,
+    "payload_bytes": 128,
+    "client_count": 8,
+    "worker_count": 16,
+    "channel_count": 24,
+    "poll_batch": 64,
+    "poll_wait_ms": 10,
+    "database_host": "127.0.0.1",
+    "database_port": 3341,
+    "database_name": "spider-db",
+    "database_username": "spider-user",
+    "database_max_connections": 32
+  },
+  "job_latency": {
+    "count": 10,
+    "failed_jobs": 0,
+    "p50_us": 186953,
+    "p90_us": 6343468,
+    "p99_us": 6343468,
+    "max_us": 6343468
+  },
+  "request_latency": [
+    {
+      "category": "blocking",
+      "operation": "poll_ready_tasks",
+      "count": 8727,
+      "errors": 0,
+      "avg_us": 11320,
+      "p50_us": 11433,
+      "p90_us": 12088,
+      "p99_us": 12506,
+      "max_us": 13225
+    },
+    {
+      "category": "non_blocking",
+      "operation": "add_resource_group",
+      "count": 1,
+      "errors": 0,
+      "avg_us": 6999,
+      "p50_us": 6999,
+      "p90_us": 6999,
+      "p99_us": 6999,
+      "max_us": 6999
+    },
+    {
+      "category": "non_blocking",
+      "operation": "create_task_instance",
+      "count": 10000,
+      "errors": 0,
+      "avg_us": 268,
+      "p50_us": 233,
+      "p90_us": 398,
+      "p99_us": 690,
+      "max_us": 2330
+    },
+    {
+      "category": "non_blocking",
+      "operation": "get_job_state",
+      "count": 1237,
+      "errors": 0,
+      "avg_us": 351,
+      "p50_us": 322,
+      "p90_us": 484,
+      "p99_us": 762,
+      "max_us": 9908
+    },
+    {
+      "category": "non_blocking",
+      "operation": "get_session",
+      "count": 1,
+      "errors": 0,
+      "avg_us": 334,
+      "p50_us": 334,
+      "p90_us": 334,
+      "p99_us": 334,
+      "max_us": 334
+    },
+    {
+      "category": "non_blocking",
+      "operation": "register_execution_manager",
+      "count": 16,
+      "errors": 0,
+      "avg_us": 10709,
+      "p50_us": 10944,
+      "p90_us": 11294,
+      "p99_us": 11301,
+      "max_us": 11301
+    },
+    {
+      "category": "non_blocking",
+      "operation": "register_job",
+      "count": 10,
+      "errors": 0,
+      "avg_us": 28411,
+      "p50_us": 27448,
+      "p90_us": 46150,
+      "p99_us": 46150,
+      "max_us": 46150
+    },
+    {
+      "category": "non_blocking",
+      "operation": "start_job",
+      "count": 10,
+      "errors": 0,
+      "avg_us": 9280,
+      "p50_us": 8740,
+      "p90_us": 11842,
+      "p99_us": 11842,
+      "max_us": 11842
+    },
+    {
+      "category": "non_blocking",
+      "operation": "succeed_task_instance",
+      "count": 10000,
+      "errors": 0,
+      "avg_us": 247,
+      "p50_us": 213,
+      "p90_us": 350,
+      "p99_us": 624,
+      "max_us": 11651
+    }
+  ],
+  "server_metrics": {
+    "metrics_session_id": "50a65b9e-c63b-4edf-8872-632a75a1a4e6",
+    "label": "Rest_Mixed",
+    "elapsed_micros": 6540754,
+    "request_latency": [
+      {
+        "category": "blocking",
+        "operation": "poll_ready_tasks",
+        "count": 8727,
+        "errors": 0,
+        "avg_us": 10883,
+        "p50_us": 11000,
+        "p90_us": 11612,
+        "p99_us": 11956,
+        "max_us": 12807
+      },
+      {
+        "category": "non_blocking",
+        "operation": "add_resource_group",
+        "count": 1,
+        "errors": 0,
+        "avg_us": 6724,
+        "p50_us": 6724,
+        "p90_us": 6724,
+        "p99_us": 6724,
+        "max_us": 6724
+      },
+      {
+        "category": "non_blocking",
+        "operation": "create_task_instance",
+        "count": 10000,
+        "errors": 0,
+        "avg_us": 10,
+        "p50_us": 6,
+        "p90_us": 12,
+        "p99_us": 32,
+        "max_us": 1933
+      },
+      {
+        "category": "non_blocking",
+        "operation": "get_job_state",
+        "count": 1237,
+        "errors": 0,
+        "avg_us": 19,
+        "p50_us": 2,
+        "p90_us": 3,
+        "p99_us": 12,
+        "max_us": 9705
+      },
+      {
+        "category": "non_blocking",
+        "operation": "get_session",
+        "count": 1,
+        "errors": 0,
+        "avg_us": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "max_us": 0
+      },
+      {
+        "category": "non_blocking",
+        "operation": "register_execution_manager",
+        "count": 16,
+        "errors": 0,
+        "avg_us": 9522,
+        "p50_us": 9795,
+        "p90_us": 10004,
+        "p99_us": 10396,
+        "max_us": 10396
+      },
+      {
+        "category": "non_blocking",
+        "operation": "register_job",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 15572,
+        "p50_us": 14389,
+        "p90_us": 24578,
+        "p99_us": 24578,
+        "max_us": 24578
+      },
+      {
+        "category": "non_blocking",
+        "operation": "start_job",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 8991,
+        "p50_us": 8452,
+        "p90_us": 11588,
+        "p99_us": 11588,
+        "max_us": 11588
+      },
+      {
+        "category": "non_blocking",
+        "operation": "succeed_task_instance",
+        "count": 10000,
+        "errors": 0,
+        "avg_us": 12,
+        "p50_us": 3,
+        "p90_us": 10,
+        "p99_us": 23,
+        "max_us": 11283
+      },
+      {
+        "category": "phase",
+        "operation": "add_resource_group.db_add",
+        "count": 1,
+        "errors": 0,
+        "avg_us": 6720,
+        "p50_us": 6720,
+        "p90_us": 6720,
+        "p99_us": 6720,
+        "max_us": 6720
+      },
+      {
+        "category": "phase",
+        "operation": "register_execution_manager.db_register",
+        "count": 16,
+        "errors": 0,
+        "avg_us": 9519,
+        "p50_us": 9794,
+        "p90_us": 10002,
+        "p99_us": 10394,
+        "max_us": 10394
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.cache_insert",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 0,
+        "p50_us": 1,
+        "p90_us": 4,
+        "p99_us": 4,
+        "max_us": 4
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.create_jcb",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 2879,
+        "p50_us": 2783,
+        "p90_us": 4355,
+        "p99_us": 4355,
+        "max_us": 4355
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.db_register",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 9510,
+        "p50_us": 9364,
+        "p90_us": 15328,
+        "p99_us": 15328,
+        "max_us": 15328
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.parse_graph",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 2979,
+        "p50_us": 2697,
+        "p90_us": 5354,
+        "p99_us": 5354,
+        "max_us": 5354
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.unframe_inputs",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 100,
+        "p50_us": 107,
+        "p90_us": 217,
+        "p99_us": 217,
+        "max_us": 217
+      },
+      {
+        "category": "phase",
+        "operation": "register_job.validate",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 70,
+        "p50_us": 62,
+        "p90_us": 143,
+        "p99_us": 143,
+        "max_us": 143
+      },
+      {
+        "category": "phase",
+        "operation": "start_job.cache_get",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 0,
+        "p50_us": 1,
+        "p90_us": 1,
+        "p99_us": 1,
+        "max_us": 1
+      },
+      {
+        "category": "phase",
+        "operation": "start_job.jcb_start",
+        "count": 10,
+        "errors": 0,
+        "avg_us": 8987,
+        "p50_us": 8448,
+        "p90_us": 11585,
+        "p99_us": 11585,
+        "max_us": 11585
+      }
+    ],
+    "low_count_request_latency": [
+      {
+        "operation": "get_session",
+        "category": "non_blocking",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "add_resource_group.db_add",
+        "category": "phase",
+        "latency_micros": 6720,
+        "succeeded": true
+      },
+      {
+        "operation": "add_resource_group",
+        "category": "non_blocking",
+        "latency_micros": 6724,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 6041,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 6044,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 10394,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 10396,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9600,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9602,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9096,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9098,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9841,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9845,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9387,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9389,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9951,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9952,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9725,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9730,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9826,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9828,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9451,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9453,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9738,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9739,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9706,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9710,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9889,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9891,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 10002,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 10004,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9794,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9795,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager.db_register",
+        "category": "phase",
+        "latency_micros": 9874,
+        "succeeded": true
+      },
+      {
+        "operation": "register_execution_manager",
+        "category": "non_blocking",
+        "latency_micros": 9878,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 2180,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 81,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 52,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 1989,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 119,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 138,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 1854,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 62,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 50,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 2483,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 77,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 49,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 2697,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 107,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 62,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 7860,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 3088,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 132,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 69,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 1611,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 11799,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 9014,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 6582,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 9762,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 9364,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 2209,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 13697,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 2367,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 14389,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 4998,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 217,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 143,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 3912,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 15553,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 4355,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 13817,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 7198,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 7203,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 5354,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 206,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 136,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 13560,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 8199,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 8203,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 8448,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 8452,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 3268,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 20139,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 10757,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 10761,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 11497,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 11503,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 11040,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 15328,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 2512,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 19264,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 3872,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 24578,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 10274,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 10278,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 7373,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 7378,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 11585,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 11588,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 2301,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 3,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 7001,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 2783,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 4,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 12108,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 1,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 8074,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 8079,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.parse_graph",
+        "category": "phase",
+        "latency_micros": 2854,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.unframe_inputs",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.validate",
+        "category": "phase",
+        "latency_micros": 5,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.db_register",
+        "category": "phase",
+        "latency_micros": 5595,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.create_jcb",
+        "category": "phase",
+        "latency_micros": 1903,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job.cache_insert",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "register_job",
+        "category": "non_blocking",
+        "latency_micros": 10381,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.cache_get",
+        "category": "phase",
+        "latency_micros": 0,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job.jcb_start",
+        "category": "phase",
+        "latency_micros": 6470,
+        "succeeded": true
+      },
+      {
+        "operation": "start_job",
+        "category": "non_blocking",
+        "latency_micros": 6474,
+        "succeeded": true
+      }
+    ],
+    "request_sizes": [
+      {
+        "operation": "register_job.job_inputs_compressed_bytes",
+        "count": 10,
+        "avg_bytes": 48,
+        "p50_bytes": 52,
+        "p99_bytes": 52,
+        "max_bytes": 52,
+        "total_bytes": 484
+      },
+      {
+        "operation": "register_job.job_inputs_uncompressed_bytes",
+        "count": 10,
+        "avg_bytes": 116031,
+        "p50_bytes": 145003,
+        "p99_bytes": 145003,
+        "max_bytes": 145003,
+        "total_bytes": 1160316
+      },
+      {
+        "operation": "register_job.task_graph_compressed_bytes",
+        "count": 10,
+        "avg_bytes": 513,
+        "p50_bytes": 186,
+        "p99_bytes": 1823,
+        "max_bytes": 1823,
+        "total_bytes": 5134
+      },
+      {
+        "operation": "register_job.task_graph_uncompressed_bytes",
+        "count": 10,
+        "avg_bytes": 167447,
+        "p50_bytes": 162075,
+        "p99_bytes": 188938,
+        "max_bytes": 188938,
+        "total_bytes": 1674476
+      }
+    ]
+  }
+}

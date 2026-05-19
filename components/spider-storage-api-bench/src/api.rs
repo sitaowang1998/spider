@@ -1,16 +1,87 @@
-use std::{net::IpAddr, str::FromStr, time::Duration};
+use std::{fmt::Display, net::IpAddr, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use spider_core::{
     job::JobState,
     task::{TaskIndex, TdlContext, TimeoutPolicy},
     types::{
-        id::{ExecutionManagerId, Id, JobId, ResourceGroupId, TaskInstanceId},
+        id::{ExecutionManagerId, JobId, ResourceGroupId, TaskInstanceId},
         io::ExecutionContext,
     },
 };
 use spider_storage::{cache::TaskId, ready_queue::ReadyQueueEntry, state::StorageServerError};
-use uuid::Uuid;
+
+/// Serde adapters that JSON-encode byte payloads as base64 strings.
+///
+/// Default `serde_json` encodes `Vec<u8>` as a JSON array of decimal numbers (`[123, 45, ...]`),
+/// expanding each byte to roughly 3.5 characters. Base64 expands each byte to 4/3 ≈ 1.33 — about
+/// 2.6× smaller for large payloads — and keeps each blob as a single JSON string. The gRPC
+/// transport bypasses serde entirely (it uses hand-written proto converters in `grpc.rs`), so
+/// these adapters only affect the REST wire format.
+mod base64_serde {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub mod bytes {
+        use super::{Deserialize, Deserializer, Engine, Error, STANDARD, Serializer};
+
+        pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(&STANDARD.encode(bytes))
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Vec<u8>, D::Error> {
+            let encoded = String::deserialize(deserializer)?;
+            STANDARD
+                .decode(encoded.as_bytes())
+                .map_err(D::Error::custom)
+        }
+    }
+
+    pub mod vec_bytes {
+        use serde::{de::SeqAccess, ser::SerializeSeq};
+
+        use super::{Deserializer, Engine, Error, STANDARD, Serializer};
+
+        pub fn serialize<S: Serializer>(
+            value: &[Vec<u8>],
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            let mut seq = serializer.serialize_seq(Some(value.len()))?;
+            for bytes in value {
+                seq.serialize_element(&STANDARD.encode(bytes))?;
+            }
+            seq.end()
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Vec<Vec<u8>>, D::Error> {
+            struct Visitor;
+            impl<'de> serde::de::Visitor<'de> for Visitor {
+                type Value = Vec<Vec<u8>>;
+
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("a sequence of base64-encoded byte strings")
+                }
+
+                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                    let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                    while let Some(encoded) = seq.next_element::<String>()? {
+                        out.push(
+                            STANDARD
+                                .decode(encoded.as_bytes())
+                                .map_err(A::Error::custom)?,
+                        );
+                    }
+                    Ok(out)
+                }
+            }
+            deserializer.deserialize_seq(Visitor)
+        }
+    }
+}
 
 /// Result type used by transport-neutral API helpers.
 pub type ApiResult<ResponseType> = Result<ResponseType, ApiError>;
@@ -128,12 +199,14 @@ pub struct EndMetricsSessionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AddResourceGroupRequest {
     pub external_id: String,
+    #[serde(with = "base64_serde::bytes")]
     pub password: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifyResourceGroupRequest {
     pub resource_group_id: String,
+    #[serde(with = "base64_serde::bytes")]
     pub password: Vec<u8>,
 }
 
@@ -146,6 +219,7 @@ pub struct ResourceGroupResponse {
 pub struct RegisterJobRequest {
     pub resource_group_id: String,
     pub serialized_task_graph: String,
+    #[serde(with = "base64_serde::bytes")]
     pub serialized_inputs: Vec<u8>,
 }
 
@@ -166,6 +240,7 @@ pub struct JobStateResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JobOutputsResponse {
+    #[serde(with = "base64_serde::vec_bytes")]
     pub outputs: Vec<Vec<u8>>,
 }
 
@@ -270,6 +345,7 @@ pub struct ExecutionContextResponse {
     pub task_instance_id: TaskInstanceId,
     pub tdl_context: TdlContext,
     pub timeout_policy: TimeoutPolicy,
+    #[serde(with = "base64_serde::bytes")]
     pub serialized_inputs: Vec<u8>,
 }
 
@@ -290,6 +366,7 @@ pub struct SucceedTaskInstanceRequest {
     pub job_id: String,
     pub task_instance_id: TaskInstanceId,
     pub task_index: TaskIndex,
+    #[serde(with = "base64_serde::bytes")]
     pub serialized_outputs: Vec<u8>,
 }
 
@@ -325,10 +402,8 @@ pub struct ExecutionManagerResponse {
 }
 
 #[must_use]
-pub fn format_id<TypeMarker>(id: &Id<TypeMarker>) -> String
-where
-    TypeMarker: std::fmt::Debug + PartialEq + Eq, {
-    id.as_uuid_ref().to_string()
+pub fn format_id<IdType: Display>(id: &IdType) -> String {
+    id.to_string()
 }
 
 pub(crate) fn parse_resource_group_id(value: &str) -> ApiResult<ResourceGroupId> {
@@ -343,12 +418,11 @@ pub(crate) fn parse_execution_manager_id(value: &str) -> ApiResult<ExecutionMana
     parse_id(value)
 }
 
-fn parse_id<TypeMarker>(value: &str) -> ApiResult<Id<TypeMarker>>
+fn parse_id<IdType>(value: &str) -> ApiResult<IdType>
 where
-    TypeMarker: std::fmt::Debug + PartialEq + Eq, {
-    Uuid::from_str(value)
-        .map(Id::from)
-        .map_err(|e| ApiError::bad_request(format!("invalid UUID `{value}`: {e}")))
+    IdType: FromStr,
+    IdType::Err: Display, {
+    IdType::from_str(value).map_err(|e| ApiError::bad_request(format!("invalid id `{value}`: {e}")))
 }
 
 #[must_use]
