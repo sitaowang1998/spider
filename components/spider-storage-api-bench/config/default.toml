@@ -24,3 +24,11 @@ warmup_sec = 5
 duration_sec = 30
 flat_percent = 80
 output_dir = "data/"
+
+[distributed]
+agent_timeout_sec = 1800
+poll_interval_ms = 1000
+
+[[distributed.agents]]
+id = "client-10-1-0-7"
+url = "http://10.1.0.7:19091"

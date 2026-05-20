@@ -146,7 +146,9 @@ def load_results(
         data = json.loads(path.read_text(encoding="utf-8"))
         if not {"setup", "request_latency", "server_metrics", "job_latency"} <= data.keys():
             continue
-        setup = data["setup"]
+        setup = dict(data["setup"])
+        if "distributed" in data:
+            setup["_distributed"] = data["distributed"]
         workload = setup["workload"]
         protocol = setup["protocol"]
         client_by_key = {
@@ -505,13 +507,34 @@ def write_report(
         "",
         "## Setup",
         "",
-        f"The storage API server ran on `baker3` at REST `http://10.1.0.3:8091` and gRPC `http://10.1.0.3:50051`; benchmark clients ran on `baker7`. Each run used `{setup['job_count']}` jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup['client_count']}` submit/monitor clients, `{setup['worker_count']}` workers, `{setup['poll_batch']}` poll batch size, and `{setup['poll_wait_ms']}` ms poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
+        f"The storage API target was `{setup['target']}` for each listed protocol run. Each run used `{setup['job_count']}` total jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup['client_count']}` submit/monitor clients per agent, `{setup['worker_count']}` workers per agent, `{setup['poll_batch']}` poll batch size, and `{setup['poll_wait_ms']}` ms poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
         "",
         "## Request Latency Charts",
         "",
         "The chart makeup is useful for diagnosing whether a protocol difference is really transport overhead or time spent inside a storage phase. For example, `register_job.db_register` is the database insert phase, while `start_job.jcb_start` is cache/JCB scheduling work rather than a database request.",
         "",
     ]
+    if "_distributed" in setup:
+        distributed = setup["_distributed"]
+        agents = ", ".join(f"`{agent}`" for agent in distributed.get("agents", []))
+        lines.extend(
+            [
+                f"This was a distributed run with `{distributed.get('agent_count', 0)}` client agents: {agents}. The controller divided the configured total job count across agents and owned the storage-server metrics session.",
+                "",
+                "### Distributed Job Allocation",
+                "",
+                "| Agent | Jobs |",
+                "|---|---:|",
+            ]
+        )
+        for allocation in distributed.get("job_allocation", []):
+            lines.append(f"| `{allocation['agent_id']}` | {allocation['job_count']:,} |")
+        if distributed.get("controller_wall_time_us") is not None:
+            lines.append("")
+            lines.append(
+                f"Controller dispatch-to-complete wall time: `{fmt_ms(distributed['controller_wall_time_us'])}` ms."
+            )
+        lines.append("")
     for chart_path in chart_paths:
         workload = chart_path.stem.rsplit("_", 1)[-1]
         lines.extend(

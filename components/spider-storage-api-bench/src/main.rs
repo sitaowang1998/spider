@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use spider_storage_api_bench::{
     api::{
         AddResourceGroupRequest,
@@ -43,6 +43,10 @@ use spider_storage_api_bench::{
 use spider_tdl::wire::TaskOutputsSerializer;
 use tokio::{sync::Mutex, task::JoinSet};
 
+mod agent;
+mod controller;
+mod distributed;
+
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Cli {
@@ -54,6 +58,8 @@ struct Cli {
 enum Command {
     Server(ServerArgs),
     Client(ClientArgs),
+    Agent(AgentArgs),
+    Controller(ControllerArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -88,33 +94,65 @@ struct ClientArgs {
     output: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize)]
-struct BenchmarkReport {
-    setup: BenchmarkSetup,
-    job_latency: JobLatencySummary,
-    request_latency: Vec<RequestLatencySummary>,
-    server_metrics: ServerMetricsSessionReport,
+#[derive(Debug, Parser)]
+struct AgentArgs {
+    #[arg(long)]
+    bind: SocketAddr,
+    #[arg(
+        long,
+        default_value = "components/spider-storage-api-bench/config/default.toml"
+    )]
+    config: PathBuf,
+    #[arg(long)]
+    agent_id: String,
 }
 
-#[derive(Debug, Serialize)]
-struct BenchmarkSetup {
-    protocol: String,
-    target: String,
-    workload: WorkloadKind,
-    flat_percent: u8,
-    task_count: usize,
-    job_count: usize,
-    payload_bytes: usize,
-    client_count: usize,
-    worker_count: usize,
-    channel_count: usize,
-    poll_batch: usize,
-    poll_wait_ms: u64,
-    database_host: String,
-    database_port: u16,
-    database_name: String,
-    database_username: String,
-    database_max_connections: u32,
+#[derive(Debug, Parser)]
+struct ControllerArgs {
+    #[arg(
+        long,
+        default_value = "components/spider-storage-api-bench/config/default.toml"
+    )]
+    config: PathBuf,
+    #[arg(long, default_value = "data/distributed")]
+    data_dir: PathBuf,
+    #[arg(long)]
+    flat_percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BenchmarkReport {
+    pub(crate) setup: BenchmarkSetup,
+    pub(crate) job_latency: JobLatencySummary,
+    pub(crate) request_latency: Vec<RequestLatencySummary>,
+    pub(crate) server_metrics: ServerMetricsSessionReport,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) job_latency_samples: Vec<JobLatencySample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) request_latency_samples: Vec<RequestLatencySample>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) distributed: Option<distributed::DistributedReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BenchmarkSetup {
+    pub(crate) protocol: String,
+    pub(crate) target: String,
+    pub(crate) workload: WorkloadKind,
+    pub(crate) flat_percent: u8,
+    pub(crate) task_count: usize,
+    pub(crate) job_count: usize,
+    pub(crate) payload_bytes: usize,
+    pub(crate) client_count: usize,
+    pub(crate) worker_count: usize,
+    pub(crate) channel_count: usize,
+    pub(crate) poll_batch: usize,
+    pub(crate) poll_wait_ms: u64,
+    pub(crate) database_host: String,
+    pub(crate) database_port: u16,
+    pub(crate) database_name: String,
+    pub(crate) database_username: String,
+    pub(crate) database_max_connections: u32,
 }
 
 struct WorkloadMeasurements {
@@ -126,6 +164,14 @@ struct WorkloadMeasurements {
 struct ClientWorkloadMeasurements {
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
+}
+
+pub(crate) struct ClientRunOptions {
+    pub(crate) protocol: ServerProtocol,
+    pub(crate) workload: WorkloadKind,
+    pub(crate) config: BenchConfig,
+    pub(crate) target: String,
+    pub(crate) server_metrics: bool,
 }
 
 #[tokio::main]
@@ -141,6 +187,8 @@ async fn main() -> anyhow::Result<()> {
             run_server(args.protocol, config, args.bind).await
         }
         Command::Client(args) => run_client(args).await,
+        Command::Agent(args) => agent::run_agent(args).await,
+        Command::Controller(args) => controller::run_controller(args).await,
     }
 }
 
@@ -156,11 +204,36 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
         ServerProtocol::Grpc => config.server.grpc_target.clone(),
     });
 
+    let report = run_client_report(ClientRunOptions {
+        protocol: args.protocol,
+        workload: args.workload,
+        config,
+        target,
+        server_metrics: true,
+    })
+    .await?;
+
+    print_report(&report);
+
+    if let Some(output_path) = args.output {
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(output_path, serde_json::to_vec_pretty(&report)?)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn run_client_report(
+    options: ClientRunOptions,
+) -> anyhow::Result<BenchmarkReport> {
+    let config = options.config;
     println!(
         "protocol={:?} workload={:?} flat/deep={}/{} tasks={} jobs={} payload_bytes={} clients={} \
          workers={} channels={}",
-        args.protocol,
-        args.workload,
+        options.protocol,
+        options.workload,
         config.benchmark.flat_percent,
         100 - config.benchmark.flat_percent,
         config.benchmark.task_count,
@@ -171,25 +244,46 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
         total_connection_count(&config)
     );
 
-    let measurements = match args.protocol {
+    let measurements = match options.protocol {
         ServerProtocol::Rest => {
-            let client = RestStorageApiClient::new(&target)?;
+            let client = RestStorageApiClient::new(&options.target)?;
             let clients = vec![client; total_connection_count(&config)];
-            run_measured_workload(clients, args.protocol, args.workload, &config).await?
+            run_measured_workload(
+                clients,
+                options.protocol,
+                options.workload,
+                &config,
+                options.server_metrics,
+            )
+            .await?
         }
         ServerProtocol::Grpc => {
-            let clients = connect_grpc_clients(&target, total_connection_count(&config)).await?;
-            run_measured_workload(clients, args.protocol, args.workload, &config).await?
+            let clients =
+                connect_grpc_clients(&options.target, total_connection_count(&config)).await?;
+            run_measured_workload(
+                clients,
+                options.protocol,
+                options.workload,
+                &config,
+                options.server_metrics,
+            )
+            .await?
         }
     };
     let job_latency = summarize(&measurements.job_latency);
     let request_latency = summarize_requests(&measurements.request_latency);
-    let report = BenchmarkReport {
-        setup: BenchmarkSetup::new(args.protocol, target, args.workload, &config),
+    Ok(BenchmarkReport {
+        setup: BenchmarkSetup::new(options.protocol, options.target, options.workload, &config),
         job_latency,
         request_latency,
         server_metrics: measurements.server_metrics,
-    };
+        job_latency_samples: measurements.job_latency,
+        request_latency_samples: measurements.request_latency,
+        distributed: None,
+    })
+}
+
+fn print_report(report: &BenchmarkReport) {
     println!("job_e2e_latency");
     println!("{}", render_summary(&report.job_latency));
     println!("client_storage_request_latency");
@@ -199,15 +293,6 @@ async fn run_client(args: ClientArgs) -> anyhow::Result<()> {
         "{}",
         render_request_summary(&report.server_metrics.request_latency)
     );
-
-    if let Some(output_path) = args.output {
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(output_path, serde_json::to_vec_pretty(&report)?)?;
-    }
-
-    Ok(())
 }
 
 impl BenchmarkSetup {
@@ -244,28 +329,50 @@ async fn run_measured_workload<ClientType: StorageApiClient>(
     protocol: ServerProtocol,
     workload_kind: WorkloadKind,
     config: &BenchConfig,
+    server_metrics: bool,
 ) -> anyhow::Result<WorkloadMeasurements> {
     let control_client = clients
         .first()
         .ok_or_else(|| anyhow::anyhow!("client_count plus worker_count must be greater than 0"))?
         .clone();
-    let metrics_session = control_client
-        .start_metrics_session(StartMetricsSessionRequest {
-            label: Some(format!("{protocol:?}_{workload_kind:?}")),
-        })
-        .await?;
+    let metrics_session = if server_metrics {
+        Some(
+            control_client
+                .start_metrics_session(StartMetricsSessionRequest {
+                    label: Some(format!("{protocol:?}_{workload_kind:?}")),
+                })
+                .await?,
+        )
+    } else {
+        None
+    };
     let client_measurements = run_workload(clients, workload_kind, config).await;
-    let server_metrics = control_client
-        .end_metrics_session(EndMetricsSessionRequest {
-            metrics_session_id: metrics_session.metrics_session_id,
-        })
-        .await?;
+    let server_metrics = if let Some(metrics_session) = metrics_session {
+        control_client
+            .end_metrics_session(EndMetricsSessionRequest {
+                metrics_session_id: metrics_session.metrics_session_id,
+            })
+            .await?
+    } else {
+        empty_server_metrics_report()
+    };
     let client_measurements = client_measurements?;
     Ok(WorkloadMeasurements {
         job_latency: client_measurements.job_latency,
         request_latency: client_measurements.request_latency,
         server_metrics,
     })
+}
+
+const fn empty_server_metrics_report() -> ServerMetricsSessionReport {
+    ServerMetricsSessionReport {
+        metrics_session_id: String::new(),
+        label: None,
+        elapsed_micros: 0,
+        request_latency: Vec::new(),
+        low_count_request_latency: Vec::new(),
+        request_sizes: Vec::new(),
+    }
 }
 
 async fn run_workload<ClientType: StorageApiClient>(
@@ -687,6 +794,9 @@ mod tests {
                 low_count_request_latency: Vec::new(),
                 request_sizes: Vec::new(),
             },
+            job_latency_samples: Vec::new(),
+            request_latency_samples: Vec::new(),
+            distributed: None,
         };
 
         let value = serde_json::to_value(report)?;

@@ -10,6 +10,8 @@ pub struct BenchConfig {
     pub server: ServerConfig,
     pub database: BenchDatabaseConfig,
     pub benchmark: BenchmarkConfig,
+    #[serde(default)]
+    pub distributed: Option<DistributedConfig>,
 }
 
 impl BenchConfig {
@@ -79,6 +81,54 @@ impl From<&DatabaseConfig> for BenchDatabaseConfig {
             max_connections: config.max_connections,
         }
     }
+}
+
+/// Distributed benchmark controller defaults.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DistributedConfig {
+    pub agent_timeout_sec: u64,
+    pub poll_interval_ms: u64,
+    pub agents: Vec<DistributedAgentConfig>,
+}
+
+impl DistributedConfig {
+    /// Validates distributed benchmark settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no agents are configured or an agent/control timeout is invalid.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.agent_timeout_sec == 0 {
+            anyhow::bail!("distributed.agent_timeout_sec must be greater than 0");
+        }
+        if self.poll_interval_ms == 0 {
+            anyhow::bail!("distributed.poll_interval_ms must be greater than 0");
+        }
+        if self.agents.is_empty() {
+            anyhow::bail!("distributed.agents must contain at least one agent");
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        for agent in &self.agents {
+            if agent.id.trim().is_empty() {
+                anyhow::bail!("distributed agent id must not be empty");
+            }
+            if agent.url.trim().is_empty() {
+                anyhow::bail!("distributed agent `{}` url must not be empty", agent.id);
+            }
+            if !ids.insert(agent.id.as_str()) {
+                anyhow::bail!("duplicate distributed agent id `{}`", agent.id);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One distributed benchmark client agent.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DistributedAgentConfig {
+    pub id: String,
+    pub url: String,
 }
 
 /// Benchmark workload and measurement defaults.
@@ -157,5 +207,69 @@ mod tests {
             err.to_string().contains("flat_percent"),
             "error should mention flat_percent"
         );
+    }
+
+    #[test]
+    fn default_config_includes_distributed_agent() -> anyhow::Result<()> {
+        let config = BenchConfig::load("config/default.toml".as_ref())?;
+        let distributed = config
+            .distributed
+            .as_ref()
+            .expect("default config should include distributed benchmark defaults");
+        distributed.validate()?;
+        assert_eq!(1800, distributed.agent_timeout_sec);
+        assert_eq!(1000, distributed.poll_interval_ms);
+        assert_eq!(1, distributed.agents.len());
+        assert_eq!("client-10-1-0-7", distributed.agents[0].id);
+        assert_eq!("http://10.1.0.7:19091", distributed.agents[0].url);
+        Ok(())
+    }
+
+    #[test]
+    fn distributed_config_validates_agents() -> anyhow::Result<()> {
+        let config: BenchConfig = toml::from_str(
+            r#"
+[server]
+rest_bind = "127.0.0.1:8091"
+grpc_bind = "127.0.0.1:50051"
+rest_target = "http://127.0.0.1:8091"
+grpc_target = "http://127.0.0.1:50051"
+
+[database]
+host = "127.0.0.1"
+port = 3306
+name = "spider-db"
+username = "spider-user"
+password = "spider-password"
+max_connections = 32
+
+[benchmark]
+task_count = 10
+job_count = 4
+payload_bytes = 16
+client_count = 2
+worker_count = 2
+poll_batch = 8
+poll_wait_ms = 10
+warmup_sec = 0
+duration_sec = 0
+flat_percent = 80
+output_dir = "data/"
+
+[distributed]
+agent_timeout_sec = 120
+poll_interval_ms = 500
+
+[[distributed.agents]]
+id = "client-a"
+url = "http://127.0.0.1:19091"
+"#,
+        )?;
+        config
+            .distributed
+            .as_ref()
+            .expect("distributed config should exist")
+            .validate()?;
+        Ok(())
     }
 }

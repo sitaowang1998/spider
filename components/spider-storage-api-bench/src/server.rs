@@ -486,7 +486,8 @@ pub async fn run_server(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum ServerProtocol {
     Rest,
     Grpc,
