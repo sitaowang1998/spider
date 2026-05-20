@@ -39,8 +39,10 @@ impl std::str::FromStr for WorkloadKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobPayload {
     pub workload_kind: WorkloadKind,
-    pub serialized_task_graph: String,
-    pub serialized_inputs: Vec<u8>,
+    pub compressed_task_graph: Vec<u8>,
+    pub task_graph_uncompressed_bytes: u64,
+    pub compressed_inputs: Vec<u8>,
+    pub job_inputs_uncompressed_bytes: u64,
     pub task_count: usize,
 }
 
@@ -163,10 +165,16 @@ fn serialize_job(
     for _ in 0..num_inputs {
         serializer.append(TaskInput::ValuePayload(vec![0; payload_bytes]))?;
     }
+    let serialized_task_graph = graph.to_json()?;
+    let serialized_inputs = serializer.release();
+    let compressed_task_graph = zstd::encode_all(serialized_task_graph.as_bytes(), 3)?;
+    let compressed_inputs = zstd::encode_all(serialized_inputs.as_slice(), 3)?;
     Ok(JobPayload {
         workload_kind,
-        serialized_task_graph: graph.to_json()?,
-        serialized_inputs: serializer.release(),
+        compressed_task_graph,
+        task_graph_uncompressed_bytes: serialized_task_graph.len() as u64,
+        compressed_inputs,
+        job_inputs_uncompressed_bytes: serialized_inputs.len() as u64,
         task_count: graph.get_num_tasks(),
     })
 }
@@ -198,7 +206,12 @@ mod tests {
     #[test]
     fn flat_job_has_one_graph_input_per_task() -> anyhow::Result<()> {
         let payload = build_flat_job(4, 16)?;
-        let graph = TaskGraph::from_json(&payload.serialized_task_graph)?;
+        let serialized_task_graph = zstd::decode_all(payload.compressed_task_graph.as_slice())?;
+        assert_eq!(
+            payload.task_graph_uncompressed_bytes,
+            serialized_task_graph.len() as u64
+        );
+        let graph = TaskGraph::from_json(std::str::from_utf8(&serialized_task_graph)?)?;
         assert_eq!(4, graph.get_num_tasks());
         assert_eq!(4, graph.get_task_graph_input_indices().len());
         assert_eq!(WorkloadKind::Flat, payload.workload_kind);
@@ -208,7 +221,12 @@ mod tests {
     #[test]
     fn deep_job_has_single_graph_input() -> anyhow::Result<()> {
         let payload = build_deep_job(4, 16)?;
-        let graph = TaskGraph::from_json(&payload.serialized_task_graph)?;
+        let serialized_task_graph = zstd::decode_all(payload.compressed_task_graph.as_slice())?;
+        assert_eq!(
+            payload.task_graph_uncompressed_bytes,
+            serialized_task_graph.len() as u64
+        );
+        let graph = TaskGraph::from_json(std::str::from_utf8(&serialized_task_graph)?)?;
         assert_eq!(4, graph.get_num_tasks());
         assert_eq!(1, graph.get_task_graph_input_indices().len());
         assert_eq!(WorkloadKind::Deep, payload.workload_kind);

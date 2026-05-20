@@ -740,8 +740,8 @@ def size_summary_section(size_rows: list[SizeRow]) -> list[str]:
     lines: list[str] = ["", "## Task Graph Upload Size", ""]
     lines.append(
         "Bytes recorded per `register_job` call on the storage server. `Uncompressed` is the "
-        "JSON encoding of the task graph; `Compressed` is what is bound to the "
-        "`serialized_task_graph` column (zstd level 3). Ratio is `compressed / uncompressed`."
+        "serializer output size reported by the client; `Compressed` is the client-compressed "
+        "zstd payload persisted by the server. Ratio is `compressed / uncompressed`."
     )
     lines.append("")
 

@@ -99,7 +99,14 @@ use spider_storage::{
         job_submission::ValidatedJobSubmission,
         task::{SharedTaskControlBlock, SharedTerminationTaskControlBlock},
     },
-    db::{DbError, ExternalJobOrchestration, InternalJobOrchestration, MariaDbStorageConnector},
+    db::{
+        DbError,
+        ExternalJobOrchestration,
+        InternalJobOrchestration,
+        MariaDbStorageConnector,
+        SerializedBytes,
+        SerializedJobPayload,
+    },
     ready_queue::ReadyQueueSender,
     task_instance_pool::{TaskInstanceMetadata, TaskInstancePoolConnector},
 };
@@ -454,11 +461,41 @@ pub fn mariadb_db_connector_factory(
     rg_id: ResourceGroupId,
 ) -> impl DbConnectorFactory<MariaDbStorageConnector> {
     async move |job_submission: &ValidatedJobSubmission| {
-        let job_id = ExternalJobOrchestration::register(&storage, rg_id, job_submission)
-            .await
-            .expect("register should succeed")
-            .job_id;
+        let job_id = ExternalJobOrchestration::register(
+            &storage,
+            rg_id,
+            job_submission,
+            serialized_payload(job_submission),
+        )
+        .await
+        .expect("register should succeed")
+        .job_id;
         (storage, job_id, rg_id)
+    }
+}
+
+fn serialized_payload(job_submission: &ValidatedJobSubmission) -> SerializedJobPayload {
+    let task_graph_json = job_submission
+        .task_graph()
+        .to_json()
+        .expect("task graph serialization should succeed");
+    let job_inputs =
+        rmp_serde::to_vec(job_submission.inputs()).expect("job input serialization should succeed");
+    let compressed_task_graph = zstd::encode_all(task_graph_json.as_bytes(), 3)
+        .expect("task graph compression should succeed");
+    let compressed_job_inputs =
+        zstd::encode_all(job_inputs.as_slice(), 3).expect("job input compression should succeed");
+    SerializedJobPayload {
+        task_graph_bytes: SerializedBytes {
+            uncompressed: task_graph_json.len() as u64,
+            compressed: compressed_task_graph.len() as u64,
+        },
+        job_inputs_bytes: SerializedBytes {
+            uncompressed: job_inputs.len() as u64,
+            compressed: compressed_job_inputs.len() as u64,
+        },
+        compressed_task_graph,
+        compressed_job_inputs,
     }
 }
 

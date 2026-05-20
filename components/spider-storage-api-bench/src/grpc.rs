@@ -864,8 +864,10 @@ impl From<proto::RegisterJobRequest> for RegisterJobRequest {
     fn from(request: proto::RegisterJobRequest) -> Self {
         Self {
             resource_group_id: request.resource_group_id,
-            serialized_task_graph: request.serialized_task_graph,
-            serialized_inputs: request.serialized_inputs,
+            compressed_task_graph: request.compressed_task_graph,
+            task_graph_uncompressed_bytes: request.task_graph_uncompressed_bytes,
+            compressed_inputs: request.compressed_inputs,
+            job_inputs_uncompressed_bytes: request.job_inputs_uncompressed_bytes,
         }
     }
 }
@@ -874,8 +876,10 @@ impl From<RegisterJobRequest> for proto::RegisterJobRequest {
     fn from(request: RegisterJobRequest) -> Self {
         Self {
             resource_group_id: request.resource_group_id,
-            serialized_task_graph: request.serialized_task_graph,
-            serialized_inputs: request.serialized_inputs,
+            compressed_task_graph: request.compressed_task_graph,
+            task_graph_uncompressed_bytes: request.task_graph_uncompressed_bytes,
+            compressed_inputs: request.compressed_inputs,
+            job_inputs_uncompressed_bytes: request.job_inputs_uncompressed_bytes,
         }
     }
 }

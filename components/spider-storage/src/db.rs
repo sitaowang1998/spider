@@ -12,5 +12,6 @@ pub use protocol::{
     RegisteredJob,
     ResourceGroupManagement,
     SerializedBytes,
+    SerializedJobPayload,
     SessionManagement,
 };

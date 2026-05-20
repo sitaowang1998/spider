@@ -218,9 +218,12 @@ pub struct ResourceGroupResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegisterJobRequest {
     pub resource_group_id: String,
-    pub serialized_task_graph: String,
     #[serde(with = "base64_serde::bytes")]
-    pub serialized_inputs: Vec<u8>,
+    pub compressed_task_graph: Vec<u8>,
+    pub task_graph_uncompressed_bytes: u64,
+    #[serde(with = "base64_serde::bytes")]
+    pub compressed_inputs: Vec<u8>,
+    pub job_inputs_uncompressed_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

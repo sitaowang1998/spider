@@ -19,6 +19,8 @@ use spider_storage::{
         InternalJobOrchestration,
         MariaDbStorageConnector,
         ResourceGroupManagement,
+        SerializedBytes,
+        SerializedJobPayload,
         SessionManagement,
     },
 };
@@ -43,6 +45,31 @@ fn single_task_graph() -> (SubmittedTaskGraph, Vec<TaskInput>) {
     build_flat_task_graph(1, TEST_INPUT_PAYLOAD_SIZE, false, false)
 }
 
+fn serialized_payload(job_submission: &ValidatedJobSubmission) -> SerializedJobPayload {
+    let task_graph_json = job_submission
+        .task_graph()
+        .to_json()
+        .expect("task graph serialization should succeed");
+    let job_inputs =
+        rmp_serde::to_vec(job_submission.inputs()).expect("job input serialization should succeed");
+    let compressed_task_graph = zstd::encode_all(task_graph_json.as_bytes(), 3)
+        .expect("task graph compression should succeed");
+    let compressed_job_inputs =
+        zstd::encode_all(job_inputs.as_slice(), 3).expect("job input compression should succeed");
+    SerializedJobPayload {
+        task_graph_bytes: SerializedBytes {
+            uncompressed: task_graph_json.len() as u64,
+            compressed: compressed_task_graph.len() as u64,
+        },
+        job_inputs_bytes: SerializedBytes {
+            uncompressed: job_inputs.len() as u64,
+            compressed: compressed_job_inputs.len() as u64,
+        },
+        compressed_task_graph,
+        compressed_job_inputs,
+    }
+}
+
 /// Registers a new execution manager with `127.0.0.1` as the IP address.
 ///
 /// # Returns
@@ -65,7 +92,7 @@ async fn test_register_job() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -86,7 +113,13 @@ async fn test_register_job_invalid_resource_group() {
     let job_submission =
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
-    let result = storage.register(fake_rg_id, &job_submission).await;
+    let result = storage
+        .register(
+            fake_rg_id,
+            &job_submission,
+            serialized_payload(&job_submission),
+        )
+        .await;
 
     assert!(
         matches!(result, Err(DbError::ResourceGroupNotFound(_))),
@@ -104,7 +137,7 @@ async fn test_start_job() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -128,7 +161,7 @@ async fn test_start_job_wrong_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -152,7 +185,7 @@ async fn test_cancel_job_without_cleanup_transitions_to_cancelled() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -181,7 +214,7 @@ async fn test_get_outputs_succeeded_job() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -210,7 +243,7 @@ async fn test_get_outputs_wrong_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -232,7 +265,7 @@ async fn test_get_error_failed_job() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -260,7 +293,7 @@ async fn test_get_error_wrong_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -282,7 +315,7 @@ async fn test_cancel_job_with_cleanup_transitions_to_cleanup_ready() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -310,7 +343,7 @@ async fn test_cancel_already_terminal() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -341,7 +374,7 @@ async fn test_set_state_valid_transition() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -367,7 +400,7 @@ async fn test_set_state_invalid_transition() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -393,7 +426,7 @@ async fn test_commit_outputs_without_commit_task() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -421,7 +454,7 @@ async fn test_commit_outputs_with_commit_task() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -452,7 +485,7 @@ async fn test_commit_outputs_wrong_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -479,7 +512,7 @@ async fn test_fail_job() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -507,7 +540,7 @@ async fn test_fail_terminal_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -539,7 +572,7 @@ async fn test_delete_expired_terminated_jobs() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -755,7 +788,7 @@ async fn test_cancel_from_ready_state() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;
@@ -782,7 +815,7 @@ async fn test_delete_expired_terminated_jobs_no_match() {
         ValidatedJobSubmission::create(graph, inputs).expect("job submission should be valid");
 
     let job_id = storage
-        .register(rg_id, &job_submission)
+        .register(rg_id, &job_submission, serialized_payload(&job_submission))
         .await
         .expect("register should succeed")
         .job_id;

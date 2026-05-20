@@ -30,7 +30,7 @@ use crate::{
         InternalJobOrchestration,
         RegisteredJob,
         ResourceGroupManagement,
-        SerializedBytes,
+        SerializedJobPayload,
         SessionManagement,
     },
     ready_queue::ReadyQueueSender,
@@ -103,19 +103,14 @@ impl ExternalJobOrchestration for MockDbConnector {
         &self,
         _resource_group_id: ResourceGroupId,
         _job_submission: &ValidatedJobSubmission,
+        serialized_payload: SerializedJobPayload,
     ) -> Result<RegisteredJob, DbError> {
         let job_id = JobId::new();
         self.states.insert(job_id, JobState::Ready);
         Ok(RegisteredJob {
             job_id,
-            task_graph_bytes: SerializedBytes {
-                uncompressed: 0,
-                compressed: 0,
-            },
-            job_inputs_bytes: SerializedBytes {
-                uncompressed: 0,
-                compressed: 0,
-            },
+            task_graph_bytes: serialized_payload.task_graph_bytes,
+            job_inputs_bytes: serialized_payload.job_inputs_bytes,
         })
     }
 

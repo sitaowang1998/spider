@@ -14,12 +14,21 @@ use crate::{cache::job_submission::ValidatedJobSubmission, db::error::DbError};
 /// Byte counts for a serialized artifact written to the database.
 ///
 /// `uncompressed` is the size produced by the underlying serializer (`serde_json` for the task
-/// graph, `rmp_serde` for the job inputs); `compressed` is the size actually persisted in the DB
-/// column after zstd encoding.
+/// graph, `rmp_serde` for the job inputs); `compressed` is the size of the client-compressed zstd
+/// bytes persisted in the DB column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SerializedBytes {
     pub uncompressed: u64,
     pub compressed: u64,
+}
+
+/// Client-compressed serialized job payload to persist in the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerializedJobPayload {
+    pub compressed_task_graph: Vec<u8>,
+    pub compressed_job_inputs: Vec<u8>,
+    pub task_graph_bytes: SerializedBytes,
+    pub job_inputs_bytes: SerializedBytes,
 }
 
 /// Result of a successful [`ExternalJobOrchestration::register`] call.
@@ -72,6 +81,7 @@ pub trait ExternalJobOrchestration {
         &self,
         resource_group_id: ResourceGroupId,
         job_submission: &ValidatedJobSubmission,
+        serialized_payload: SerializedJobPayload,
     ) -> Result<RegisteredJob, DbError>;
 
     /// Gets the state of a job.

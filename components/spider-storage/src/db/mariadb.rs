@@ -24,7 +24,7 @@ use crate::{
         InternalJobOrchestration,
         RegisteredJob,
         ResourceGroupManagement,
-        SerializedBytes,
+        SerializedJobPayload,
         SessionManagement,
         error::ExpectedStates,
     },
@@ -100,7 +100,8 @@ impl ExternalJobOrchestration for MariaDbStorageConnector {
     async fn register(
         &self,
         resource_group_id: ResourceGroupId,
-        job_submission: &ValidatedJobSubmission,
+        _job_submission: &ValidatedJobSubmission,
+        serialized_payload: SerializedJobPayload,
     ) -> Result<RegisteredJob, DbError> {
         const INSERT_QUERY: &str = formatcp!(
             "INSERT INTO `{table}` (`resource_group_id`, `serialized_task_graph`, \
@@ -108,27 +109,10 @@ impl ExternalJobOrchestration for MariaDbStorageConnector {
             table = JOBS_TABLE_NAME,
         );
 
-        let task_graph = job_submission.task_graph();
-        let job_inputs = job_submission.inputs();
-        let task_graph_json = task_graph
-            .to_json()
-            .map_err(|e| DbError::TaskGraphSerializationFailure(Box::new(e)))?;
-        let task_graph_uncompressed = task_graph_json.len() as u64;
-        let serialized_task_graph =
-            zstd::encode_all(task_graph_json.as_bytes(), PAYLOAD_ZSTD_LEVEL)
-                .map_err(|e| DbError::TaskGraphSerializationFailure(Box::new(e)))?;
-        let task_graph_compressed = serialized_task_graph.len() as u64;
-        let job_inputs_msgpack = rmp_serde::to_vec(&job_inputs).map_err(DbError::value_ser)?;
-        let job_inputs_uncompressed = job_inputs_msgpack.len() as u64;
-        let serialized_job_inputs =
-            zstd::encode_all(job_inputs_msgpack.as_slice(), PAYLOAD_ZSTD_LEVEL)
-                .map_err(|e| DbError::ValueSerializationFailure(Box::new(e)))?;
-        let job_inputs_compressed = serialized_job_inputs.len() as u64;
-
         let job_id: JobId = sqlx::query_scalar(INSERT_QUERY)
             .bind(resource_group_id)
-            .bind(serialized_task_graph)
-            .bind(serialized_job_inputs)
+            .bind(&serialized_payload.compressed_task_graph)
+            .bind(&serialized_payload.compressed_job_inputs)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| match e {
@@ -142,14 +126,8 @@ impl ExternalJobOrchestration for MariaDbStorageConnector {
             })?;
         Ok(RegisteredJob {
             job_id,
-            task_graph_bytes: SerializedBytes {
-                uncompressed: task_graph_uncompressed,
-                compressed: task_graph_compressed,
-            },
-            job_inputs_bytes: SerializedBytes {
-                uncompressed: job_inputs_uncompressed,
-                compressed: job_inputs_compressed,
-            },
+            task_graph_bytes: serialized_payload.task_graph_bytes,
+            job_inputs_bytes: serialized_payload.job_inputs_bytes,
         })
     }
 
@@ -608,9 +586,6 @@ const RESOURCE_GROUPS_TABLE_NAME: &str = "resource_groups";
 const JOBS_TABLE_NAME: &str = "jobs";
 const EXECUTION_MANAGERS_TABLE_NAME: &str = "execution_managers";
 const SESSIONS_TABLE_NAME: &str = "sessions";
-
-/// zstd level used to compress both the serialized task graph and the serialized job inputs.
-const PAYLOAD_ZSTD_LEVEL: i32 = 3;
 
 const UPDATE_JOB_STATE: &str = formatcp!(
     "UPDATE `{table}` SET `state` = ? WHERE `id` = ?;",

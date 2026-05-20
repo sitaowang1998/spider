@@ -533,8 +533,10 @@ async fn run_submit_client<ClientType: StorageApiClient>(
             RequestCategory::NonBlocking,
             client.client.register_job(RegisterJobRequest {
                 resource_group_id: client.resource_group_id.clone(),
-                serialized_task_graph: job.serialized_task_graph,
-                serialized_inputs: job.serialized_inputs,
+                compressed_task_graph: job.compressed_task_graph,
+                task_graph_uncompressed_bytes: job.task_graph_uncompressed_bytes,
+                compressed_inputs: job.compressed_inputs,
+                job_inputs_uncompressed_bytes: job.job_inputs_uncompressed_bytes,
             }),
         )
         .await?

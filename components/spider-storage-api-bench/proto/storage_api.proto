@@ -100,8 +100,10 @@ message ResourceGroupResponse {
 
 message RegisterJobRequest {
   string resource_group_id = 1;
-  string serialized_task_graph = 2;
-  bytes serialized_inputs = 3;
+  bytes compressed_task_graph = 2;
+  uint64 task_graph_uncompressed_bytes = 3;
+  bytes compressed_inputs = 4;
+  uint64 job_inputs_uncompressed_bytes = 5;
 }
 
 message JobIdRequest {

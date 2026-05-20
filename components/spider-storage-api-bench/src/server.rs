@@ -157,8 +157,10 @@ impl StorageApiService {
                 .state
                 .register_job(
                     resource_group_id,
-                    request.serialized_task_graph,
-                    request.serialized_inputs,
+                    request.compressed_task_graph,
+                    request.compressed_inputs,
+                    request.task_graph_uncompressed_bytes,
+                    request.job_inputs_uncompressed_bytes,
                 )
                 .await?;
             Ok(JobIdResponse {
