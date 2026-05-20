@@ -75,7 +75,7 @@ async fn start_run(
             "agent already has a running benchmark",
         ));
     }
-    if runs.contains_key(&request.run_id) {
+    if run_id_is_active(&runs, &request.run_id) {
         return Err(AgentError::conflict(format!(
             "run `{}` already exists",
             request.run_id
@@ -115,6 +115,11 @@ async fn start_run(
         run_id,
         status: AgentRunState::Accepted,
     }))
+}
+
+fn run_id_is_active(runs: &HashMap<String, AgentRunRecord>, run_id: &str) -> bool {
+    runs.get(run_id)
+        .is_some_and(|run| matches!(run.status, AgentRunState::Accepted | AgentRunState::Running))
 }
 
 async fn execute_run(
@@ -178,5 +183,43 @@ impl AgentError {
 impl IntoResponse for AgentError {
     fn into_response(self) -> Response {
         (self.status, self.message).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{AgentRunRecord, run_id_is_active};
+    use crate::distributed::AgentRunState;
+
+    #[test]
+    fn completed_run_id_can_be_reused() {
+        let mut runs = HashMap::new();
+        runs.insert(
+            "grpc_flat_agent".to_owned(),
+            AgentRunRecord {
+                status: AgentRunState::Succeeded,
+                report: None,
+                error: None,
+            },
+        );
+
+        assert!(!run_id_is_active(&runs, "grpc_flat_agent"));
+    }
+
+    #[test]
+    fn running_run_id_cannot_be_reused() {
+        let mut runs = HashMap::new();
+        runs.insert(
+            "grpc_flat_agent".to_owned(),
+            AgentRunRecord {
+                status: AgentRunState::Running,
+                report: None,
+                error: None,
+            },
+        );
+
+        assert!(run_id_is_active(&runs, "grpc_flat_agent"));
     }
 }
