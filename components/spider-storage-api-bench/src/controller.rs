@@ -38,18 +38,14 @@ pub async fn run_controller(args: ControllerArgs) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("controller requires [distributed] config"))?;
     distributed.validate()?;
 
-    for protocol in [ServerProtocol::Grpc, ServerProtocol::Rest] {
-        for workload in [WorkloadKind::Flat, WorkloadKind::Deep, WorkloadKind::Mixed] {
-            run_controller_workload(
-                &config,
-                &distributed.agents,
-                protocol,
-                workload,
-                &args.data_dir,
-            )
-            .await?;
-        }
-    }
+    run_controller_workload(
+        &config,
+        &distributed.agents,
+        args.protocol,
+        args.workload,
+        &args.data_dir,
+    )
+    .await?;
     Ok(())
 }
 

@@ -109,6 +109,10 @@ struct AgentArgs {
 
 #[derive(Debug, Parser)]
 struct ControllerArgs {
+    #[arg(long)]
+    pub(crate) protocol: ServerProtocol,
+    #[arg(long)]
+    pub(crate) workload: WorkloadKind,
     #[arg(
         long,
         default_value = "components/spider-storage-api-bench/config/default.toml"
@@ -713,6 +717,7 @@ async fn connect_grpc_clients(
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
     use spider_storage_api_bench::{
         metrics::{
             JobLatencySummary,
@@ -727,6 +732,7 @@ mod tests {
         BenchConfig,
         BenchmarkReport,
         BenchmarkSetup,
+        Cli,
         ServerProtocol,
         execution_manager_worker_count,
         total_connection_count,
@@ -740,6 +746,28 @@ mod tests {
         assert_eq!(5, execution_manager_worker_count(&config));
         assert_eq!(8, total_connection_count(&config));
         Ok(())
+    }
+
+    #[test]
+    fn controller_requires_single_protocol_and_workload() {
+        let result =
+            Cli::try_parse_from(["bench", "controller", "--config", "config/default.toml"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn controller_accepts_single_protocol_and_workload() {
+        let result = Cli::try_parse_from([
+            "bench",
+            "controller",
+            "--config",
+            "config/default.toml",
+            "--protocol",
+            "grpc",
+            "--workload",
+            "flat",
+        ]);
+        assert!(result.is_ok());
     }
 
     #[test]

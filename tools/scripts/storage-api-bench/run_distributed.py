@@ -21,6 +21,10 @@ def main() -> int:
         "spider-storage-api-bench",
         "--",
         "controller",
+        "--protocol",
+        args.protocol,
+        "--workload",
+        args.workload,
         "--config",
         str(args.config),
         "--data-dir",
@@ -33,6 +37,8 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--protocol", choices=["rest", "grpc"], required=True)
+    parser.add_argument("--workload", choices=["flat", "deep", "mixed"], required=True)
     parser.add_argument("--config", type=pathlib.Path, default=DEFAULT_CONFIG)
     parser.add_argument("--data-dir", type=pathlib.Path, default=ROOT / "data/distributed")
     parser.add_argument("--flat-percent", type=int)
