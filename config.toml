@@ -13,8 +13,8 @@ password = "spider-password"
 max_connections = 32
 
 [benchmark]
-task_count = 1000
-job_count = 10
+task_count = 4000
+job_count = 40
 payload_bytes = 128
 client_count = 8
 worker_count = 16
@@ -33,4 +33,14 @@ poll_interval_ms = 1000
 id = "client-baker10"
 url = "http://10.1.0.10:19091"
 
+[[distributed.agents]]
+id = "client-baker11"
+url = "http://10.1.0.11:19091"
 
+[[distributed.agents]]
+id = "client-baker12"
+url = "http://10.1.0.12:19091"
+
+[[distributed.agents]]
+id = "client-baker13"
+url = "http://10.1.0.13:19091"
