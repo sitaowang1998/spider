@@ -1,8 +1,8 @@
 [server]
-rest_bind = "10.1.0.7:8091"
-grpc_bind = "10.1.0.7:50051"
-rest_target = "http://10.1.0.7:8091"
-grpc_target = "http://10.1.0.7:50051"
+rest_bind = "10.1.0.3:8091"
+grpc_bind = "10.1.0.3:50051"
+rest_target = "http://10.1.0.3:8091"
+grpc_target = "http://10.1.0.3:50051"
 
 [database]
 host = "127.0.0.1"
