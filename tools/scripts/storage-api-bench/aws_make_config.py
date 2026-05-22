@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--agent-port", type=int, default=19091)
     parser.add_argument("--database-port", type=int, default=3306)
+    parser.add_argument("--database-host", default="127.0.0.1")
     parser.add_argument("--database-name", default="spider-db")
     parser.add_argument("--database-username", default="spider-user")
     parser.add_argument("--database-password", default="spider-password")
@@ -92,7 +93,7 @@ def render_config(args: argparse.Namespace, server_ip: str, agent_ips: list[str]
         f'grpc_target = "http://{server_ip}:{args.grpc_port}"',
         "",
         "[database]",
-        'host = "127.0.0.1"',
+        f'host = "{args.database_host}"',
         f"port = {args.database_port}",
         f'name = "{args.database_name}"',
         f'username = "{args.database_username}"',

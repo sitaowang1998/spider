@@ -90,6 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rest-port", type=int, default=8091)
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--agent-port", type=int, default=19091)
+    parser.add_argument("--database-host", required=True)
+    parser.add_argument("--database-port", type=int, default=3306)
+    parser.add_argument("--database-name", default="spider-db")
+    parser.add_argument("--database-username", default="spider-user")
+    parser.add_argument("--database-password", default="spider-password")
+    parser.add_argument("--database-max-connections", type=int, default=256)
     parser.add_argument("--agent-start-timeout", type=int, default=300)
     parser.add_argument("--server-start-timeout", type=int, default=600)
     args = parser.parse_args()
@@ -146,6 +152,18 @@ def make_config(
             str(args.grpc_port),
             "--agent-port",
             str(args.agent_port),
+            "--database-host",
+            args.database_host,
+            "--database-port",
+            str(args.database_port),
+            "--database-name",
+            args.database_name,
+            "--database-username",
+            args.database_username,
+            "--database-password",
+            args.database_password,
+            "--database-max-connections",
+            str(args.database_max_connections),
         ],
         cwd=aws_common.ROOT,
         check=True,
@@ -219,6 +237,7 @@ def start_server(
             f"--protocol {protocol} "
             f"--config {shlex.quote(str(remote_config))} "
             f"--bind 0.0.0.0:{port} "
+            "--external-database "
             f"> {shlex.quote(str(remote_log_dir / f'server-{protocol}.log'))} 2>&1 &"
         ),
     ]

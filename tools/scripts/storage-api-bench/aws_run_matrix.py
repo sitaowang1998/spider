@@ -52,6 +52,18 @@ def main() -> int:
                 str(args.grpc_port),
                 "--agent-port",
                 str(args.agent_port),
+                "--database-host",
+                args.database_host,
+                "--database-port",
+                str(args.database_port),
+                "--database-name",
+                args.database_name,
+                "--database-username",
+                args.database_username,
+                "--database-password",
+                args.database_password,
+                "--database-max-connections",
+                str(args.database_max_connections),
             ]
             print(f"=== AWS benchmark: nodes={node_count} protocol={protocol} ===", flush=True)
             result = subprocess.run(command, cwd=aws_common.ROOT, check=False)
@@ -78,6 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rest-port", type=int, default=8091)
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--agent-port", type=int, default=19091)
+    parser.add_argument("--database-host", required=True)
+    parser.add_argument("--database-port", type=int, default=3306)
+    parser.add_argument("--database-name", default="spider-db")
+    parser.add_argument("--database-username", default="spider-user")
+    parser.add_argument("--database-password", default="spider-password")
+    parser.add_argument("--database-max-connections", type=int, default=256)
     return parser.parse_args()
 
 

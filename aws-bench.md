@@ -17,8 +17,8 @@ hidden or `etc`-style directory.
 - One VPC, one subnet, one Availability Zone.
 - One cluster placement group for the storage server, controller, and all client agents.
 - On-Demand Capacity Reservation for large runs such as 64 or 128 client nodes.
-- One storage-server EC2 instance running MariaDB in the local container started by
-  `run_server.py`.
+- One RDS MariaDB instance used by the storage server.
+- One storage-server EC2 instance running only the storage API server.
 - One controller EC2 instance.
 - N client-agent EC2 instances.
 - Private IP traffic only for benchmark RPCs.
@@ -63,6 +63,10 @@ tools/scripts/storage-api-bench/aws_run_matrix.py \
   --run-id aws-128 \
   --node-counts 1,2,4,8,16,32,64,128 \
   --protocols grpc rest \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --data-dir data
 ```
 
@@ -73,6 +77,10 @@ tools/scripts/storage-api-bench/aws_run_protocol.py \
   --run-id aws-128 \
   --node-count 128 \
   --protocol grpc \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --data-dir data/aws-128/grpc
 ```
 
@@ -83,17 +91,18 @@ requested node counts and protocols, creates a hidden workspace for each node co
 `aws_run_protocol.py` for each run. Use this when you want the full 1/2/4/.../128 sequence.
 
 `aws_run_protocol.py` runs one protocol at one node count. It discovers instances, generates the
-TOML config, syncs that config to remote nodes through SSM, starts or refreshes client agents,
-starts the storage server for the selected protocol, runs `run_distributed_protocol.py`, and stops
-the storage server afterward. Use this for a one-off run or debugging one protocol.
+TOML config with the RDS endpoint, syncs that config to remote nodes through SSM, starts or
+refreshes client agents, starts the storage server for the selected protocol, runs
+`run_distributed_protocol.py`, and stops the storage server afterward. Use this for a one-off run
+or debugging one protocol.
 
 `aws_discover.py` only discovers AWS instances from tags and writes the server IP, server instance
 ID, client IPs, and client instance IDs into the hidden workspace. Use it when you want to verify
 AWS tagging and node selection before running the benchmark.
 
-`aws_make_config.py` converts a server private IP plus a client-IP list into a distributed benchmark
-TOML file. The AWS runners call it automatically, but it is also useful when manually debugging a
-config.
+`aws_make_config.py` converts a server private IP, RDS endpoint, and client-IP list into a
+distributed benchmark TOML file. The AWS runners call it automatically, but it is also useful when
+manually debugging a config.
 
 `aws_common.py` is a shared helper module used by the scripts above. It is not meant to be run
 directly.
@@ -104,7 +113,7 @@ The runner:
 - writes discovery files and generated config under `.aws-bench/<run-id>/<node-count>/`;
 - syncs the config to the same hidden path inside the repo on the server and client nodes;
 - starts or refreshes client-agent processes through SSM;
-- starts the storage server for the selected protocol through SSM;
+- starts the storage server for the selected protocol through SSM using the configured RDS database;
 - runs `run_distributed_protocol.py` locally on the controller;
 - stops the storage server after the protocol run.
 
@@ -113,6 +122,7 @@ The automated path assumes:
 - every instance has the repo at `~/spider`, unless `--remote-root` is provided;
 - AWS SSM agent is running on every instance;
 - instances have an IAM role that allows SSM Run Command;
+- the RDS MariaDB endpoint is reachable from the storage-server security group;
 - your controller shell has AWS credentials or an instance role that can call EC2 describe APIs and
   SSM send-command APIs.
 
@@ -122,6 +132,10 @@ To use a different hidden runtime directory on the controller:
 tools/scripts/storage-api-bench/aws_run_matrix.py \
   --run-id aws-128 \
   --node-counts 64,128 \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --workspace-root etc/aws-bench \
   --data-dir data
 ```
@@ -133,6 +147,10 @@ tools/scripts/storage-api-bench/aws_run_protocol.py \
   --run-id aws-128 \
   --node-count 128 \
   --protocol grpc \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --remote-workspace .aws-bench/aws-128/128 \
   --data-dir data/aws-128/grpc
 ```
@@ -191,6 +209,79 @@ aws ec2 authorize-security-group-ingress \
   --port 19091 \
   --source-group "$SG_ID"
 ```
+
+Create a separate RDS security group that allows MariaDB traffic from the benchmark EC2 security
+group:
+
+```bash
+export RDS_SG_ID=$(
+  aws ec2 create-security-group \
+    --group-name spider-storage-api-bench-rds \
+    --description "Spider storage API benchmark RDS" \
+    --vpc-id "$VPC_ID" \
+    --query GroupId \
+    --output text
+)
+
+aws ec2 authorize-security-group-ingress \
+  --group-id "$RDS_SG_ID" \
+  --protocol tcp \
+  --port 3306 \
+  --source-group "$SG_ID"
+```
+
+## Create RDS MariaDB
+
+Create the RDS instance in the same VPC and Availability Zone as the benchmark nodes. Keep it
+private, not publicly accessible. For first runs, use a provisioned instance class large enough that
+the database is not obviously the bottleneck; then resize downward if metrics show spare headroom.
+
+Example:
+
+```bash
+export DB_SUBNET_GROUP=spider-storage-api-bench
+export DB_INSTANCE_ID=spider-storage-api-bench
+export DB_NAME=spider_db
+export DB_USER=spider_user
+export DB_PASSWORD='replace-with-a-secret-password'
+
+aws rds create-db-subnet-group \
+  --db-subnet-group-name "$DB_SUBNET_GROUP" \
+  --db-subnet-group-description "Spider storage API benchmark" \
+  --subnet-ids "$SUBNET_ID"
+
+aws rds create-db-instance \
+  --db-instance-identifier "$DB_INSTANCE_ID" \
+  --engine mariadb \
+  --db-instance-class db.r7i.2xlarge \
+  --allocated-storage 200 \
+  --storage-type gp3 \
+  --db-name "$DB_NAME" \
+  --master-username "$DB_USER" \
+  --master-user-password "$DB_PASSWORD" \
+  --vpc-security-group-ids "$RDS_SG_ID" \
+  --db-subnet-group-name "$DB_SUBNET_GROUP" \
+  --availability-zone "$AZ" \
+  --no-publicly-accessible
+```
+
+Wait for the instance and export its endpoint:
+
+```bash
+aws rds wait db-instance-available \
+  --db-instance-identifier "$DB_INSTANCE_ID"
+
+export RDS_ENDPOINT=$(
+  aws rds describe-db-instances \
+    --db-instance-identifier "$DB_INSTANCE_ID" \
+    --query 'DBInstances[0].Endpoint.Address' \
+    --output text
+)
+```
+
+The benchmark config needs the RDS endpoint, database name, username, and password. The automated
+runner passes those values to `aws_make_config.py`; it does not create or migrate the database
+schema separately. The storage server uses the database config when it starts.
 
 For 64 or 128 nodes, reserve capacity before launching. Use the exact instance type, AZ, and count
 you plan to run:
@@ -260,13 +351,11 @@ Run this on the server, controller, and every client-agent instance:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler docker.io git python3
-sudo usermod -aG docker "$USER"
+sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler git python3
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 ```
 
-Log out and back in so Docker group membership applies. Then clone or copy this repo on every node,
-check out the same branch/commit, and build:
+Clone or copy this repo on every node, check out the same branch/commit, and build:
 
 ```bash
 cd ~/spider
@@ -303,6 +392,10 @@ Generate a config from the server private IP and client-agent private IP list:
 ```bash
 tools/scripts/storage-api-bench/aws_make_config.py \
   --server-private-ip "$SERVER_IP" \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --agent-ips data/aws-client-ips.txt \
   --output components/spider-storage-api-bench/config/aws-128.toml
 ```
@@ -315,12 +408,17 @@ Defaults:
 - 16 workers per agent.
 - 50% flat jobs for the mixed workload.
 - REST target on port 8091, gRPC target on port 50051, agent control on port 19091.
+- RDS MariaDB on port 3306, using the database credentials passed on the command line.
 
 Override only the values you intentionally want to change, for example:
 
 ```bash
 tools/scripts/storage-api-bench/aws_make_config.py \
   --server-private-ip "$SERVER_IP" \
+  --database-host "$RDS_ENDPOINT" \
+  --database-name "$DB_NAME" \
+  --database-username "$DB_USER" \
+  --database-password "$DB_PASSWORD" \
   --agent-ips data/aws-client-ips.txt \
   --output components/spider-storage-api-bench/config/aws-128.toml \
   --jobs-per-agent 20 \
@@ -367,7 +465,8 @@ cd ~/spider
 tools/scripts/storage-api-bench/run_server.py \
   --protocol grpc \
   --config components/spider-storage-api-bench/config/aws-128.toml \
-  --bind 0.0.0.0:50051
+  --bind 0.0.0.0:50051 \
+  --external-database
 ```
 
 On the controller instance, run all workloads for that protocol:
@@ -386,7 +485,8 @@ Stop the storage server, restart it for REST, and run REST:
 tools/scripts/storage-api-bench/run_server.py \
   --protocol rest \
   --config components/spider-storage-api-bench/config/aws-128.toml \
-  --bind 0.0.0.0:8091
+  --bind 0.0.0.0:8091 \
+  --external-database
 ```
 
 ```bash
