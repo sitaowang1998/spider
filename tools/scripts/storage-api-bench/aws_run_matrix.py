@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Runs AWS distributed benchmark protocols and node counts sequentially."""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+import subprocess
+import sys
+
+import aws_common
+
+
+def main() -> int:
+    args = parse_args()
+    for node_count in args.node_counts:
+        for protocol in args.protocols:
+            data_dir = args.data_dir / f"aws-{node_count}" / protocol
+            workspace = args.workspace_root / args.run_id / str(node_count)
+            command = [
+                sys.executable,
+                str(aws_common.SCRIPT_DIR / "aws_run_protocol.py"),
+                "--run-id",
+                args.run_id,
+                "--node-count",
+                str(node_count),
+                "--protocol",
+                protocol,
+                "--workspace",
+                str(workspace),
+                "--data-dir",
+                str(data_dir),
+                "--remote-root",
+                args.remote_root,
+                "--remote-workspace",
+                f"{args.remote_workspace_root}/{args.run_id}/{node_count}",
+                "--jobs-per-agent",
+                str(args.jobs_per_agent),
+                "--tasks-per-job",
+                str(args.tasks_per_job),
+                "--payload-bytes",
+                str(args.payload_bytes),
+                "--client-count",
+                str(args.client_count),
+                "--worker-count",
+                str(args.worker_count),
+                "--flat-percent",
+                str(args.flat_percent),
+                "--rest-port",
+                str(args.rest_port),
+                "--grpc-port",
+                str(args.grpc_port),
+                "--agent-port",
+                str(args.agent_port),
+            ]
+            print(f"=== AWS benchmark: nodes={node_count} protocol={protocol} ===", flush=True)
+            result = subprocess.run(command, cwd=aws_common.ROOT, check=False)
+            if result.returncode != 0:
+                return result.returncode
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--node-counts", type=parse_csv_ints, default=[1, 2, 4, 8, 16, 32, 64, 128])
+    parser.add_argument("--protocols", nargs="+", choices=["grpc", "rest"], default=["grpc", "rest"])
+    parser.add_argument("--workspace-root", type=pathlib.Path, default=aws_common.ROOT / ".aws-bench")
+    parser.add_argument("--data-dir", type=pathlib.Path, default=aws_common.ROOT / "data")
+    parser.add_argument("--remote-root", default="~/spider")
+    parser.add_argument("--remote-workspace-root", default=".aws-bench")
+    parser.add_argument("--jobs-per-agent", type=int, default=10)
+    parser.add_argument("--tasks-per-job", type=int, default=1000)
+    parser.add_argument("--payload-bytes", type=int, default=128)
+    parser.add_argument("--client-count", type=int, default=8)
+    parser.add_argument("--worker-count", type=int, default=16)
+    parser.add_argument("--flat-percent", type=int, default=50)
+    parser.add_argument("--rest-port", type=int, default=8091)
+    parser.add_argument("--grpc-port", type=int, default=50051)
+    parser.add_argument("--agent-port", type=int, default=19091)
+    return parser.parse_args()
+
+
+def parse_csv_ints(value: str) -> list[int]:
+    return [int(item) for item in value.split(",") if item]
+
+
+if __name__ == "__main__":
+    sys.exit(main())
