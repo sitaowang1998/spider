@@ -54,16 +54,13 @@ def main() -> int:
     aws_common.wait_for_tcp(server_ip, port, args.server_start_timeout)
     try:
         result = subprocess.run(
-            [
-                sys.executable,
-                str(aws_common.SCRIPT_DIR / "run_distributed_protocol.py"),
-                "--protocol",
+            build_controller_command(
                 args.protocol,
-                "--config",
-                str(config),
-                "--data-dir",
-                str(args.data_dir),
-            ],
+                config,
+                args.data_dir,
+                args.reset_database,
+                args.database_reset_client_bin,
+            ),
             cwd=aws_common.ROOT,
             check=False,
         )
@@ -96,12 +93,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-username", default="spider-user")
     parser.add_argument("--database-password", default="spider-password")
     parser.add_argument("--database-max-connections", type=int, default=256)
+    parser.add_argument(
+        "--no-reset-database",
+        dest="reset_database",
+        action="store_false",
+        help="Do not reset database tables before each workload.",
+    )
+    parser.add_argument(
+        "--database-reset-client-bin",
+        help="MariaDB/MySQL client binary on the controller.",
+    )
     parser.add_argument("--agent-start-timeout", type=int, default=300)
     parser.add_argument("--server-start-timeout", type=int, default=600)
+    parser.set_defaults(reset_database=True)
     args = parser.parse_args()
     if args.remote_workspace is None:
         args.remote_workspace = f".aws-bench/{args.run_id}/{args.node_count}"
     return args
+
+
+def build_controller_command(
+    protocol: str,
+    config: pathlib.Path,
+    data_dir: pathlib.Path,
+    reset_database: bool,
+    database_reset_client_bin: str | None,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(aws_common.SCRIPT_DIR / "run_distributed_protocol.py"),
+        "--protocol",
+        protocol,
+        "--config",
+        str(config),
+        "--data-dir",
+        str(data_dir),
+    ]
+    if reset_database:
+        command.append("--reset-database")
+        if database_reset_client_bin is not None:
+            command.extend(["--database-reset-client-bin", database_reset_client_bin])
+    return command
 
 
 def write_discovery_files(

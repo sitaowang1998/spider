@@ -65,6 +65,10 @@ def main() -> int:
                 "--database-max-connections",
                 str(args.database_max_connections),
             ]
+            if not args.reset_database:
+                command.append("--no-reset-database")
+            if args.database_reset_client_bin is not None:
+                command.extend(["--database-reset-client-bin", args.database_reset_client_bin])
             print(f"=== AWS benchmark: nodes={node_count} protocol={protocol} ===", flush=True)
             result = subprocess.run(command, cwd=aws_common.ROOT, check=False)
             if result.returncode != 0:
@@ -96,6 +100,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-username", default="spider-user")
     parser.add_argument("--database-password", default="spider-password")
     parser.add_argument("--database-max-connections", type=int, default=256)
+    parser.add_argument(
+        "--no-reset-database",
+        dest="reset_database",
+        action="store_false",
+        help="Do not reset database tables before each workload.",
+    )
+    parser.add_argument(
+        "--database-reset-client-bin",
+        help="MariaDB/MySQL client binary on the controller.",
+    )
+    parser.set_defaults(reset_database=True)
     return parser.parse_args()
 
 

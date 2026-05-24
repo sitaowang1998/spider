@@ -17,6 +17,14 @@ def main() -> int:
     args = parse_args()
     args.data_dir.mkdir(parents=True, exist_ok=True)
     for workload in WORKLOADS:
+        if args.reset_database:
+            result = subprocess.run(
+                build_reset_database_command(args.config, args.database_reset_client_bin),
+                cwd=ROOT,
+                check=False,
+            )
+            if result.returncode != 0:
+                return result.returncode
         cmd = [
             str(SCRIPT_DIR / "run_distributed.py"),
             "--protocol",
@@ -46,7 +54,28 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "data/distributed",
     )
     parser.add_argument("--flat-percent", type=int)
+    parser.add_argument(
+        "--reset-database",
+        action="store_true",
+        help="Reset benchmark database tables before each workload.",
+    )
+    parser.add_argument(
+        "--database-reset-client-bin",
+        help="MariaDB/MySQL client binary forwarded to reset_database.py.",
+    )
     return parser.parse_args()
+
+
+def build_reset_database_command(config: pathlib.Path, client_bin: str | None) -> list[str]:
+    command = [
+        str(SCRIPT_DIR / "reset_database.py"),
+        "--config",
+        str(config),
+        "--yes",
+    ]
+    if client_bin is not None:
+        command.extend(["--client-bin", client_bin])
+    return command
 
 
 if __name__ == "__main__":
