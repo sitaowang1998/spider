@@ -44,6 +44,7 @@ def build_aws_env(
             env.pop(key, None)
     env["AWS_DEFAULT_REGION"] = region
     env["AWS_REGION"] = region
+    env["AWS_PAGER"] = ""
     if endpoint_url is not None:
         env["AWS_ENDPOINT_URL"] = endpoint_url
     else:

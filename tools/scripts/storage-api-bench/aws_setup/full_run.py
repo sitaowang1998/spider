@@ -20,7 +20,13 @@ def main() -> int:
     args = parse_args()
     run_id = parse_run_id(args.config, args.run_id)
     state = args.state or ROOT / ".aws-bench" / run_id / "state.json"
-    for step in full_run_steps(teardown=args.teardown):
+    return run_full_steps(args, state)
+
+
+def run_full_steps(args: argparse.Namespace, state: pathlib.Path) -> int:
+    steps = full_run_steps(teardown=False)
+    failed_returncode = 0
+    for step in steps:
         progress(f"starting step: {step}")
         command = step_command(
             step,
@@ -34,9 +40,37 @@ def main() -> int:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
             progress(f"step failed: {step}")
-            return result.returncode
+            failed_returncode = result.returncode
+            break
         progress(f"finished step: {step}")
+    if args.teardown:
+        teardown_returncode = run_teardown_step(args, state)
+        if failed_returncode == 0 and teardown_returncode != 0:
+            return teardown_returncode
+    if failed_returncode != 0:
+        progress("full run failed")
+        return failed_returncode
     progress("full run complete")
+    return 0
+
+
+def run_teardown_step(args: argparse.Namespace, state: pathlib.Path) -> int:
+    step = "teardown"
+    progress(f"starting step: {step}")
+    command = step_command(
+        step,
+        args.config,
+        args.secret,
+        state,
+        args.ami_state,
+        args.data_dir,
+        args.dry_run,
+    )
+    result = subprocess.run(command, cwd=ROOT, check=False)
+    if result.returncode != 0:
+        progress(f"step failed: {step}")
+        return result.returncode
+    progress(f"finished step: {step}")
     return 0
 
 

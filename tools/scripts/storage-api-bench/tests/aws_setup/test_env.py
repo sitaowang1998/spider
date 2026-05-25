@@ -48,6 +48,7 @@ class AwsSetupEnvTest(unittest.TestCase):
 
         self.assertEqual("key", aws_env["AWS_ACCESS_KEY_ID"])
         self.assertEqual("us-east-1", aws_env["AWS_DEFAULT_REGION"])
+        self.assertEqual("", aws_env["AWS_PAGER"])
         self.assertEqual("http://localhost:4566", aws_env["AWS_ENDPOINT_URL"])
         self.assertNotIn("AWS_SESSION_TOKEN", aws_env)
 
