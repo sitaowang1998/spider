@@ -16,6 +16,8 @@ import aws_cli
 import config as config_module
 import env as env_module
 import progress as progress_module
+import provision as provision_module
+import state as state_module
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -61,6 +63,7 @@ def main() -> int:
         source_root=args.source_root,
         artifact_dir=args.artifact_dir,
         ami_state_path=args.ami_state,
+        state_path=args.state or default_run_state_path(config.aws.run_id),
         localstack_smoke=args.localstack_smoke,
     )
     print(metadata.get("ami_id", ""))
@@ -72,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=pathlib.Path, required=True)
     parser.add_argument("--secret", type=pathlib.Path, default=ROOT / ".secret")
     parser.add_argument("--ami-state", type=pathlib.Path, default=ami_state.default_ami_state_path())
+    parser.add_argument("--state", type=pathlib.Path)
     parser.add_argument("--source-root", type=pathlib.Path, default=ROOT)
     parser.add_argument("--artifact-dir", type=pathlib.Path, default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument(
@@ -83,6 +87,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def default_run_state_path(run_id: str) -> pathlib.Path:
+    return ROOT / ".aws-bench" / run_id / "state.json"
+
+
 def build_ami(
     config: config_module.AwsBenchConfig,
     client: aws_cli.AwsCli,
@@ -90,6 +98,7 @@ def build_ami(
     source_root: pathlib.Path,
     artifact_dir: pathlib.Path,
     ami_state_path: pathlib.Path,
+    state_path: pathlib.Path,
     localstack_smoke: bool,
 ) -> dict[str, object]:
     progress("building local benchmark binary in release mode")
@@ -105,6 +114,20 @@ def build_ami(
 
     progress(f"ensuring builder instance profile {config.artifact.builder_iam_instance_profile}")
     ensure_builder_instance_profile(client, config)
+    progress(f"ensuring shared benchmark network in {state_path}")
+    state = state_module.load_state(state_path)
+    resources = state.setdefault("resources", {})
+    if not isinstance(resources, dict):
+        msg = "state resources must be an object"
+        raise ValueError(msg)
+    try:
+        provision_module.ensure_network(client, config, resources)
+    finally:
+        state_module.save_state(state_path, state)
+    progress("waiting for builder instance profile role association")
+    wait_for_instance_profile_role(client, config.artifact.builder_iam_instance_profile)
+    progress("checking AMI builder launch inputs")
+    preflight_builder_launch_inputs(client, config)
     progress(
         f"launching AMI builder from {config.artifact.base_ami_id} "
         f"as {config.artifact.builder_instance_type}"
@@ -244,6 +267,47 @@ def ensure_builder_instance_profile(
             role_name,
         ]
     )
+
+
+def wait_for_instance_profile_role(
+    client: aws_cli.AwsCli,
+    instance_profile_name: str,
+) -> None:
+    if client.dry_run:
+        return
+    for _ in range(24):
+        data = client.run_json(
+            [
+                "iam",
+                "get-instance-profile",
+                "--instance-profile-name",
+                instance_profile_name,
+            ]
+        )
+        roles = data.get("InstanceProfile", {}).get("Roles", []) if isinstance(data, dict) else []
+        if roles:
+            return
+        time.sleep(5)
+    msg = f"instance profile {instance_profile_name} has no role after waiting"
+    raise RuntimeError(msg)
+
+
+def preflight_builder_launch_inputs(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+) -> None:
+    client.run_json(["ec2", "describe-images", "--image-ids", config.artifact.base_ami_id])
+    if config.network.subnet_id:
+        client.run_json(["ec2", "describe-subnets", "--subnet-ids", config.network.subnet_id])
+    if config.network.security_group_id:
+        client.run_json(
+            [
+                "ec2",
+                "describe-security-groups",
+                "--group-ids",
+                config.network.security_group_id,
+            ]
+        )
 
 
 def launch_builder_instance(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> str:

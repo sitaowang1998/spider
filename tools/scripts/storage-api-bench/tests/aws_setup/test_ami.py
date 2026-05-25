@@ -96,6 +96,7 @@ class AmiTest(unittest.TestCase):
                 source_root=source,
                 artifact_dir=temp_dir,
                 ami_state_path=state_path,
+                state_path=temp_dir / "state.json",
                 localstack_smoke=True,
             )
             saved_ami_id = json.loads(state_path.read_text(encoding="utf-8"))["ami_id"]

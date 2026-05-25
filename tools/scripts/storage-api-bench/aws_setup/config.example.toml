@@ -40,13 +40,13 @@ storage_type = "gp3"
 max_connections = 256
 
 [network]
-vpc_id = "vpc-xxxxxxxx"
+vpc_id = ""
 vpc_cidr = "10.42.0.0/16"
-subnet_id = "subnet-primary-az"
+subnet_id = ""
 subnet_cidr = "10.42.1.0/24"
-rds_subnet_ids = ["subnet-primary-az", "subnet-second-az"]
-rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
+rds_subnet_ids = []
 rds_subnet_availability_zones = ["us-east-1a", "us-east-1b"]
+rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
 security_group_id = ""
 rds_security_group_id = ""
 placement_group = "spider-storage-api-bench"

@@ -32,7 +32,7 @@ class AwsCli:
         self.commands.append(command)
         if self.dry_run:
             return {}
-        result = subprocess.run(command, check=True, capture_output=True, text=True, env=self.env)
+        result = self.run_captured(command)
         return json.loads(result.stdout or "{}")
 
     def run_text(self, args: list[str]) -> str:
@@ -40,7 +40,7 @@ class AwsCli:
         self.commands.append(command)
         if self.dry_run:
             return ""
-        result = subprocess.run(command, check=True, capture_output=True, text=True, env=self.env)
+        result = self.run_captured(command)
         return result.stdout.strip()
 
     def run(self, args: list[str]) -> None:
@@ -56,3 +56,22 @@ class AwsCli:
         if self.dry_run:
             return 0
         return subprocess.run(command, check=False, env=self.env).returncode
+
+    def run_captured(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        if result.returncode != 0:
+            print(f"AWS CLI command failed with exit code {result.returncode}", flush=True)
+            if result.stdout:
+                print("AWS CLI stdout:", flush=True)
+                print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+            if result.stderr:
+                print("AWS CLI stderr:", flush=True)
+                print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
+            result.check_returncode()
+        return result

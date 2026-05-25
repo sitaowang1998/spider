@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+import time
 
 import ami_state
 import aws_cli
@@ -113,6 +114,8 @@ def ensure_network(
     config: config_module.AwsBenchConfig,
     resources: dict[str, object],
 ) -> None:
+    hydrate_network_config_from_state(config, resources)
+    normalize_network_config(config)
     if not config.network.vpc_id:
         progress("creating VPC")
         config.network.vpc_id = create_vpc(client, config)
@@ -120,6 +123,7 @@ def ensure_network(
         progress(f"created VPC {config.network.vpc_id}")
     if not config.network.subnet_id:
         progress("creating primary subnet")
+        validate_primary_rds_subnet_config(config)
         config.network.subnet_id = create_subnet(
             client,
             config,
@@ -129,17 +133,15 @@ def ensure_network(
         resources["subnet_id"] = config.network.subnet_id
         progress(f"created primary subnet {config.network.subnet_id}")
     if not config.network.rds_subnet_ids:
-        progress("creating RDS subnets")
-        availability_zones = config.network.rds_subnet_availability_zones or [
-            config.aws.availability_zone,
-            second_az(config.aws.availability_zone),
-        ]
-        config.network.rds_subnet_ids = [
-            create_subnet(client, config, cidr, az)
-            for cidr, az in zip(config.network.rds_subnet_cidrs, availability_zones, strict=False)
-        ]
+        progress("creating secondary RDS subnet")
+        secondary_cidr, secondary_az = secondary_rds_subnet_config(config)
+        secondary_subnet_id = create_subnet(client, config, secondary_cidr, secondary_az)
+        config.network.rds_subnet_ids = [config.network.subnet_id, secondary_subnet_id]
         resources["rds_subnet_ids"] = config.network.rds_subnet_ids
         progress(f"created RDS subnets: {', '.join(config.network.rds_subnet_ids)}")
+    if resources.get("vpc_id") and not resources.get("route_table_id"):
+        progress("creating public routing for created benchmark subnets")
+        setup_public_routing(client, config, resources)
     if not config.network.security_group_id:
         progress("creating EC2 security group")
         config.network.security_group_id = create_security_group(
@@ -169,6 +171,63 @@ def ensure_network(
         progress(f"created RDS security group {config.network.rds_security_group_id}")
 
 
+def hydrate_network_config_from_state(
+    config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
+) -> None:
+    if not config.network.vpc_id and isinstance(resources.get("vpc_id"), str):
+        config.network.vpc_id = resources["vpc_id"]
+    if not config.network.subnet_id and isinstance(resources.get("subnet_id"), str):
+        config.network.subnet_id = resources["subnet_id"]
+    if not config.network.rds_subnet_ids and isinstance(resources.get("rds_subnet_ids"), list):
+        config.network.rds_subnet_ids = [
+            subnet_id for subnet_id in resources["rds_subnet_ids"] if isinstance(subnet_id, str)
+        ]
+    if not config.network.security_group_id and isinstance(resources.get("security_group_id"), str):
+        config.network.security_group_id = resources["security_group_id"]
+    if not config.network.rds_security_group_id and isinstance(resources.get("rds_security_group_id"), str):
+        config.network.rds_security_group_id = resources["rds_security_group_id"]
+
+
+def normalize_network_config(config: config_module.AwsBenchConfig) -> None:
+    config.network.rds_subnet_ids = non_empty_strings(config.network.rds_subnet_ids)
+    config.network.rds_subnet_cidrs = non_empty_strings(config.network.rds_subnet_cidrs)
+    config.network.rds_subnet_availability_zones = non_empty_strings(config.network.rds_subnet_availability_zones)
+
+
+def non_empty_strings(values: list[str]) -> list[str]:
+    return [value for value in values if value]
+
+
+def validate_primary_rds_subnet_config(config: config_module.AwsBenchConfig) -> None:
+    if not config.network.rds_subnet_availability_zones:
+        msg = "network.rds_subnet_availability_zones must include primary and secondary RDS AZs"
+        raise ValueError(msg)
+    if config.network.rds_subnet_availability_zones[0] != config.aws.availability_zone:
+        msg = "first network.rds_subnet_availability_zones entry must match aws.availability_zone"
+        raise ValueError(msg)
+    if not config.network.rds_subnet_cidrs:
+        msg = "network.rds_subnet_cidrs must include primary and secondary RDS CIDRs"
+        raise ValueError(msg)
+    if config.network.rds_subnet_cidrs[0] != config.network.subnet_cidr:
+        msg = "first network.rds_subnet_cidrs entry must match network.subnet_cidr"
+        raise ValueError(msg)
+
+
+def secondary_rds_subnet_config(config: config_module.AwsBenchConfig) -> tuple[str, str]:
+    if len(config.network.rds_subnet_cidrs) < 2:
+        msg = "network.rds_subnet_cidrs must contain a secondary RDS subnet CIDR"
+        raise ValueError(msg)
+    if len(config.network.rds_subnet_availability_zones) < 2:
+        msg = "network.rds_subnet_availability_zones must contain a secondary RDS AZ"
+        raise ValueError(msg)
+    secondary_az = config.network.rds_subnet_availability_zones[1]
+    if secondary_az == config.aws.availability_zone:
+        msg = "secondary RDS AZ must differ from aws.availability_zone"
+        raise ValueError(msg)
+    return config.network.rds_subnet_cidrs[1], secondary_az
+
+
 def create_vpc(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> str:
     data = client.run_json(["ec2", "create-vpc", "--cidr-block", config.network.vpc_cidr])
     return data.get("Vpc", {}).get("VpcId", f"vpc-{config.aws.run_id}")
@@ -193,6 +252,91 @@ def create_subnet(
         ]
     )
     return data.get("Subnet", {}).get("SubnetId", f"subnet-{cidr.replace('.', '-').replace('/', '-')}")
+
+
+def setup_public_routing(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
+) -> None:
+    internet_gateway_id = create_internet_gateway(client, config)
+    resources["internet_gateway_id"] = internet_gateway_id
+    attach_internet_gateway(client, config.network.vpc_id, internet_gateway_id)
+    route_table_id = create_route_table(client, config)
+    resources["route_table_id"] = route_table_id
+    create_default_route(client, route_table_id, internet_gateway_id)
+    subnet_ids = non_empty_strings([config.network.subnet_id])
+    subnet_ids.extend(
+        subnet_id
+        for subnet_id in non_empty_strings(config.network.rds_subnet_ids)
+        if subnet_id not in subnet_ids
+    )
+    route_table_association_ids = []
+    for subnet_id in subnet_ids:
+        enable_public_ip_mapping(client, subnet_id)
+        association_id = associate_route_table(client, route_table_id, subnet_id)
+        route_table_association_ids.append(association_id)
+    resources["route_table_association_ids"] = route_table_association_ids
+
+
+def create_internet_gateway(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+) -> str:
+    data = client.run_json(
+        [
+            "ec2",
+            "create-internet-gateway",
+            "--tag-specifications",
+            f"ResourceType=internet-gateway,Tags=[{{Key=RunId,Value={config.aws.run_id}}}]",
+        ]
+    )
+    return data.get("InternetGateway", {}).get("InternetGatewayId", f"igw-{config.aws.run_id}")
+
+
+def attach_internet_gateway(client: aws_cli.AwsCli, vpc_id: str, internet_gateway_id: str) -> None:
+    client.run(["ec2", "attach-internet-gateway", "--vpc-id", vpc_id, "--internet-gateway-id", internet_gateway_id])
+
+
+def create_route_table(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+) -> str:
+    data = client.run_json(
+        [
+            "ec2",
+            "create-route-table",
+            "--vpc-id",
+            config.network.vpc_id,
+            "--tag-specifications",
+            f"ResourceType=route-table,Tags=[{{Key=RunId,Value={config.aws.run_id}}}]",
+        ]
+    )
+    return data.get("RouteTable", {}).get("RouteTableId", f"rtb-{config.aws.run_id}")
+
+
+def create_default_route(client: aws_cli.AwsCli, route_table_id: str, internet_gateway_id: str) -> None:
+    client.run(
+        [
+            "ec2",
+            "create-route",
+            "--route-table-id",
+            route_table_id,
+            "--destination-cidr-block",
+            "0.0.0.0/0",
+            "--gateway-id",
+            internet_gateway_id,
+        ]
+    )
+
+
+def enable_public_ip_mapping(client: aws_cli.AwsCli, subnet_id: str) -> None:
+    client.run(["ec2", "modify-subnet-attribute", "--subnet-id", subnet_id, "--map-public-ip-on-launch"])
+
+
+def associate_route_table(client: aws_cli.AwsCli, route_table_id: str, subnet_id: str) -> str:
+    data = client.run_json(["ec2", "associate-route-table", "--route-table-id", route_table_id, "--subnet-id", subnet_id])
+    return data.get("AssociationId", f"rtbassoc-{subnet_id}")
 
 
 def create_security_group(
@@ -252,7 +396,7 @@ def ensure_ssm_instance_profile(
         '{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
     )
     role_name = config.instances.iam_instance_profile
-    client.run(
+    client.run_allow_failure(
         [
             "iam",
             "create-role",
@@ -262,7 +406,7 @@ def ensure_ssm_instance_profile(
             assume_role_policy,
         ]
     )
-    client.run(
+    client.run_allow_failure(
         [
             "iam",
             "attach-role-policy",
@@ -272,8 +416,8 @@ def ensure_ssm_instance_profile(
             "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
         ]
     )
-    client.run(["iam", "create-instance-profile", "--instance-profile-name", role_name])
-    client.run(
+    client.run_allow_failure(["iam", "create-instance-profile", "--instance-profile-name", role_name])
+    client.run_allow_failure(
         [
             "iam",
             "add-role-to-instance-profile",
@@ -283,6 +427,30 @@ def ensure_ssm_instance_profile(
             role_name,
         ]
     )
+    wait_for_instance_profile_role(client, role_name)
+
+
+def wait_for_instance_profile_role(
+    client: aws_cli.AwsCli,
+    instance_profile_name: str,
+) -> None:
+    if client.dry_run:
+        return
+    for _ in range(24):
+        data = client.run_json(
+            [
+                "iam",
+                "get-instance-profile",
+                "--instance-profile-name",
+                instance_profile_name,
+            ]
+        )
+        roles = data.get("InstanceProfile", {}).get("Roles", []) if isinstance(data, dict) else []
+        if roles:
+            return
+        time.sleep(5)
+    msg = f"instance profile {instance_profile_name} has no role after waiting"
+    raise RuntimeError(msg)
 
 
 def ensure_placement_group(

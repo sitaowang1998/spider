@@ -135,6 +135,8 @@ def apply_section(target: object, values: dict[str, object]) -> None:
         if key in fields:
             if value == "":
                 value = None
+            elif isinstance(value, list):
+                value = [item for item in value if item != ""]
             setattr(target, key, value)
 
 

@@ -1,6 +1,6 @@
 [aws]
 region = "ca-central-1"
-availability_zone = "cac1-az1"
+availability_zone = "ca-central-1a"
 run_id = "spider-storage-bench-128"
 # Set for LocalStack tests, for example "http://localhost:4566".
 endpoint_url = ""
@@ -19,7 +19,7 @@ flat_percent = 50
 [instances]
 client_count = 128
 client_type = "c7i.large"
-server_type = "r8g.4xlarge"
+server_type = "r7i.4xlarge"
 controller_type = "c7i.large"
 # Optional override for the benchmark-node AMI. Leave as ami-xxxxxxxx to use
 # .aws-bench/ami/latest.json written by build_ami.py.
@@ -42,11 +42,11 @@ max_connections = 256
 [network]
 vpc_id = ""
 vpc_cidr = "10.42.0.0/16"
-subnet_id = "subnet-primary-az"
+subnet_id = ""
 subnet_cidr = "10.42.1.0/24"
-rds_subnet_ids = ["subnet-primary-az", "subnet-second-az"]
+rds_subnet_ids = ["", ""]
 rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
-rds_subnet_availability_zones = ["cac1-az1", "cac1-az2"]
+rds_subnet_availability_zones = ["ca-central-1a", "ca-central-1b"]
 security_group_id = ""
 rds_security_group_id = ""
 placement_group = "spider-storage-api-bench"
@@ -56,7 +56,7 @@ mode = "existing-repo"
 # Optional exact S3 destination for the source bundle uploaded by build_ami.py.
 s3_uri = ""
 # Source OS AMI used only by build_ami.py. Amazon Linux 2023 with SSM agent is recommended.
-base_ami_id = "ami-al2023-base"
+base_ami_id = "ami-0344a23c782460e34"
 builder_instance_type = "c7i.large"
 builder_iam_instance_profile = "spider-bench-ami-builder"
 # Human-readable AWS image name prefix for the built benchmark-node AMI.

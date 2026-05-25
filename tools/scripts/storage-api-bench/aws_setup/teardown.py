@@ -83,6 +83,8 @@ def teardown(
     client.run(["ec2", "delete-placement-group", "--group-name", config.network.placement_group])
     progress("deleting results bucket data")
     delete_results_bucket(client, state)
+    progress("deleting created network resources")
+    delete_network_resources(client, state)
 
 
 def progress(message: str) -> None:
@@ -101,6 +103,46 @@ def delete_results_bucket(client: aws_cli.AwsCli, state: dict[str, object]) -> N
     if isinstance(bucket, str) and bucket:
         progress(f"deleting result bucket {bucket}")
         client.run(["s3api", "delete-bucket", "--bucket", bucket])
+
+
+def delete_network_resources(client: aws_cli.AwsCli, state: dict[str, object]) -> None:
+    resources = state.get("resources", {})
+    if not isinstance(resources, dict):
+        return
+    for association_id in resources.get("route_table_association_ids", []):
+        progress(f"disassociating route table association {association_id}")
+        client.run(["ec2", "disassociate-route-table", "--association-id", association_id])
+    route_table_id = resources.get("route_table_id")
+    if isinstance(route_table_id, str) and route_table_id:
+        progress(f"deleting route table {route_table_id}")
+        client.run(["ec2", "delete-route-table", "--route-table-id", route_table_id])
+    internet_gateway_id = resources.get("internet_gateway_id")
+    vpc_id = resources.get("vpc_id")
+    if isinstance(internet_gateway_id, str) and internet_gateway_id:
+        if isinstance(vpc_id, str) and vpc_id:
+            progress(f"detaching internet gateway {internet_gateway_id}")
+            client.run(["ec2", "detach-internet-gateway", "--internet-gateway-id", internet_gateway_id, "--vpc-id", vpc_id])
+        progress(f"deleting internet gateway {internet_gateway_id}")
+        client.run(["ec2", "delete-internet-gateway", "--internet-gateway-id", internet_gateway_id])
+    for subnet_id in resources.get("rds_subnet_ids", []):
+        if subnet_id != resources.get("subnet_id"):
+            progress(f"deleting subnet {subnet_id}")
+            client.run(["ec2", "delete-subnet", "--subnet-id", subnet_id])
+    subnet_id = resources.get("subnet_id")
+    if isinstance(subnet_id, str) and subnet_id:
+        progress(f"deleting subnet {subnet_id}")
+        client.run(["ec2", "delete-subnet", "--subnet-id", subnet_id])
+    security_group_id = resources.get("security_group_id")
+    if isinstance(security_group_id, str) and security_group_id:
+        progress(f"deleting EC2 security group {security_group_id}")
+        client.run(["ec2", "delete-security-group", "--group-id", security_group_id])
+    rds_security_group_id = resources.get("rds_security_group_id")
+    if isinstance(rds_security_group_id, str) and rds_security_group_id:
+        progress(f"deleting RDS security group {rds_security_group_id}")
+        client.run(["ec2", "delete-security-group", "--group-id", rds_security_group_id])
+    if isinstance(vpc_id, str) and vpc_id:
+        progress(f"deleting VPC {vpc_id}")
+        client.run(["ec2", "delete-vpc", "--vpc-id", vpc_id])
 
 
 def discover_all_instance_ids(client: aws_cli.AwsCli, run_id: str) -> list[str]:

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import io
 import pathlib
+import subprocess
 import sys
 import unittest
+from contextlib import redirect_stdout
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parents[2] / "aws_setup"
@@ -47,6 +50,21 @@ class AwsCliTest(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([["aws", "s3api", "create-bucket", "--bucket", "bucket"]], client.commands)
+
+    def test_captured_failure_prints_stdout_and_stderr(self):
+        aws_cli = load_module("aws_cli")
+        client = aws_cli.AwsCli(endpoint_url=None, env={})
+        output = io.StringIO()
+
+        with redirect_stdout(output), self.assertRaises(subprocess.CalledProcessError):
+            client.run_captured(["sh", "-c", "printf out; printf err >&2; exit 254"])
+
+        text = output.getvalue()
+        self.assertIn("exit code 254", text)
+        self.assertIn("AWS CLI stdout:", text)
+        self.assertIn("out", text)
+        self.assertIn("AWS CLI stderr:", text)
+        self.assertIn("err", text)
 
 
 if __name__ == "__main__":
