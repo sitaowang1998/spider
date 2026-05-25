@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import pathlib
 import shlex
 import sys
@@ -64,20 +63,12 @@ def deploy(
             raise RuntimeError(msg)
     progress(f"sending deploy validation command to {len(instance_ids)} instance(s)")
     commands = deployment_commands(config)
-    client.run(
-        [
-            "ssm",
-            "send-command",
-            "--document-name",
-            "AWS-RunShellScript",
-            "--comment",
-            "deploy spider benchmark artifact",
-            "--instance-ids",
-            *instance_ids,
-            "--parameters",
-            json.dumps({"commands": commands}),
-        ]
+    command_ids = client.send_shell_command(
+        instance_ids,
+        commands,
+        comment="deploy spider benchmark artifact",
     )
+    progress(f"deploy validation command submitted in {len(command_ids)} batch(es)")
 
 
 def progress(message: str) -> None:

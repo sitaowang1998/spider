@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import subprocess
 import sys
 import time
 
@@ -90,24 +91,25 @@ def provision(
     progress("ensuring RDS subnet group")
     ensure_rds_subnet_group(client, config, resources)
     save_progress_state(state_path, state)
-    progress("launching benchmark instances")
-    launch_instances(client, config)
     progress("creating RDS instance")
     create_rds(client, config)
-    progress("ensuring results bucket")
-    ensure_results_bucket(client, config, resources)
-
     resources["rds_instance_id"] = rds_instance_id(config)
     save_progress_state(state_path, state)
+    progress("launching benchmark instances")
+    resources["instance_ids"] = launch_instances(client, config)
+    save_progress_state(state_path, state)
+    progress("ensuring results bucket")
+    ensure_results_bucket(client, config, resources)
+    save_progress_state(state_path, state)
+    progress("waiting for EC2 instances to enter running state")
+    wait_for_ec2(client, resources["instance_ids"])
+    progress("EC2 instances are running")
     progress("waiting for RDS instance to become available")
     wait_for_rds(client, config)
     progress("discovering RDS endpoint")
     resources["rds_endpoint"] = discover_rds_endpoint(client, config)
     save_progress_state(state_path, state)
     progress(f"RDS endpoint: {resources['rds_endpoint']}")
-    progress("waiting for EC2 instances to enter running state")
-    wait_for_ec2(client, config)
-    progress("EC2 instances are running")
 
 
 def progress(message: str) -> None:
@@ -151,6 +153,9 @@ def ensure_network(
         config.network.rds_subnet_ids = [config.network.subnet_id, secondary_subnet_id]
         resources["rds_subnet_ids"] = config.network.rds_subnet_ids
         progress(f"created RDS subnets: {', '.join(config.network.rds_subnet_ids)}")
+    if not config.network.worker_subnet_ids:
+        config.network.worker_subnet_ids = list(config.network.rds_subnet_ids)
+        resources["worker_subnet_ids"] = config.network.worker_subnet_ids
     if resources.get("vpc_id") and not resources.get("route_table_id"):
         progress("creating public routing for created benchmark subnets")
         setup_public_routing(client, config, resources)
@@ -195,6 +200,10 @@ def hydrate_network_config_from_state(
         config.network.rds_subnet_ids = [
             subnet_id for subnet_id in resources["rds_subnet_ids"] if isinstance(subnet_id, str)
         ]
+    if not config.network.worker_subnet_ids and isinstance(resources.get("worker_subnet_ids"), list):
+        config.network.worker_subnet_ids = [
+            subnet_id for subnet_id in resources["worker_subnet_ids"] if isinstance(subnet_id, str)
+        ]
     if not config.network.security_group_id and isinstance(resources.get("security_group_id"), str):
         config.network.security_group_id = resources["security_group_id"]
     if not config.network.rds_security_group_id and isinstance(resources.get("rds_security_group_id"), str):
@@ -203,6 +212,7 @@ def hydrate_network_config_from_state(
 
 def normalize_network_config(config: config_module.AwsBenchConfig) -> None:
     config.network.rds_subnet_ids = non_empty_strings(config.network.rds_subnet_ids)
+    config.network.worker_subnet_ids = non_empty_strings(config.network.worker_subnet_ids)
     config.network.rds_subnet_cidrs = non_empty_strings(config.network.rds_subnet_cidrs)
     config.network.rds_subnet_availability_zones = non_empty_strings(config.network.rds_subnet_availability_zones)
 
@@ -281,6 +291,11 @@ def setup_public_routing(
     subnet_ids.extend(
         subnet_id
         for subnet_id in non_empty_strings(config.network.rds_subnet_ids)
+        if subnet_id not in subnet_ids
+    )
+    subnet_ids.extend(
+        subnet_id
+        for subnet_id in non_empty_strings(config.network.worker_subnet_ids)
         if subnet_id not in subnet_ids
     )
     route_table_association_ids = []
@@ -566,27 +581,48 @@ def existing_db_subnet_group_vpc_id(data: object) -> str | None:
 def launch_instances(
     client: aws_cli.AwsCli,
     config: config_module.AwsBenchConfig,
-) -> None:
+) -> list[str]:
+    instance_ids: list[str] = []
     progress("launching storage server instance")
-    launch_role(client, config, "storage-server", config.instances.server_type, 1)
+    instance_ids.extend(
+        launch_role(
+            client,
+            config,
+            "storage-server",
+            config.instances.server_type,
+            1,
+            config.network.subnet_id,
+            config.aws.availability_zone,
+        )
+    )
     progress("launching controller instance")
-    launch_role(client, config, "controller", config.instances.controller_type, 1)
+    instance_ids.extend(
+        launch_role(
+            client,
+            config,
+            "controller",
+            config.instances.controller_type,
+            1,
+            config.network.subnet_id,
+            config.aws.availability_zone,
+        )
+    )
     progress("launching dedicated benchmark submitter instance")
-    launch_role(
-        client,
-        config,
-        "benchmark-submitter",
-        config.instances.submitter_type,
-        1,
+    instance_ids.extend(
+        launch_role(
+            client,
+            config,
+            "benchmark-submitter",
+            config.instances.submitter_type,
+            1,
+            config.network.subnet_id,
+            config.aws.availability_zone,
+        )
     )
     progress(f"launching {config.instances.worker_count} benchmark worker instances")
-    launch_role(
-        client,
-        config,
-        "benchmark-worker",
-        config.instances.worker_type,
-        config.instances.worker_count,
-    )
+    instance_ids.extend(launch_worker_roles(client, config))
+    progress(f"launched {len(instance_ids)} benchmark instance(s)")
+    return instance_ids
 
 
 def launch_role(
@@ -595,7 +631,9 @@ def launch_role(
     role: str,
     instance_type: str,
     count: int,
-) -> None:
+    subnet_id: str,
+    availability_zone: str | None,
+) -> list[str]:
     command = [
         "ec2",
         "run-instances",
@@ -608,19 +646,80 @@ def launch_role(
         "--security-group-ids",
         config.network.security_group_id,
         "--subnet-id",
-        config.network.subnet_id,
+        subnet_id,
         "--tag-specifications",
         f"ResourceType=instance,Tags=[{{Key=RunId,Value={config.aws.run_id}}},{{Key=Role,Value={role}}}]",
         "--iam-instance-profile",
         f"Name={config.instances.iam_instance_profile}",
     ]
-    placement = f"AvailabilityZone={config.aws.availability_zone}"
+    placement = f"AvailabilityZone={availability_zone}" if availability_zone else ""
     if config.network.placement_group:
-        placement += f",GroupName={config.network.placement_group}"
-    command.extend(["--placement", placement])
+        placement += f"{',' if placement else ''}GroupName={config.network.placement_group}"
+    if placement:
+        command.extend(["--placement", placement])
     if config.instances.key_name is not None:
         command.extend(["--key-name", config.instances.key_name])
-    client.run(command)
+    data = client.run_json(command)
+    return instance_ids_from_run_instances(data)
+
+
+def instance_ids_from_run_instances(data: object) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    instances = data.get("Instances")
+    if not isinstance(instances, list):
+        return []
+    instance_ids = []
+    for instance in instances:
+        if not isinstance(instance, dict):
+            continue
+        instance_id = instance.get("InstanceId")
+        if isinstance(instance_id, str) and instance_id:
+            instance_ids.append(instance_id)
+    return instance_ids
+
+
+def launch_worker_roles(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+) -> list[str]:
+    instance_ids: list[str] = []
+    worker_subnet_ids = worker_subnet_ids_for_launch(config)
+    if config.network.placement_group and len(worker_subnet_ids) > 1:
+        msg = "network.placement_group cannot be used with workers spread across multiple subnets"
+        raise ValueError(msg)
+    for index, subnet_id in enumerate(worker_subnet_ids):
+        count = remaining_worker_count(config.instances.worker_count, len(worker_subnet_ids), index)
+        if count == 0:
+            continue
+        progress(f"launching {count} benchmark worker instance(s) in subnet {subnet_id}")
+        instance_ids.extend(
+            launch_role(
+                client,
+                config,
+                "benchmark-worker",
+                config.instances.worker_type,
+                count,
+                subnet_id,
+                None,
+            )
+        )
+    return instance_ids
+
+
+def worker_subnet_ids_for_launch(config: config_module.AwsBenchConfig) -> list[str]:
+    subnet_ids = non_empty_strings(config.network.worker_subnet_ids)
+    if not subnet_ids:
+        subnet_ids = non_empty_strings(config.network.rds_subnet_ids)
+    if not subnet_ids:
+        subnet_ids = non_empty_strings([config.network.subnet_id])
+    return subnet_ids
+
+
+def remaining_worker_count(total: int, subnet_count: int, index: int) -> int:
+    base = total // subnet_count
+    remainder = total % subnet_count
+    return base + int(index < remainder)
 
 
 def create_rds(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> None:
@@ -693,16 +792,80 @@ def create_bucket_command(bucket: str, region: str) -> list[str]:
     return command
 
 
-def wait_for_ec2(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> None:
-    client.run(
-        [
-            "ec2",
-            "wait",
-            "instance-running",
-            "--filters",
-            f"Name=tag:RunId,Values={config.aws.run_id}",
-        ]
-    )
+def wait_for_ec2(client: aws_cli.AwsCli, instance_ids: object) -> None:
+    if not isinstance(instance_ids, list):
+        msg = "state resources.instance_ids must be a list"
+        raise ValueError(msg)
+    ids = [instance_id for instance_id in instance_ids if isinstance(instance_id, str)]
+    if not ids:
+        msg = "no launched EC2 instance IDs recorded for waiter"
+        raise ValueError(msg)
+    try:
+        client.run(["ec2", "wait", "instance-running", "--instance-ids", *ids])
+    except subprocess.CalledProcessError:
+        describe_ec2_wait_failure(client, ids)
+        raise
+
+
+def describe_ec2_wait_failure(client: aws_cli.AwsCli, instance_ids: list[str]) -> None:
+    try:
+        data = client.run_json(["ec2", "describe-instances", "--instance-ids", *instance_ids])
+    except subprocess.CalledProcessError:
+        return
+    for row in instance_state_rows(data):
+        progress(
+            "instance "
+            f"{row['instance_id']} role={row['role']} type={row['instance_type']} "
+            f"subnet={row['subnet_id']} state={row['state']} reason={row['reason']}"
+        )
+
+
+def instance_state_rows(data: object) -> list[dict[str, str]]:
+    if not isinstance(data, dict):
+        return []
+    rows = []
+    reservations = data.get("Reservations")
+    if not isinstance(reservations, list):
+        return rows
+    for reservation in reservations:
+        if not isinstance(reservation, dict):
+            continue
+        instances = reservation.get("Instances")
+        if not isinstance(instances, list):
+            continue
+        for instance in instances:
+            if isinstance(instance, dict):
+                rows.append(instance_state_row(instance))
+    return rows
+
+
+def instance_state_row(instance: dict[str, object]) -> dict[str, str]:
+    state = instance.get("State") if isinstance(instance.get("State"), dict) else {}
+    reason = instance.get("StateReason") if isinstance(instance.get("StateReason"), dict) else {}
+    return {
+        "instance_id": string_value(instance.get("InstanceId")),
+        "instance_type": string_value(instance.get("InstanceType")),
+        "subnet_id": string_value(instance.get("SubnetId")),
+        "state": string_value(state.get("Name") if isinstance(state, dict) else None),
+        "reason": string_value(reason.get("Message") if isinstance(reason, dict) else None),
+        "role": tag_value(instance, "Role"),
+    }
+
+
+def string_value(value: object) -> str:
+    return value if isinstance(value, str) and value else "-"
+
+
+def tag_value(instance: dict[str, object], key: str) -> str:
+    tags = instance.get("Tags")
+    if not isinstance(tags, list):
+        return "-"
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        if tag.get("Key") == key and isinstance(tag.get("Value"), str):
+            return tag["Value"]
+    return "-"
 
 
 def wait_for_rds(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> None:

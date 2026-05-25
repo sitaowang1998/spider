@@ -1,12 +1,12 @@
 [aws]
-region = "ca-central-1"
-availability_zone = "ca-central-1a"
+region = "us-east-1"
+availability_zone = "us-east-1a"
 run_id = "spider-storage-bench-128"
 # Set for LocalStack tests, for example "http://localhost:4566".
 endpoint_url = ""
 
 [benchmark]
-node_counts = [1, 2, 4, 8, 16, 64, 128]
+node_counts = [1, 2, 4, 8, 16, 32, 64]
 protocols = ["grpc", "rest"]
 workloads = ["flat", "deep", "mixed"]
 jobs_per_worker = 10
@@ -17,8 +17,8 @@ worker_count = 16
 flat_percent = 50
 
 [instances]
-worker_count = 128
-worker_type = "c7i.2xlarge"
+worker_count = 64
+worker_type = "c7i.xlarge"
 submitter_type = "c7i.xlarge"
 server_type = "r7i.4xlarge"
 controller_type = "c7i.large"
@@ -45,20 +45,23 @@ vpc_id = ""
 vpc_cidr = "10.42.0.0/16"
 subnet_id = ""
 subnet_cidr = "10.42.1.0/24"
+# Leave empty to spread workers across rds_subnet_ids. Set explicitly to use
+# a different worker subnet pool.
+worker_subnet_ids = []
 rds_subnet_ids = ["", ""]
 rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
-rds_subnet_availability_zones = ["ca-central-1a", "ca-central-1b"]
+rds_subnet_availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1e", "us-east-1f"]
 security_group_id = ""
 rds_security_group_id = ""
-placement_group = "spider-storage-api-bench"
-placement_strategy = "partition"
+placement_group = ""
+placement_strategy = ""
 
 [artifact]
 mode = "existing-repo"
 # Optional exact S3 destination for the source bundle uploaded by build_ami.py.
 s3_uri = ""
 # Source OS AMI used only by build_ami.py. Amazon Linux 2023 with SSM agent is recommended.
-base_ami_id = "ami-0344a23c782460e34"
+base_ami_id = "ami-0236922087fa98b6e"
 builder_instance_type = "c7i.large"
 builder_iam_instance_profile = "spider-bench-ami-builder"
 # Human-readable AWS image name prefix for the built benchmark-node AMI.

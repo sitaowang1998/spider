@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+import json
 import pathlib
 import subprocess
 import sys
@@ -65,6 +66,29 @@ class AwsCliTest(unittest.TestCase):
         self.assertIn("out", text)
         self.assertIn("AWS CLI stderr:", text)
         self.assertIn("err", text)
+
+    def test_send_shell_command_batches_instance_ids(self):
+        aws_cli = load_module("aws_cli")
+        client = aws_cli.AwsCli(endpoint_url=None, env={}, dry_run=True)
+        instance_ids = [f"i-{index:017d}" for index in range(128)]
+
+        command_ids = client.send_shell_command(
+            instance_ids,
+            ["echo ok"],
+            comment="test command",
+        )
+
+        self.assertEqual(["dry-run-command", "dry-run-command", "dry-run-command"], command_ids)
+        batch_sizes = []
+        for command in client.commands:
+            start = command.index("--instance-ids") + 1
+            end = command.index("--parameters")
+            batch_sizes.append(end - start)
+            self.assertEqual(
+                {"commands": ["echo ok"]},
+                json.loads(command[end + 1]),
+            )
+        self.assertEqual([50, 50, 28], batch_sizes)
 
 
 if __name__ == "__main__":

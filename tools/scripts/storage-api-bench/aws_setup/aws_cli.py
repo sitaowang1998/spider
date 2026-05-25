@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+SSM_SEND_COMMAND_INSTANCE_LIMIT = 50
+
 
 class AwsCli:
     def __init__(
@@ -73,6 +75,36 @@ class AwsCli:
             return 0
         return subprocess.run(command, check=False, env=self.env).returncode
 
+    def send_shell_command(
+        self,
+        instance_ids: list[str],
+        commands: list[str],
+        *,
+        comment: str,
+    ) -> list[str]:
+        command_ids = []
+        for chunk in chunks(instance_ids, SSM_SEND_COMMAND_INSTANCE_LIMIT):
+            command_id = self.run_text(
+                [
+                    "ssm",
+                    "send-command",
+                    "--document-name",
+                    "AWS-RunShellScript",
+                    "--comment",
+                    comment,
+                    "--instance-ids",
+                    *chunk,
+                    "--parameters",
+                    json.dumps({"commands": commands}),
+                    "--query",
+                    "Command.CommandId",
+                ]
+            )
+            if not command_id and self.dry_run:
+                command_id = "dry-run-command"
+            command_ids.append(command_id)
+        return command_ids
+
     def run_captured(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(
             command,
@@ -91,3 +123,7 @@ class AwsCli:
                 print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", flush=True)
             result.check_returncode()
         return result
+
+
+def chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
