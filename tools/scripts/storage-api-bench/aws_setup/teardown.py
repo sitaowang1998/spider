@@ -84,28 +84,13 @@ def teardown(
         client.run(["ec2", "delete-placement-group", "--group-name", config.network.placement_group])
     else:
         progress("placement group disabled")
-    progress("deleting results bucket data")
-    delete_results_bucket(client, state)
+    progress("preserving result data in S3")
     progress("deleting created network resources")
     delete_network_resources(client, state)
 
 
 def progress(message: str) -> None:
     progress_module.log("teardown", message)
-
-
-def delete_results_bucket(client: aws_cli.AwsCli, state: dict[str, object]) -> None:
-    resources = state.get("resources", {})
-    if not isinstance(resources, dict):
-        return
-    bucket = resources.get("result_bucket")
-    results_s3_uri = resources.get("results_s3_uri")
-    if isinstance(results_s3_uri, str) and results_s3_uri:
-        progress(f"removing result objects under {results_s3_uri}")
-        client.run(["s3", "rm", results_s3_uri, "--recursive"])
-    if isinstance(bucket, str) and bucket:
-        progress(f"deleting result bucket {bucket}")
-        client.run(["s3api", "delete-bucket", "--bucket", bucket])
 
 
 def delete_network_resources(client: aws_cli.AwsCli, state: dict[str, object]) -> None:

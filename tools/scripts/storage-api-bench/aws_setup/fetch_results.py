@@ -51,24 +51,34 @@ def main() -> int:
         remote_workspace=bootstrap_controller.controller_workspace(config),
         remote_data_dir=config.results.remote_data_dir,
         s3_uri=s3_uri,
+        region=config.aws.region,
+        endpoint_url=config.aws.endpoint_url,
     )
-    controller_common.send_controller_command(
+    command_id = controller_common.send_controller_command(
         client,
         controller_instance_id=controller_id,
         commands=upload_commands,
         comment="upload spider benchmark results",
     )
-    progress(f"controller upload command submitted; syncing {s3_uri} to {args.data_dir}")
+    local_data_dir = args.data_dir.resolve()
+    progress(f"controller upload command submitted: {command_id}")
+    progress("waiting for controller upload to finish")
+    controller_common.wait_for_controller_command(
+        client,
+        command_id=command_id,
+        controller_instance_id=controller_id,
+    )
+    progress(f"controller upload complete; syncing {s3_uri} to {local_data_dir}")
     command = ["aws", "s3", "sync", s3_uri, str(args.data_dir)]
     if config.aws.endpoint_url is not None:
         command[1:1] = ["--endpoint-url", config.aws.endpoint_url]
     if args.dry_run:
         print(" ".join(command))
         return 0
-    args.data_dir.mkdir(parents=True, exist_ok=True)
+    local_data_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(command, cwd=ROOT, env=aws_env, check=False).returncode
     if result == 0:
-        progress("result fetch complete")
+        progress(f"result fetch complete: {local_data_dir}")
     return result
 
 
@@ -92,15 +102,30 @@ def build_result_upload_commands(
     remote_workspace: str,
     remote_data_dir: str,
     s3_uri: str,
+    region: str,
+    endpoint_url: str | None,
 ) -> list[str]:
     workspace = controller_common.quote_path(remote_workspace)
-    return [
+    commands = [
         f"cd {controller_common.quote_path(remote_root)}",
         "set -a",
         f". {workspace}/.secret",
         "set +a",
-        f"aws s3 sync {controller_common.quote_path(remote_data_dir)} {controller_common.quote_path(s3_uri)}",
+        f"export AWS_DEFAULT_REGION={controller_common.quote_path(region)}",
+        f"export AWS_REGION={controller_common.quote_path(region)}",
+        "export AWS_PAGER=",
     ]
+    sync_command = [
+        "aws",
+        "s3",
+        "sync",
+        controller_common.quote_path(remote_data_dir),
+        controller_common.quote_path(s3_uri),
+    ]
+    if endpoint_url is not None:
+        sync_command[1:1] = ["--endpoint-url", controller_common.quote_path(endpoint_url)]
+    commands.append(" ".join(sync_command))
+    return commands
 
 
 def lookup_results_s3_uri(state: dict[str, object]) -> str | None:

@@ -115,6 +115,24 @@ class AwsSetupConfigTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "placement_strategy"):
                 config_module.load_config(path)
 
+    def test_config_rejects_home_relative_remote_paths(self):
+        config_module = load_module("config")
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "config.toml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    [instances]
+                    remote_root = "~/spider"
+                    remote_workspace_root = ".aws-bench"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "absolute path"):
+                config_module.load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

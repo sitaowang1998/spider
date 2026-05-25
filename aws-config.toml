@@ -27,8 +27,8 @@ controller_type = "c7i.large"
 ami_id = ""
 key_name = ""
 iam_instance_profile = "spider-storage-bench-ssm"
-remote_root = "~/spider"
-remote_workspace_root = ".aws-bench"
+remote_root = "/opt/spider"
+remote_workspace_root = "/var/lib/spider-bench"
 
 [database]
 name = "spider_db"

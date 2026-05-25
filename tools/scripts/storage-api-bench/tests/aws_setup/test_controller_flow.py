@@ -27,7 +27,7 @@ class ControllerFlowTest(unittest.TestCase):
         bootstrap = load_module("bootstrap_controller")
 
         commands = bootstrap.build_bootstrap_commands(
-            remote_root="~/spider",
+            remote_root="/opt/spider",
             remote_workspace=".aws-bench/run/controller",
             config_text="[aws]\nrun_id = \"run\"\n",
             state_text="{\"run_id\":\"run\"}\n",
@@ -39,18 +39,20 @@ class ControllerFlowTest(unittest.TestCase):
         self.assertIn("state.json", joined)
         self.assertIn(".secret", joined)
         self.assertIn("chmod 600", joined)
+        self.assertIn("cd /opt/spider", joined)
 
     def test_run_controller_command_sources_secret_and_runs_matrix_wrapper(self):
         run_controller = load_module("run_controller")
 
         commands = run_controller.build_controller_run_commands(
-            remote_root="~/spider",
+            remote_root="/opt/spider",
             remote_workspace=".aws-bench/run/controller",
             remote_data_dir="data/aws-run",
         )
 
         joined = "\n".join(commands)
         self.assertIn("set -a", joined)
+        self.assertIn("cd /opt/spider", joined)
         self.assertIn(". .aws-bench/run/controller/.secret", joined)
         self.assertIn("aws_setup/run.py", joined)
         self.assertIn("--data-dir data/aws-run", joined)

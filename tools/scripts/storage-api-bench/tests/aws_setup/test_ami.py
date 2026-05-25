@@ -145,6 +145,21 @@ class AmiTest(unittest.TestCase):
         self.assertIn("spider/components/spider-storage-api-bench/config/default.toml", names)
         self.assertNotIn("spider/data/result.json", names)
 
+    def test_builder_commands_create_runtime_and_workspace_dirs(self):
+        build_ami = load_module("build_ami")
+        config_module = load_module("config")
+        config = config_module.AwsBenchConfig()
+        config.instances.remote_root = "/opt/spider"
+        config.instances.remote_workspace_root = "/var/lib/spider-bench"
+
+        commands = build_ami.builder_commands(config, "s3://bucket/runtime.tar.gz")
+
+        joined = "\n".join(commands)
+        self.assertIn("mkdir -p /opt/spider", joined)
+        self.assertIn("mkdir -p /var/lib/spider-bench", joined)
+        self.assertIn("tar -xzf /tmp/spider-runtime.tar.gz -C /opt/spider", joined)
+        self.assertNotIn("/root/spider", joined)
+
     def test_cleanup_ami_deregisters_image_and_deletes_snapshots(self):
         cleanup_ami = load_module("cleanup_ami")
         client = FakeAwsCli()

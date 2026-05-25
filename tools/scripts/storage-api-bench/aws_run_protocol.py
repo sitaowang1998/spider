@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--protocol", choices=["grpc", "rest"], required=True)
     parser.add_argument("--workspace", type=pathlib.Path)
     parser.add_argument("--data-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--remote-root", default="~/spider")
+    parser.add_argument("--remote-root", default="/opt/spider")
     parser.add_argument("--remote-workspace")
     parser.add_argument("--jobs-per-worker", type=int, default=10)
     parser.add_argument("--tasks-per-job", type=int, default=1000)

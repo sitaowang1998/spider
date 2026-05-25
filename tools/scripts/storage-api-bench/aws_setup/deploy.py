@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import shlex
 import sys
 
 import aws_cli
 import config as config_module
+import controller_common
 import env as env_module
 import progress as progress_module
 import state as state_module
@@ -77,7 +77,7 @@ def progress(message: str) -> None:
 
 def deployment_commands(config: config_module.AwsBenchConfig) -> list[str]:
     return [
-        f"cd {shlex.quote(config.instances.remote_root)}",
+        f"cd {controller_common.quote_path(config.instances.remote_root)}",
         "test -x target/release/spider-storage-api-bench",
         "test -x tools/scripts/storage-api-bench/run_agent.py",
         "test -x tools/scripts/storage-api-bench/run_server.py",

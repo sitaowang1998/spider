@@ -42,8 +42,8 @@ class InstanceConfig:
     ami_id: str = "ami-xxxxxxxx"
     key_name: str | None = None
     iam_instance_profile: str = "spider-bench-ssm"
-    remote_root: str = "~/spider"
-    remote_workspace_root: str = ".aws-bench"
+    remote_root: str = "/opt/spider"
+    remote_workspace_root: str = "/var/lib/spider-bench"
 
 
 @dataclasses.dataclass
@@ -129,6 +129,12 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if set(config.benchmark.workloads) - {"flat", "deep", "mixed"}:
         msg = "workloads must contain only flat, deep, and mixed"
+        raise ValueError(msg)
+    if not config.instances.remote_root.startswith("/"):
+        msg = "instances.remote_root must be an absolute path, for example /opt/spider"
+        raise ValueError(msg)
+    if not config.instances.remote_workspace_root.startswith("/"):
+        msg = "instances.remote_workspace_root must be an absolute path, for example /var/lib/spider-bench"
         raise ValueError(msg)
     if not config.network.placement_strategy:
         config.network.placement_strategy = "cluster"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 
 import aws_cli
 
@@ -61,6 +62,43 @@ def send_controller_command(
     if not command_id and client.dry_run:
         return "dry-run-command"
     return command_id
+
+
+def wait_for_controller_command(
+    client: aws_cli.AwsCli,
+    *,
+    command_id: str,
+    controller_instance_id: str,
+    poll_interval_sec: int = 2,
+) -> None:
+    if client.dry_run:
+        return
+    while True:
+        data = client.run_json(
+            [
+                "ssm",
+                "get-command-invocation",
+                "--command-id",
+                command_id,
+                "--instance-id",
+                controller_instance_id,
+            ]
+        )
+        status = data.get("Status") if isinstance(data, dict) else None
+        if status == "Success":
+            return
+        if status in {"Cancelled", "Failed", "TimedOut", "Cancelling"}:
+            stdout = data.get("StandardOutputContent", "") if isinstance(data, dict) else ""
+            stderr = data.get("StandardErrorContent", "") if isinstance(data, dict) else ""
+            details = []
+            if stdout:
+                details.append(f"stdout:\n{stdout}")
+            if stderr:
+                details.append(f"stderr:\n{stderr}")
+            suffix = "\n" + "\n".join(details) if details else ""
+            msg = f"SSM command {command_id} failed on controller with status {status}{suffix}"
+            raise RuntimeError(msg)
+        time.sleep(poll_interval_sec)
 
 
 def shell_heredoc(value: str, marker: str) -> str:

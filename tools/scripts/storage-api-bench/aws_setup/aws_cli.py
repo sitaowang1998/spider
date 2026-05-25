@@ -66,7 +66,7 @@ class AwsCli:
         self.commands.append(command)
         if self.dry_run:
             return
-        subprocess.run(command, check=True, env=self.env)
+        self.run_captured(command)
 
     def run_allow_failure(self, args: list[str]) -> int:
         command = self.build_command(args)
