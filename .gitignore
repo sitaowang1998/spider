@@ -10,3 +10,10 @@ build
 # IDE-related directories and files
 .idea
 cmake-build-debug
+
+# Pycache
+__pycache__/
+
+# Local AWS benchmark secrets/runtime state
+.secret
+.aws-bench/

@@ -46,6 +46,8 @@ def main() -> int:
                 str(args.worker_count),
                 "--flat-percent",
                 str(args.flat_percent),
+                "--workloads",
+                ",".join(args.workloads),
                 "--rest-port",
                 str(args.rest_port),
                 "--grpc-port",
@@ -91,6 +93,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--flat-percent", type=int, default=50)
+    parser.add_argument("--workloads", type=parse_csv_strings, default=["flat", "deep", "mixed"])
     parser.add_argument("--rest-port", type=int, default=8091)
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--agent-port", type=int, default=19091)
@@ -116,6 +119,10 @@ def parse_args() -> argparse.Namespace:
 
 def parse_csv_ints(value: str) -> list[int]:
     return [int(item) for item in value.split(",") if item]
+
+
+def parse_csv_strings(value: str) -> list[str]:
+    return [item for item in value.split(",") if item]
 
 
 if __name__ == "__main__":

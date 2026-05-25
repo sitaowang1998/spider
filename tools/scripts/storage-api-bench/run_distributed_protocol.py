@@ -10,13 +10,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPT_DIR = ROOT / "tools/scripts/storage-api-bench"
 DEFAULT_CONFIG = ROOT / "components/spider-storage-api-bench/config/default.toml"
-WORKLOADS = ("flat", "deep", "mixed")
+DEFAULT_WORKLOADS = ("flat", "deep", "mixed")
 
 
 def main() -> int:
     args = parse_args()
     args.data_dir.mkdir(parents=True, exist_ok=True)
-    for workload in WORKLOADS:
+    for workload in args.workloads:
         if args.reset_database:
             result = subprocess.run(
                 build_reset_database_command(args.config, args.database_reset_client_bin),
@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "data/distributed",
     )
     parser.add_argument("--flat-percent", type=int)
+    parser.add_argument("--workloads", type=parse_workloads, default=list(DEFAULT_WORKLOADS))
     parser.add_argument(
         "--reset-database",
         action="store_true",
@@ -64,6 +65,14 @@ def parse_args() -> argparse.Namespace:
         help="MariaDB/MySQL client binary forwarded to reset_database.py.",
     )
     return parser.parse_args()
+
+
+def parse_workloads(value: str) -> list[str]:
+    workloads = [item for item in value.split(",") if item]
+    invalid = sorted(set(workloads) - set(DEFAULT_WORKLOADS))
+    if invalid:
+        raise argparse.ArgumentTypeError(f"invalid workloads: {', '.join(invalid)}")
+    return workloads
 
 
 def build_reset_database_command(config: pathlib.Path, client_bin: str | None) -> list[str]:

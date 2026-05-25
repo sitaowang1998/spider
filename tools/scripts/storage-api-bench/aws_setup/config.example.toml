@@ -1,0 +1,64 @@
+[aws]
+region = "us-east-1"
+availability_zone = "us-east-1a"
+run_id = "spider-bench-128"
+# Set for LocalStack tests, for example "http://localhost:4566".
+endpoint_url = ""
+
+[benchmark]
+node_counts = [1, 2, 4, 8, 16, 64, 128]
+protocols = ["grpc", "rest"]
+workloads = ["flat", "deep", "mixed"]
+jobs_per_agent = 10
+tasks_per_job = 1000
+payload_bytes = 128
+client_count = 8
+worker_count = 16
+flat_percent = 50
+
+[instances]
+client_count = 128
+client_type = "c7i.large"
+server_type = "c7i.16xlarge"
+controller_type = "c7i.large"
+ami_id = "ami-xxxxxxxx"
+key_name = ""
+iam_instance_profile = "spider-bench-ssm"
+remote_root = "~/spider"
+remote_workspace_root = ".aws-bench"
+
+[database]
+name = "spider_db"
+username = "spider_user"
+password = "replace-with-a-secret-password"
+port = 3306
+instance_class = "db.r7i.2xlarge"
+allocated_storage = 200
+storage_type = "gp3"
+max_connections = 256
+
+[network]
+vpc_id = "vpc-xxxxxxxx"
+vpc_cidr = "10.42.0.0/16"
+subnet_id = "subnet-primary-az"
+subnet_cidr = "10.42.1.0/24"
+rds_subnet_ids = ["subnet-primary-az", "subnet-second-az"]
+rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
+rds_subnet_availability_zones = ["us-east-1a", "us-east-1b"]
+security_group_id = ""
+rds_security_group_id = ""
+placement_group = "spider-storage-api-bench"
+
+[artifact]
+mode = "existing-repo"
+# Optional S3 artifact bundle for future deployment automation.
+s3_uri = ""
+repo_url = "https://github.com/yscope/spider.git"
+repo_branch = "main"
+baked_ami_name_prefix = "spider-storage-api-bench"
+
+[results]
+# Recommended for controller-owned runs. Example:
+# s3_uri = "s3://my-spider-bench-results/spider-bench-128"
+s3_uri = ""
+remote_data_dir = "data/aws-bench"

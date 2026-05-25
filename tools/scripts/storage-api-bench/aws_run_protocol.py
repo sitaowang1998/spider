@@ -60,6 +60,7 @@ def main() -> int:
                 args.data_dir,
                 args.reset_database,
                 args.database_reset_client_bin,
+                args.workloads,
             ),
             cwd=aws_common.ROOT,
             check=False,
@@ -84,6 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--flat-percent", type=int, default=50)
+    parser.add_argument("--workloads", default="flat,deep,mixed")
     parser.add_argument("--rest-port", type=int, default=8091)
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--agent-port", type=int, default=19091)
@@ -118,6 +120,7 @@ def build_controller_command(
     data_dir: pathlib.Path,
     reset_database: bool,
     database_reset_client_bin: str | None,
+    workloads: str = "flat,deep,mixed",
 ) -> list[str]:
     command = [
         sys.executable,
@@ -128,6 +131,8 @@ def build_controller_command(
         str(config),
         "--data-dir",
         str(data_dir),
+        "--workloads",
+        workloads,
     ]
     if reset_database:
         command.append("--reset-database")
