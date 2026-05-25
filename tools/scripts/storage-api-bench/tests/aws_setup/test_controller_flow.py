@@ -47,7 +47,7 @@ class ControllerFlowTest(unittest.TestCase):
         commands = run_controller.build_controller_run_commands(
             remote_root="/opt/spider",
             remote_workspace=".aws-bench/run/controller",
-            remote_data_dir="data/aws-run",
+            remote_data_dir="/var/lib/spider-bench/data/aws-run",
         )
 
         joined = "\n".join(commands)
@@ -55,7 +55,7 @@ class ControllerFlowTest(unittest.TestCase):
         self.assertIn("cd /opt/spider", joined)
         self.assertIn(". .aws-bench/run/controller/.secret", joined)
         self.assertIn("aws_setup/run.py", joined)
-        self.assertIn("--data-dir data/aws-run", joined)
+        self.assertIn("--data-dir /var/lib/spider-bench/data/aws-run", joined)
 
     def test_full_run_uses_controller_steps_before_teardown(self):
         full_run = load_module("full_run")

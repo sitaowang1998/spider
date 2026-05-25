@@ -384,12 +384,14 @@ def run_builder_commands(
 def builder_commands(config: config_module.AwsBenchConfig, runtime_s3_uri: str) -> list[str]:
     remote_root = config.instances.remote_root
     remote_workspace_root = config.instances.remote_workspace_root
+    remote_data_dir = config.results.remote_data_dir
     return [
         "set -eux",
         "sudo dnf install -y awscli mariadb105 openssl-libs python3 || sudo yum install -y awscli mariadb openssl-libs python3",
         f"rm -rf {remote_root}",
         f"mkdir -p {remote_root}",
         f"mkdir -p {remote_workspace_root}",
+        f"mkdir -p {remote_data_dir}",
         f"aws s3 cp {runtime_s3_uri} /tmp/{RUNTIME_ARCHIVE_NAME}",
         f"tar -xzf /tmp/{RUNTIME_ARCHIVE_NAME} -C {remote_root} --strip-components=1",
         f"chmod +x {remote_root}/target/release/spider-storage-api-bench",

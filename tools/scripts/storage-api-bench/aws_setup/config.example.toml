@@ -73,4 +73,4 @@ image_name_prefix = "spider-storage-api-bench"
 # Recommended for controller-owned runs. Example:
 # s3_uri = "s3://my-spider-bench-results/spider-bench-128"
 s3_uri = ""
-remote_data_dir = "data/aws-bench"
+remote_data_dir = "/var/lib/spider-bench/data"

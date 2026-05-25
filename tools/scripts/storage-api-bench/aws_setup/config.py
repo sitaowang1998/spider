@@ -89,7 +89,7 @@ class ArtifactConfig:
 @dataclasses.dataclass
 class ResultsConfig:
     s3_uri: str | None = None
-    remote_data_dir: str = "data/aws-bench"
+    remote_data_dir: str = "/var/lib/spider-bench/data"
 
 
 @dataclasses.dataclass
@@ -135,6 +135,9 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if not config.instances.remote_workspace_root.startswith("/"):
         msg = "instances.remote_workspace_root must be an absolute path, for example /var/lib/spider-bench"
+        raise ValueError(msg)
+    if not config.results.remote_data_dir.startswith("/"):
+        msg = "results.remote_data_dir must be an absolute path, for example /var/lib/spider-bench/data"
         raise ValueError(msg)
     if not config.network.placement_strategy:
         config.network.placement_strategy = "cluster"

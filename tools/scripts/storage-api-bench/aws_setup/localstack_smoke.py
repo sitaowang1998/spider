@@ -244,7 +244,7 @@ def write_localstack_config(path: pathlib.Path, endpoint_url: str) -> None:
             password = "spider_password"
 
             [results]
-            remote_data_dir = "data/localstack-smoke"
+            remote_data_dir = "/var/lib/spider-bench/data/localstack-smoke"
 
             [network]
             vpc_id = "vpc-localstack"

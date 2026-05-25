@@ -151,12 +151,14 @@ class AmiTest(unittest.TestCase):
         config = config_module.AwsBenchConfig()
         config.instances.remote_root = "/opt/spider"
         config.instances.remote_workspace_root = "/var/lib/spider-bench"
+        config.results.remote_data_dir = "/var/lib/spider-bench/data"
 
         commands = build_ami.builder_commands(config, "s3://bucket/runtime.tar.gz")
 
         joined = "\n".join(commands)
         self.assertIn("mkdir -p /opt/spider", joined)
         self.assertIn("mkdir -p /var/lib/spider-bench", joined)
+        self.assertIn("mkdir -p /var/lib/spider-bench/data", joined)
         self.assertIn("tar -xzf /tmp/spider-runtime.tar.gz -C /opt/spider", joined)
         self.assertNotIn("/root/spider", joined)
 
