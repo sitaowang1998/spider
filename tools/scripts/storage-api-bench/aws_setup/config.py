@@ -71,7 +71,8 @@ class NetworkConfig:
     rds_subnet_ids: list[str] = dataclasses.field(default_factory=list)
     security_group_id: str = ""
     rds_security_group_id: str = ""
-    placement_group: str = "spider-storage-api-bench"
+    placement_group: str = ""
+    placement_strategy: str = "cluster"
 
 
 @dataclasses.dataclass
@@ -127,6 +128,9 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if set(config.benchmark.workloads) - {"flat", "deep", "mixed"}:
         msg = "workloads must contain only flat, deep, and mixed"
+        raise ValueError(msg)
+    if config.network.placement_strategy not in {"cluster", "partition", "spread"}:
+        msg = "network.placement_strategy must be cluster, partition, or spread"
         raise ValueError(msg)
 
 

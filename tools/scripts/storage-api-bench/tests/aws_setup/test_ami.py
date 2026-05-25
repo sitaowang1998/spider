@@ -58,6 +58,10 @@ class FakeAwsCli:
             }
         return {}
 
+    def try_run_json(self, args):
+        self.commands.append(args)
+        return 1, {}
+
 
 class AmiTest(unittest.TestCase):
     def test_build_ami_uploads_runtime_archive_and_writes_state(self):

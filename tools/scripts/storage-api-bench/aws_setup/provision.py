@@ -37,7 +37,7 @@ def main() -> int:
     state = state_module.load_state(args.state)
     config.instances.ami_id = resolve_runtime_ami_id(config, args.ami_state)
     progress(f"using benchmark AMI {config.instances.ami_id}")
-    provision(config, client, state)
+    provision(config, client, state, args.state)
     progress(f"saving state to {args.state}")
     state_module.save_state(args.state, state)
     progress("provision complete")
@@ -72,6 +72,7 @@ def provision(
     config: config_module.AwsBenchConfig,
     client: aws_cli.AwsCli,
     state: dict[str, object],
+    state_path: pathlib.Path | None = None,
 ) -> None:
     resources = state.setdefault("resources", {})
     if not isinstance(resources, dict):
@@ -80,12 +81,15 @@ def provision(
 
     progress("ensuring network resources")
     ensure_network(client, config, resources)
+    resources["run_id"] = config.aws.run_id
+    save_progress_state(state_path, state)
     progress("ensuring SSM instance profile")
     ensure_ssm_instance_profile(client, config)
     progress("ensuring placement group")
     ensure_placement_group(client, config)
     progress("ensuring RDS subnet group")
-    ensure_rds_subnet_group(client, config)
+    ensure_rds_subnet_group(client, config, resources)
+    save_progress_state(state_path, state)
     progress("launching benchmark instances")
     launch_instances(client, config)
     progress("creating RDS instance")
@@ -93,12 +97,13 @@ def provision(
     progress("ensuring results bucket")
     ensure_results_bucket(client, config, resources)
 
-    resources["run_id"] = config.aws.run_id
     resources["rds_instance_id"] = rds_instance_id(config)
+    save_progress_state(state_path, state)
     progress("waiting for RDS instance to become available")
     wait_for_rds(client, config)
     progress("discovering RDS endpoint")
     resources["rds_endpoint"] = discover_rds_endpoint(client, config)
+    save_progress_state(state_path, state)
     progress(f"RDS endpoint: {resources['rds_endpoint']}")
     progress("waiting for EC2 instances to enter running state")
     wait_for_ec2(client, config)
@@ -107,6 +112,13 @@ def provision(
 
 def progress(message: str) -> None:
     progress_module.log("provision", message)
+
+
+def save_progress_state(state_path: pathlib.Path | None, state: dict[str, object]) -> None:
+    if state_path is None:
+        return
+    progress(f"saving partial state to {state_path}")
+    state_module.save_state(state_path, state)
 
 
 def ensure_network(
@@ -457,6 +469,20 @@ def ensure_placement_group(
     client: aws_cli.AwsCli,
     config: config_module.AwsBenchConfig,
 ) -> None:
+    if not config.network.placement_group:
+        progress("placement group disabled")
+        return
+    returncode, _ = client.try_run_json(
+        [
+            "ec2",
+            "describe-placement-groups",
+            "--group-names",
+            config.network.placement_group,
+        ]
+    )
+    if returncode == 0:
+        progress(f"reusing placement group {config.network.placement_group}")
+        return
     client.run(
         [
             "ec2",
@@ -464,7 +490,7 @@ def ensure_placement_group(
             "--group-name",
             config.network.placement_group,
             "--strategy",
-            "cluster",
+            config.network.placement_strategy,
         ]
     )
 
@@ -472,22 +498,69 @@ def ensure_placement_group(
 def ensure_rds_subnet_group(
     client: aws_cli.AwsCli,
     config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
 ) -> None:
     if len(config.network.rds_subnet_ids) < 2:
         msg = "network.rds_subnet_ids must contain at least two subnets"
         raise ValueError(msg)
+    group_name = db_subnet_group_name(config)
+    resources["rds_subnet_group_name"] = group_name
+    returncode, data = client.try_run_json(
+        [
+            "rds",
+            "describe-db-subnet-groups",
+            "--db-subnet-group-name",
+            group_name,
+        ]
+    )
+    if returncode == 0:
+        existing_vpc_id = existing_db_subnet_group_vpc_id(data)
+        if existing_vpc_id and existing_vpc_id != config.network.vpc_id:
+            msg = (
+                f"RDS subnet group {group_name} already exists in VPC {existing_vpc_id}, "
+                f"but this run is using VPC {config.network.vpc_id}. This usually means local "
+                "state was deleted while AWS resources from the same run_id still exist. Run "
+                "teardown for the old run, delete the stale RDS subnet group/RDS instance, or use "
+                "a new aws.run_id."
+            )
+            raise RuntimeError(msg)
+        progress(f"reusing RDS subnet group {group_name}")
+        client.run(
+            [
+                "rds",
+                "modify-db-subnet-group",
+                "--db-subnet-group-name",
+                group_name,
+                "--subnet-ids",
+                *config.network.rds_subnet_ids,
+            ]
+        )
+        return
     client.run(
         [
             "rds",
             "create-db-subnet-group",
             "--db-subnet-group-name",
-            db_subnet_group_name(config),
+            group_name,
             "--db-subnet-group-description",
             "Spider storage API benchmark",
             "--subnet-ids",
             *config.network.rds_subnet_ids,
         ]
     )
+
+
+def existing_db_subnet_group_vpc_id(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    groups = data.get("DBSubnetGroups")
+    if not isinstance(groups, list) or not groups:
+        return None
+    group = groups[0]
+    if not isinstance(group, dict):
+        return None
+    vpc_id = group.get("VpcId")
+    return vpc_id if isinstance(vpc_id, str) and vpc_id else None
 
 
 def launch_instances(
@@ -536,25 +609,39 @@ def launch_role(
         config.network.security_group_id,
         "--subnet-id",
         config.network.subnet_id,
-        "--placement",
-        f"AvailabilityZone={config.aws.availability_zone},GroupName={config.network.placement_group}",
         "--tag-specifications",
         f"ResourceType=instance,Tags=[{{Key=RunId,Value={config.aws.run_id}}},{{Key=Role,Value={role}}}]",
         "--iam-instance-profile",
         f"Name={config.instances.iam_instance_profile}",
     ]
+    placement = f"AvailabilityZone={config.aws.availability_zone}"
+    if config.network.placement_group:
+        placement += f",GroupName={config.network.placement_group}"
+    command.extend(["--placement", placement])
     if config.instances.key_name is not None:
         command.extend(["--key-name", config.instances.key_name])
     client.run(command)
 
 
 def create_rds(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> None:
+    instance_id = rds_instance_id(config)
+    returncode, _ = client.try_run_json(
+        [
+            "rds",
+            "describe-db-instances",
+            "--db-instance-identifier",
+            instance_id,
+        ]
+    )
+    if returncode == 0:
+        progress(f"reusing RDS instance {instance_id}")
+        return
     client.run(
         [
             "rds",
             "create-db-instance",
             "--db-instance-identifier",
-            rds_instance_id(config),
+            instance_id,
             "--engine",
             "mariadb",
             "--db-instance-class",

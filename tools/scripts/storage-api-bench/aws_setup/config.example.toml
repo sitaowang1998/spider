@@ -50,7 +50,10 @@ rds_subnet_availability_zones = ["us-east-1a", "us-east-1b"]
 rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
 security_group_id = ""
 rds_security_group_id = ""
-placement_group = "spider-storage-api-bench"
+# Leave placement_group empty for large scale-out runs. Cluster placement groups
+# improve node locality, but often cannot place 128+ instances in one AZ.
+placement_group = ""
+placement_strategy = "cluster"
 
 [artifact]
 mode = "existing-repo"

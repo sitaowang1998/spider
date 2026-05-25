@@ -35,6 +35,22 @@ class AwsCli:
         result = self.run_captured(command)
         return json.loads(result.stdout or "{}")
 
+    def try_run_json(self, args: list[str]) -> tuple[int, object]:
+        command = self.build_command([*args, "--output", "json"])
+        self.commands.append(command)
+        if self.dry_run:
+            return 0, {}
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        if result.returncode != 0:
+            return result.returncode, {}
+        return result.returncode, json.loads(result.stdout or "{}")
+
     def run_text(self, args: list[str]) -> str:
         command = self.build_command([*args, "--output", "text"])
         self.commands.append(command)

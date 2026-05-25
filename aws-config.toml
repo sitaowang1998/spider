@@ -18,7 +18,7 @@ flat_percent = 50
 
 [instances]
 worker_count = 128
-worker_type = "c7i.4xlarge"
+worker_type = "c7i.2xlarge"
 submitter_type = "c7i.xlarge"
 server_type = "r7i.4xlarge"
 controller_type = "c7i.large"
@@ -51,6 +51,7 @@ rds_subnet_availability_zones = ["ca-central-1a", "ca-central-1b"]
 security_group_id = ""
 rds_security_group_id = ""
 placement_group = "spider-storage-api-bench"
+placement_strategy = "partition"
 
 [artifact]
 mode = "existing-repo"

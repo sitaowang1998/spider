@@ -71,6 +71,8 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(20, config.benchmark.jobs_per_worker)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
         self.assertEqual(128, config.instances.worker_count)
+        self.assertEqual("", config.network.placement_group)
+        self.assertEqual("cluster", config.network.placement_strategy)
         self.assertEqual("ami-base", config.artifact.base_ami_id)
         self.assertEqual("c7i.xlarge", config.artifact.builder_instance_type)
         self.assertEqual("builder-profile", config.artifact.builder_iam_instance_profile)
@@ -94,6 +96,23 @@ class AwsSetupConfigTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "node_counts"):
+                config_module.load_config(path)
+
+    def test_config_rejects_invalid_placement_strategy(self):
+        config_module = load_module("config")
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "config.toml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    [network]
+                    placement_strategy = "packed"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "placement_strategy"):
                 config_module.load_config(path)
 
 

@@ -79,8 +79,11 @@ def teardown(
             f"{config.aws.run_id}-rds-subnets",
         ]
     )
-    progress("deleting placement group")
-    client.run(["ec2", "delete-placement-group", "--group-name", config.network.placement_group])
+    if config.network.placement_group:
+        progress("deleting placement group")
+        client.run(["ec2", "delete-placement-group", "--group-name", config.network.placement_group])
+    else:
+        progress("placement group disabled")
     progress("deleting results bucket data")
     delete_results_bucket(client, state)
     progress("deleting created network resources")
