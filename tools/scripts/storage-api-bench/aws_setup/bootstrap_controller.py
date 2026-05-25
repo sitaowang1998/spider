@@ -53,7 +53,13 @@ def main() -> int:
         comment="bootstrap spider benchmark controller",
     )
     progress(f"bootstrap command submitted: {command_id}")
-    print(command_id)
+    progress("waiting for bootstrap command to finish")
+    controller_common.wait_for_controller_command(
+        client,
+        command_id=command_id,
+        controller_instance_id=controller_id,
+    )
+    progress("bootstrap command complete")
     return 0
 
 

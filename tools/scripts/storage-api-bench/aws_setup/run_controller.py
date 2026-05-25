@@ -48,7 +48,13 @@ def main() -> int:
         comment="run spider benchmark matrix on controller",
     )
     progress(f"benchmark controller command submitted: {command_id}")
-    print(command_id)
+    progress("waiting for benchmark controller command to finish")
+    controller_common.wait_for_controller_command(
+        client,
+        command_id=command_id,
+        controller_instance_id=controller_id,
+    )
+    progress("benchmark controller command complete")
     return 0
 
 
