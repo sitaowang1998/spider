@@ -77,9 +77,10 @@ class NetworkConfig:
 class ArtifactConfig:
     mode: str = "existing-repo"
     s3_uri: str | None = None
-    repo_url: str = "https://github.com/yscope/spider.git"
-    repo_branch: str = "main"
-    baked_ami_name_prefix: str = "spider-storage-api-bench"
+    base_ami_id: str = ""
+    builder_instance_type: str = "c7i.large"
+    builder_iam_instance_profile: str = "spider-bench-ami-builder"
+    image_name_prefix: str = "spider-storage-api-bench"
 
 
 @dataclasses.dataclass

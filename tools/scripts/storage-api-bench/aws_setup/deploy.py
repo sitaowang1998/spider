@@ -76,16 +76,13 @@ def deploy(
 
 
 def deployment_commands(config: config_module.AwsBenchConfig) -> list[str]:
-    commands = [
+    return [
         f"cd {shlex.quote(config.instances.remote_root)}",
-        "test -x target/release/spider-storage-api-bench || cargo build --release --package spider-storage-api-bench",
+        "test -x target/release/spider-storage-api-bench",
         "test -x tools/scripts/storage-api-bench/run_agent.py",
         "test -x tools/scripts/storage-api-bench/run_server.py",
         "command -v mariadb >/dev/null || command -v mysql >/dev/null || true",
     ]
-    if config.artifact.s3_uri is not None:
-        commands.insert(0, f"aws s3 cp {shlex.quote(config.artifact.s3_uri)} /tmp/spider-bench-artifact")
-    return commands
 
 
 def discover_all_instance_ids(client: aws_cli.AwsCli, run_id: str) -> list[str]:

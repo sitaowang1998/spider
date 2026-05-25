@@ -49,3 +49,10 @@ class AwsCli:
         if self.dry_run:
             return
         subprocess.run(command, check=True, env=self.env)
+
+    def run_allow_failure(self, args: list[str]) -> int:
+        command = self.build_command(args)
+        self.commands.append(command)
+        if self.dry_run:
+            return 0
+        return subprocess.run(command, check=False, env=self.env).returncode

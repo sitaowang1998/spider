@@ -9,17 +9,13 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = ROOT / "components/spider-storage-api-bench/config/default.toml"
+DEFAULT_BINARY = ROOT / "target/release/spider-storage-api-bench"
 
 
 def main() -> int:
     args = parse_args()
     cmd = [
-        "cargo",
-        "run",
-        "--release",
-        "--package",
-        "spider-storage-api-bench",
-        "--",
+        str(args.binary),
         "client",
         "--protocol",
         args.protocol,
@@ -42,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--protocol", choices=["rest", "grpc"], required=True)
     parser.add_argument("--workload", choices=["flat", "deep", "mixed"], required=True)
     parser.add_argument("--config", type=pathlib.Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--binary", type=pathlib.Path, default=DEFAULT_BINARY)
     parser.add_argument("--target")
     parser.add_argument("--flat-percent", type=int)
     parser.add_argument("--output", type=pathlib.Path)

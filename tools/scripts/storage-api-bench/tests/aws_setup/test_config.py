@@ -51,6 +51,12 @@ class AwsSetupConfigTest(unittest.TestCase):
                     name = "spider_db"
                     username = "spider_user"
                     password = "spider_password"
+
+                    [artifact]
+                    base_ami_id = "ami-base"
+                    builder_instance_type = "c7i.xlarge"
+                    builder_iam_instance_profile = "builder-profile"
+                    image_name_prefix = "bench-image"
                     """
                 ),
                 encoding="utf-8",
@@ -65,6 +71,10 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(20, config.benchmark.jobs_per_agent)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
         self.assertEqual(128, config.instances.client_count)
+        self.assertEqual("ami-base", config.artifact.base_ami_id)
+        self.assertEqual("c7i.xlarge", config.artifact.builder_instance_type)
+        self.assertEqual("builder-profile", config.artifact.builder_iam_instance_profile)
+        self.assertEqual("bench-image", config.artifact.image_name_prefix)
 
     def test_config_rejects_node_count_larger_than_client_fleet(self):
         config_module = load_module("config")

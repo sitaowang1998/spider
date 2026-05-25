@@ -39,6 +39,15 @@ class AwsCliTest(unittest.TestCase):
         self.assertEqual("", result)
         self.assertEqual([["aws", "ec2", "describe-vpcs", "--output", "text"]], client.commands)
 
+    def test_dry_run_allow_failure_records_command(self):
+        aws_cli = load_module("aws_cli")
+        client = aws_cli.AwsCli(endpoint_url=None, env={}, dry_run=True)
+
+        result = client.run_allow_failure(["s3api", "create-bucket", "--bucket", "bucket"])
+
+        self.assertEqual(0, result)
+        self.assertEqual([["aws", "s3api", "create-bucket", "--bucket", "bucket"]], client.commands)
+
 
 if __name__ == "__main__":
     unittest.main()

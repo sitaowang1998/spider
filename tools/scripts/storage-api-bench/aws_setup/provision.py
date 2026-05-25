@@ -7,6 +7,7 @@ import argparse
 import pathlib
 import sys
 
+import ami_state
 import aws_cli
 import config as config_module
 import env as env_module
@@ -31,6 +32,7 @@ def main() -> int:
         dry_run=args.dry_run,
     )
     state = state_module.load_state(args.state)
+    config.instances.ami_id = resolve_runtime_ami_id(config, args.ami_state)
     provision(config, client, state)
     state_module.save_state(args.state, state)
     return 0
@@ -41,8 +43,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=pathlib.Path, required=True)
     parser.add_argument("--secret", type=pathlib.Path, default=ROOT / ".secret")
     parser.add_argument("--state", type=pathlib.Path, required=True)
+    parser.add_argument("--ami-state", type=pathlib.Path, default=ami_state.default_ami_state_path())
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def resolve_runtime_ami_id(
+    config: config_module.AwsBenchConfig,
+    ami_state_path: pathlib.Path,
+) -> str:
+    if config.instances.ami_id and config.instances.ami_id != "ami-xxxxxxxx":
+        return config.instances.ami_id
+    metadata = ami_state.load_ami_state(ami_state_path)
+    ami_id = metadata.get("ami_id")
+    if isinstance(ami_id, str) and ami_id:
+        return ami_id
+    msg = f"instances.ami_id is not set and {ami_state_path} does not contain ami_id"
+    raise ValueError(msg)
 
 
 def provision(
@@ -362,9 +379,21 @@ def ensure_results_bucket(
         resources["results_s3_uri"] = config.results.s3_uri
         return
     bucket = result_bucket_name(config)
-    client.run(["s3api", "create-bucket", "--bucket", bucket])
+    client.run(create_bucket_command(bucket, config.aws.region))
     resources["result_bucket"] = bucket
     resources["results_s3_uri"] = f"s3://{bucket}/{config.aws.run_id}"
+
+
+def create_bucket_command(bucket: str, region: str) -> list[str]:
+    command = ["s3api", "create-bucket", "--bucket", bucket]
+    if region != "us-east-1":
+        command.extend(
+            [
+                "--create-bucket-configuration",
+                f"LocationConstraint={region}",
+            ]
+        )
+    return command
 
 
 def wait_for_ec2(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> None:

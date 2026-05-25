@@ -8,6 +8,8 @@ import pathlib
 import subprocess
 import sys
 
+import config as config_module
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 SCRIPT_DIR = ROOT / "tools/scripts/storage-api-bench/aws_setup"
@@ -15,9 +17,18 @@ SCRIPT_DIR = ROOT / "tools/scripts/storage-api-bench/aws_setup"
 
 def main() -> int:
     args = parse_args()
-    state = args.state or ROOT / ".aws-bench" / args.run_id / "state.json"
+    run_id = parse_run_id(args.config, args.run_id)
+    state = args.state or ROOT / ".aws-bench" / run_id / "state.json"
     for step in full_run_steps(teardown=args.teardown):
-        command = step_command(step, args.config, args.secret, state, args.data_dir, args.dry_run)
+        command = step_command(
+            step,
+            args.config,
+            args.secret,
+            state,
+            args.ami_state,
+            args.data_dir,
+            args.dry_run,
+        )
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
             return result.returncode
@@ -28,12 +39,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=pathlib.Path, required=True)
     parser.add_argument("--secret", type=pathlib.Path, default=ROOT / ".secret")
-    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-id")
     parser.add_argument("--state", type=pathlib.Path)
+    parser.add_argument("--ami-state", type=pathlib.Path, default=ROOT / ".aws-bench/ami/latest.json")
     parser.add_argument("--data-dir", type=pathlib.Path, required=True)
     parser.add_argument("--teardown", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def parse_run_id(config_path: pathlib.Path, run_id: str | None) -> str:
+    config = config_module.load_config(config_path)
+    if run_id is not None and run_id != config.aws.run_id:
+        msg = f"--run-id {run_id} does not match config aws.run_id {config.aws.run_id}"
+        raise SystemExit(msg)
+    return config.aws.run_id
 
 
 def full_run_steps(*, teardown: bool) -> list[str]:
@@ -48,6 +68,7 @@ def step_command(
     config: pathlib.Path,
     secret: pathlib.Path,
     state: pathlib.Path,
+    ami_state: pathlib.Path,
     data_dir: pathlib.Path,
     dry_run: bool,
 ) -> list[str]:
@@ -69,6 +90,8 @@ def step_command(
     ]
     if step in {"provision", "deploy", "bootstrap-controller", "run-controller", "fetch-results", "teardown"}:
         command.extend(["--secret", str(secret)])
+    if step == "provision":
+        command.extend(["--ami-state", str(ami_state)])
     if step == "fetch-results":
         command.extend(["--data-dir", str(data_dir)])
     if dry_run:

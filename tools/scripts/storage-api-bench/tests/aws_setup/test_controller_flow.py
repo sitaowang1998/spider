@@ -3,6 +3,8 @@
 import importlib.util
 import pathlib
 import sys
+import tempfile
+import textwrap
 import unittest
 
 
@@ -61,6 +63,45 @@ class ControllerFlowTest(unittest.TestCase):
             ["provision", "deploy", "bootstrap-controller", "run-controller", "fetch-results", "teardown"],
             steps,
         )
+
+    def test_full_run_forwards_ami_state_to_provision(self):
+        full_run = load_module("full_run")
+
+        command = full_run.step_command(
+            "provision",
+            pathlib.Path("/tmp/config.toml"),
+            pathlib.Path("/tmp/.secret"),
+            pathlib.Path("/tmp/state.json"),
+            pathlib.Path("/tmp/ami.json"),
+            pathlib.Path("/tmp/data"),
+            False,
+        )
+
+        self.assertIn("--ami-state", command)
+        self.assertIn("/tmp/ami.json", command)
+
+    def test_full_run_rejects_run_id_that_differs_from_config(self):
+        full_run = load_module("full_run")
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = pathlib.Path(directory) / "config.toml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    [aws]
+                    run_id = "config-run"
+
+                    [benchmark]
+                    node_counts = [1]
+
+                    [instances]
+                    client_count = 1
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(SystemExit, "does not match"):
+                full_run.parse_run_id(config_path, "other-run")
 
 
 if __name__ == "__main__":

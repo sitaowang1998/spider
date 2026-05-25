@@ -11,6 +11,7 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = ROOT / "components/spider-storage-api-bench/config/default.toml"
+DEFAULT_BINARY = ROOT / "target/release/spider-storage-api-bench"
 
 
 def main() -> int:
@@ -46,12 +47,7 @@ def main() -> int:
     server = None
     try:
         cmd = [
-            "cargo",
-            "run",
-            "--release",
-            "--package",
-            "spider-storage-api-bench",
-            "--",
+            str(args.binary),
             "server",
             "--protocol",
             args.protocol,
@@ -81,6 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol", choices=["rest", "grpc"], required=True)
     parser.add_argument("--config", type=pathlib.Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--binary", type=pathlib.Path, default=DEFAULT_BINARY)
     parser.add_argument("--bind")
     parser.add_argument(
         "--external-database",
