@@ -24,18 +24,19 @@ class BenchmarkConfig:
     )
     protocols: list[str] = dataclasses.field(default_factory=lambda: ["grpc", "rest"])
     workloads: list[str] = dataclasses.field(default_factory=lambda: ["flat", "deep", "mixed"])
-    jobs_per_agent: int = 10
+    jobs_per_worker: int = 10
     tasks_per_job: int = 1000
     payload_bytes: int = 128
-    client_count: int = 8
+    submitter_count: int = 8
     worker_count: int = 16
     flat_percent: int = 50
 
 
 @dataclasses.dataclass
 class InstanceConfig:
-    client_count: int = 128
-    client_type: str = "c7i.large"
+    worker_count: int = 128
+    worker_type: str = "c7i.large"
+    submitter_type: str = "c7i.xlarge"
     server_type: str = "c7i.16xlarge"
     controller_type: str = "c7i.large"
     ami_id: str = "ami-xxxxxxxx"
@@ -115,8 +116,8 @@ def load_config(path: pathlib.Path) -> AwsBenchConfig:
 
 
 def validate_config(config: AwsBenchConfig) -> None:
-    if max(config.benchmark.node_counts) > config.instances.client_count:
-        msg = "node_counts cannot exceed instances.client_count"
+    if max(config.benchmark.node_counts) > config.instances.worker_count:
+        msg = "node_counts cannot exceed instances.worker_count"
         raise ValueError(msg)
     if sorted(config.benchmark.node_counts) != config.benchmark.node_counts:
         msg = "node_counts must be sorted in ascending order"

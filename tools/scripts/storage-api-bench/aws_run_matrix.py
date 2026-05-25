@@ -34,14 +34,14 @@ def main() -> int:
                 args.remote_root,
                 "--remote-workspace",
                 f"{args.remote_workspace_root}/{args.run_id}/{node_count}",
-                "--jobs-per-agent",
-                str(args.jobs_per_agent),
+                "--jobs-per-worker",
+                str(args.jobs_per_worker),
                 "--tasks-per-job",
                 str(args.tasks_per_job),
                 "--payload-bytes",
                 str(args.payload_bytes),
-                "--client-count",
-                str(args.client_count),
+                "--submitter-count",
+                str(args.submitter_count),
                 "--worker-count",
                 str(args.worker_count),
                 "--flat-percent",
@@ -87,10 +87,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=pathlib.Path, default=aws_common.ROOT / "data")
     parser.add_argument("--remote-root", default="~/spider")
     parser.add_argument("--remote-workspace-root", default=".aws-bench")
-    parser.add_argument("--jobs-per-agent", type=int, default=10)
+    parser.add_argument("--jobs-per-worker", type=int, default=10)
     parser.add_argument("--tasks-per-job", type=int, default=1000)
     parser.add_argument("--payload-bytes", type=int, default=128)
-    parser.add_argument("--client-count", type=int, default=8)
+    parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--workloads", type=parse_csv_strings, default=["flat", "deep", "mixed"])

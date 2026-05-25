@@ -507,7 +507,7 @@ def write_report(
         "",
         "## Setup",
         "",
-        f"The storage API target was `{setup['target']}` for each listed protocol run. Each run used `{setup['job_count']}` total jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup['client_count']}` submit/monitor clients per agent, `{setup['worker_count']}` workers per agent, `{setup['poll_batch']}` poll batch size, and `{setup['poll_wait_ms']}` ms poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
+        f"The storage API target was `{setup['target']}` for each listed protocol run. Each run used `{setup['job_count']}` total jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup['client_count']}` submit/monitor clients on the submitter agent, `{setup['worker_count']}` workers per worker agent, `{setup['poll_batch']}` poll batch size, and `{setup['poll_wait_ms']}` ms poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
         "",
         "## Request Latency Charts",
         "",
@@ -519,7 +519,7 @@ def write_report(
         agents = ", ".join(f"`{agent}`" for agent in distributed.get("agents", []))
         lines.extend(
             [
-                f"This was a distributed run with `{distributed.get('agent_count', 0)}` client agents: {agents}. The controller divided the configured total job count across agents and owned the storage-server metrics session.",
+                f"This was a distributed run with `{distributed.get('agent_count', 0)}` agents: {agents}. The controller created the workload session, assigned all job submission to the submitter agent, stopped worker agents after submission monitoring completed, and owned the storage-server metrics session.",
                 "",
                 "### Distributed Job Allocation",
                 "",

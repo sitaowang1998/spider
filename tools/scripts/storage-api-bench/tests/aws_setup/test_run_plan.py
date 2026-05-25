@@ -27,10 +27,10 @@ class AwsRunPlanTest(unittest.TestCase):
         config.aws.run_id = "aws-128"
         config.benchmark.node_counts = [1, 2, 4, 8, 16, 64, 128]
         config.benchmark.protocols = ["grpc", "rest"]
-        config.benchmark.jobs_per_agent = 20
+        config.benchmark.jobs_per_worker = 20
         config.benchmark.tasks_per_job = 2000
         config.benchmark.payload_bytes = 256
-        config.benchmark.client_count = 12
+        config.benchmark.submitter_count = 12
         config.benchmark.worker_count = 24
         config.benchmark.flat_percent = 60
         config.database.name = "spider_db"
@@ -51,7 +51,7 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("rest", command)
         self.assertIn("--workloads", command)
         self.assertIn("flat,deep,mixed", command)
-        self.assertIn("--jobs-per-agent", command)
+        self.assertIn("--jobs-per-worker", command)
         self.assertIn("20", command)
         self.assertIn("--tasks-per-job", command)
         self.assertIn("2000", command)

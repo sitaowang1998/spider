@@ -26,6 +26,7 @@ def load_module(name: str):
 class FakeAwsCli:
     def __init__(self):
         self.commands = []
+        self.dry_run = False
 
     def run(self, args):
         self.commands.append(args)
@@ -38,6 +39,8 @@ class FakeAwsCli:
         self.commands.append(args)
         if args[:2] == ["ec2", "run-instances"]:
             return {"Instances": [{"InstanceId": "i-builder"}]}
+        if args[:2] == ["iam", "get-instance-profile"]:
+            return {"InstanceProfile": {"Roles": [{"RoleName": "builder"}]}}
         if args[:2] == ["ssm", "send-command"]:
             return {"Command": {"CommandId": "command-1"}}
         if args[:2] == ["ec2", "create-image"]:
@@ -77,12 +80,15 @@ class AmiTest(unittest.TestCase):
                     node_counts = [1]
 
                     [instances]
-                    client_count = 1
+                    worker_count = 1
                     ami_id = "ami-runtime"
 
                     [artifact]
                     base_ami_id = "ami-base"
                     s3_uri = "s3://bench-artifacts/runtime.tar.gz"
+
+                    [network]
+                    rds_subnet_availability_zones = ["us-east-1a", "us-east-1b"]
                     """
                 ),
                 encoding="utf-8",

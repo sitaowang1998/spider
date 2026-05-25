@@ -498,13 +498,21 @@ def launch_instances(
     launch_role(client, config, "storage-server", config.instances.server_type, 1)
     progress("launching controller instance")
     launch_role(client, config, "controller", config.instances.controller_type, 1)
-    progress(f"launching {config.instances.client_count} benchmark client instances")
+    progress("launching dedicated benchmark submitter instance")
     launch_role(
         client,
         config,
-        "benchmark-client",
-        config.instances.client_type,
-        config.instances.client_count,
+        "benchmark-submitter",
+        config.instances.submitter_type,
+        1,
+    )
+    progress(f"launching {config.instances.worker_count} benchmark worker instances")
+    launch_role(
+        client,
+        config,
+        "benchmark-worker",
+        config.instances.worker_type,
+        config.instances.worker_count,
     )
 
 

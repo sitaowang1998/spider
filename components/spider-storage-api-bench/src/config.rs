@@ -88,7 +88,8 @@ impl From<&DatabaseConfig> for BenchDatabaseConfig {
 pub struct DistributedConfig {
     pub agent_timeout_sec: u64,
     pub poll_interval_ms: u64,
-    pub agents: Vec<DistributedAgentConfig>,
+    pub submitter: DistributedAgentConfig,
+    pub workers: Vec<DistributedAgentConfig>,
 }
 
 impl DistributedConfig {
@@ -104,12 +105,12 @@ impl DistributedConfig {
         if self.poll_interval_ms == 0 {
             anyhow::bail!("distributed.poll_interval_ms must be greater than 0");
         }
-        if self.agents.is_empty() {
-            anyhow::bail!("distributed.agents must contain at least one agent");
+        if self.workers.is_empty() {
+            anyhow::bail!("distributed.workers must contain at least one agent");
         }
 
         let mut ids = std::collections::HashSet::new();
-        for agent in &self.agents {
+        for agent in std::iter::once(&self.submitter).chain(self.workers.iter()) {
             if agent.id.trim().is_empty() {
                 anyhow::bail!("distributed agent id must not be empty");
             }
@@ -219,9 +220,11 @@ mod tests {
         distributed.validate()?;
         assert_eq!(1800, distributed.agent_timeout_sec);
         assert_eq!(1000, distributed.poll_interval_ms);
-        assert_eq!(1, distributed.agents.len());
-        assert_eq!("client-10-1-0-7", distributed.agents[0].id);
-        assert_eq!("http://10.1.0.7:19091", distributed.agents[0].url);
+        assert_eq!("submitter-10-1-0-7", distributed.submitter.id);
+        assert_eq!("http://10.1.0.7:19091", distributed.submitter.url);
+        assert_eq!(1, distributed.workers.len());
+        assert_eq!("worker-10-1-0-8", distributed.workers[0].id);
+        assert_eq!("http://10.1.0.8:19091", distributed.workers[0].url);
         Ok(())
     }
 
@@ -260,9 +263,13 @@ output_dir = "data/"
 agent_timeout_sec = 120
 poll_interval_ms = 500
 
-[[distributed.agents]]
-id = "client-a"
+[distributed.submitter]
+id = "submitter-a"
 url = "http://127.0.0.1:19091"
+
+[[distributed.workers]]
+id = "worker-a"
+url = "http://127.0.0.1:19092"
 "#,
         )?;
         config

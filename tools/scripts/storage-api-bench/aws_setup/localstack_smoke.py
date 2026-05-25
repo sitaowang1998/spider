@@ -231,11 +231,11 @@ def write_localstack_config(path: pathlib.Path, endpoint_url: str) -> None:
             node_counts = [1, 2]
             protocols = ["grpc", "rest"]
             workloads = ["flat", "deep", "mixed"]
-            jobs_per_agent = 1
+            jobs_per_worker = 1
             tasks_per_job = 10
 
             [instances]
-            client_count = 2
+            worker_count = 2
             ami_id = "ami-localstack"
 
             [database]

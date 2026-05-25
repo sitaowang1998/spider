@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use axum::{
     Json,
@@ -14,14 +20,15 @@ use tokio::sync::Mutex;
 use crate::{
     AgentArgs,
     BenchmarkReport,
-    ClientRunOptions,
-    distributed::{AgentRunAccepted, AgentRunRequest, AgentRunState, AgentRunStatus},
-    run_client_report,
+    distributed::{AgentRole, AgentRunAccepted, AgentRunRequest, AgentRunState, AgentRunStatus},
+    run_submitter_workload,
+    run_worker_workload,
 };
 
 #[derive(Clone)]
 struct AgentState {
     agent_id: String,
+    role: AgentRole,
     config_path: std::path::PathBuf,
     runs: Arc<Mutex<HashMap<String, AgentRunRecord>>>,
 }
@@ -31,6 +38,7 @@ struct AgentRunRecord {
     status: AgentRunState,
     report: Option<BenchmarkReport>,
     error: Option<String>,
+    stop_requested: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +50,7 @@ struct HealthResponse {
 pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let state = AgentState {
         agent_id: args.agent_id,
+        role: args.role,
         config_path: args.config,
         runs: Arc::new(Mutex::new(HashMap::new())),
     };
@@ -49,6 +58,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/runs", post(start_run))
         .route("/runs/:run_id", get(get_run))
+        .route("/runs/:run_id/stop", post(stop_run))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
@@ -67,10 +77,12 @@ async fn start_run(
     Json(request): Json<AgentRunRequest>,
 ) -> Result<Json<AgentRunAccepted>, AgentError> {
     let mut runs = state.runs.lock().await;
-    if runs
-        .values()
-        .any(|run| matches!(run.status, AgentRunState::Running))
-    {
+    if runs.values().any(|run| {
+        matches!(
+            run.status,
+            AgentRunState::Accepted | AgentRunState::Running | AgentRunState::Stopping
+        )
+    }) {
         return Err(AgentError::conflict(
             "agent already has a running benchmark",
         ));
@@ -81,12 +93,24 @@ async fn start_run(
             request.run_id
         )));
     }
+    if request.role != state.role {
+        return Err(AgentError::bad_request(format!(
+            "agent `{}` is {:?}, request is {:?}",
+            state.agent_id, state.role, request.role
+        )));
+    }
+    let stop_requested = if request.role == AgentRole::Worker {
+        Some(Arc::new(AtomicBool::new(false)))
+    } else {
+        None
+    };
     runs.insert(
         request.run_id.clone(),
         AgentRunRecord {
             status: AgentRunState::Running,
             report: None,
             error: None,
+            stop_requested,
         },
     );
     drop(runs);
@@ -118,8 +142,12 @@ async fn start_run(
 }
 
 fn run_id_is_active(runs: &HashMap<String, AgentRunRecord>, run_id: &str) -> bool {
-    runs.get(run_id)
-        .is_some_and(|run| matches!(run.status, AgentRunState::Accepted | AgentRunState::Running))
+    runs.get(run_id).is_some_and(|run| {
+        matches!(
+            run.status,
+            AgentRunState::Accepted | AgentRunState::Running | AgentRunState::Stopping
+        )
+    })
 }
 
 async fn execute_run(
@@ -130,14 +158,104 @@ async fn execute_run(
     config.benchmark.job_count = request.job_count;
     config.benchmark.flat_percent = request.flat_percent;
     config.benchmark.validate()?;
-    run_client_report(ClientRunOptions {
-        protocol: request.protocol,
-        workload: request.workload,
-        config,
-        target: request.target,
-        server_metrics: false,
+    match request.role {
+        AgentRole::Submitter => run_submitter_report(state, request, config).await,
+        AgentRole::Worker => run_worker_report(state, request, config).await,
+    }
+}
+
+async fn run_submitter_report(
+    _state: &AgentState,
+    request: AgentRunRequest,
+    config: spider_storage_api_bench::config::BenchConfig,
+) -> anyhow::Result<BenchmarkReport> {
+    let resource_group_id = request
+        .resource_group_id
+        .ok_or_else(|| anyhow::anyhow!("submitter run requires resource_group_id"))?;
+    let measurements = match request.protocol {
+        spider_storage_api_bench::server::ServerProtocol::Rest => {
+            let client =
+                spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
+            run_submitter_workload(
+                vec![client; config.benchmark.client_count],
+                request.workload,
+                resource_group_id,
+                &config,
+            )
+            .await?
+        }
+        spider_storage_api_bench::server::ServerProtocol::Grpc => {
+            let clients =
+                crate::connect_grpc_clients(&request.target, config.benchmark.client_count).await?;
+            run_submitter_workload(clients, request.workload, resource_group_id, &config).await?
+        }
+    };
+    Ok(BenchmarkReport {
+        setup: crate::BenchmarkSetup::new(
+            request.protocol,
+            request.target,
+            request.workload,
+            &config,
+        ),
+        job_latency: spider_storage_api_bench::metrics::summarize(&measurements.job_latency),
+        request_latency: spider_storage_api_bench::metrics::summarize_requests(
+            &measurements.request_latency,
+        ),
+        server_metrics: crate::empty_server_metrics_report(),
+        job_latency_samples: measurements.job_latency,
+        request_latency_samples: measurements.request_latency,
+        distributed: None,
     })
-    .await
+}
+
+async fn run_worker_report(
+    state: &AgentState,
+    request: AgentRunRequest,
+    config: spider_storage_api_bench::config::BenchConfig,
+) -> anyhow::Result<BenchmarkReport> {
+    let session_id = request
+        .session_id
+        .ok_or_else(|| anyhow::anyhow!("worker run requires session_id"))?;
+    let stop_requested = {
+        let runs = state.runs.lock().await;
+        runs.get(&request.run_id)
+            .and_then(|run| run.stop_requested.clone())
+            .ok_or_else(|| anyhow::anyhow!("worker run missing stop flag"))?
+    };
+    let measurements = match request.protocol {
+        spider_storage_api_bench::server::ServerProtocol::Rest => {
+            let client =
+                spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
+            run_worker_workload(
+                vec![client; config.benchmark.worker_count],
+                session_id,
+                &config,
+                stop_requested,
+            )
+            .await?
+        }
+        spider_storage_api_bench::server::ServerProtocol::Grpc => {
+            let clients =
+                crate::connect_grpc_clients(&request.target, config.benchmark.worker_count).await?;
+            run_worker_workload(clients, session_id, &config, stop_requested).await?
+        }
+    };
+    Ok(BenchmarkReport {
+        setup: crate::BenchmarkSetup::new(
+            request.protocol,
+            request.target,
+            request.workload,
+            &config,
+        ),
+        job_latency: spider_storage_api_bench::metrics::summarize(&measurements.job_latency),
+        request_latency: spider_storage_api_bench::metrics::summarize_requests(
+            &measurements.request_latency,
+        ),
+        server_metrics: crate::empty_server_metrics_report(),
+        job_latency_samples: measurements.job_latency,
+        request_latency_samples: measurements.request_latency,
+        distributed: None,
+    })
 }
 
 async fn get_run(
@@ -159,6 +277,34 @@ async fn get_run(
     }))
 }
 
+async fn stop_run(
+    State(state): State<AgentState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<AgentRunStatus>, AgentError> {
+    let record = {
+        let mut runs = state.runs.lock().await;
+        let record = runs
+            .get_mut(&run_id)
+            .ok_or_else(|| AgentError::not_found(format!("run `{run_id}` not found")))?;
+        if let Some(stop_requested) = &record.stop_requested {
+            stop_requested.store(true, Ordering::Relaxed);
+        }
+        if matches!(record.status, AgentRunState::Running) {
+            record.status = AgentRunState::Stopping;
+        }
+        let record = record.clone();
+        drop(runs);
+        record
+    };
+    Ok(Json(AgentRunStatus {
+        run_id,
+        agent_id: state.agent_id,
+        status: record.status,
+        report: record.report,
+        error: record.error,
+    }))
+}
+
 struct AgentError {
     status: StatusCode,
     message: String,
@@ -168,6 +314,13 @@ impl AgentError {
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
             message: message.into(),
         }
     }
@@ -202,6 +355,7 @@ mod tests {
                 status: AgentRunState::Succeeded,
                 report: None,
                 error: None,
+                stop_requested: None,
             },
         );
 
@@ -217,6 +371,7 @@ mod tests {
                 status: AgentRunState::Running,
                 report: None,
                 error: None,
+                stop_requested: None,
             },
         );
 

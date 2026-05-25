@@ -94,7 +94,7 @@ class ControllerFlowTest(unittest.TestCase):
                     node_counts = [1]
 
                     [instances]
-                    client_count = 1
+                    worker_count = 1
                     """
                 ),
                 encoding="utf-8",

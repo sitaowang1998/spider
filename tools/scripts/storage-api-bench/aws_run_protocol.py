@@ -17,30 +17,51 @@ def main() -> int:
     args = parse_args()
     workspace = args.workspace or aws_common.default_workspace(args.run_id, args.node_count)
     workspace.mkdir(parents=True, exist_ok=True)
-    server, clients = aws_discover.discover(args.run_id, args.node_count)
-    client_ips = [client["private_ip"] for client in clients]
-    client_instance_ids = [client["instance_id"] for client in clients]
+    server, submitter, workers = aws_discover.discover(args.run_id, args.node_count)
+    submitter_ip = submitter["private_ip"]
+    submitter_instance_id = submitter["instance_id"]
+    worker_ips = [worker["private_ip"] for worker in workers]
+    worker_instance_ids = [worker["instance_id"] for worker in workers]
     server_instance_id = server["instance_id"]
     server_ip = server["private_ip"]
 
-    write_discovery_files(workspace, server, clients)
+    write_discovery_files(workspace, server, submitter, workers)
     config = workspace / "config.toml"
-    make_config(args, server_ip, workspace / "client_ips.txt", config)
+    make_config(args, server_ip, submitter_ip, workspace / "worker_ips.txt", config)
 
     remote_config = pathlib.PurePosixPath(args.remote_workspace) / "config.toml"
     remote_log_dir = pathlib.PurePosixPath(args.remote_workspace) / "logs"
     config_text = config.read_text(encoding="utf-8")
 
-    sync_config([server_instance_id, *client_instance_ids], args.remote_root, remote_config, config_text)
+    sync_config(
+        [server_instance_id, submitter_instance_id, *worker_instance_ids],
+        args.remote_root,
+        remote_config,
+        config_text,
+    )
     start_agents(
-        client_instance_ids,
+        [submitter_instance_id],
         args.remote_root,
         remote_config,
         remote_log_dir,
         args.agent_port,
+        "submitter",
         args.agent_start_timeout,
     )
-    aws_common.wait_for_agent_health(client_ips, args.agent_port, args.agent_start_timeout)
+    start_agents(
+        worker_instance_ids,
+        args.remote_root,
+        remote_config,
+        remote_log_dir,
+        args.agent_port,
+        "worker",
+        args.agent_start_timeout,
+    )
+    aws_common.wait_for_agent_health(
+        [submitter_ip, *worker_ips],
+        args.agent_port,
+        args.agent_start_timeout,
+    )
 
     port = args.grpc_port if args.protocol == "grpc" else args.rest_port
     start_server(
@@ -79,10 +100,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=pathlib.Path, required=True)
     parser.add_argument("--remote-root", default="~/spider")
     parser.add_argument("--remote-workspace")
-    parser.add_argument("--jobs-per-agent", type=int, default=10)
+    parser.add_argument("--jobs-per-worker", type=int, default=10)
     parser.add_argument("--tasks-per-job", type=int, default=1000)
     parser.add_argument("--payload-bytes", type=int, default=128)
-    parser.add_argument("--client-count", type=int, default=8)
+    parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--workloads", default="flat,deep,mixed")
@@ -144,21 +165,25 @@ def build_controller_command(
 def write_discovery_files(
     workspace: pathlib.Path,
     server: dict[str, str],
-    clients: list[dict[str, str]],
+    submitter: dict[str, str],
+    workers: list[dict[str, str]],
 ) -> None:
     aws_common.write_lines(workspace / "server_ip.txt", [server["private_ip"]])
     aws_common.write_lines(workspace / "server_instance_id.txt", [server["instance_id"]])
-    aws_common.write_lines(workspace / "client_ips.txt", [client["private_ip"] for client in clients])
+    aws_common.write_lines(workspace / "submitter_ip.txt", [submitter["private_ip"]])
+    aws_common.write_lines(workspace / "submitter_instance_id.txt", [submitter["instance_id"]])
+    aws_common.write_lines(workspace / "worker_ips.txt", [worker["private_ip"] for worker in workers])
     aws_common.write_lines(
-        workspace / "client_instance_ids.txt",
-        [client["instance_id"] for client in clients],
+        workspace / "worker_instance_ids.txt",
+        [worker["instance_id"] for worker in workers],
     )
 
 
 def make_config(
     args: argparse.Namespace,
     server_ip: str,
-    client_ips_path: pathlib.Path,
+    submitter_ip: str,
+    worker_ips_path: pathlib.Path,
     output: pathlib.Path,
 ) -> None:
     subprocess.run(
@@ -167,18 +192,20 @@ def make_config(
             str(aws_common.SCRIPT_DIR / "aws_make_config.py"),
             "--server-private-ip",
             server_ip,
-            "--agent-ips",
-            str(client_ips_path),
+            "--submitter-ip",
+            submitter_ip,
+            "--worker-ips",
+            str(worker_ips_path),
             "--output",
             str(output),
-            "--jobs-per-agent",
-            str(args.jobs_per_agent),
+            "--jobs-per-worker",
+            str(args.jobs_per_worker),
             "--tasks-per-job",
             str(args.tasks_per_job),
             "--payload-bytes",
             str(args.payload_bytes),
-            "--client-count",
-            str(args.client_count),
+            "--submitter-count",
+            str(args.submitter_count),
             "--worker-count",
             str(args.worker_count),
             "--flat-percent",
@@ -233,18 +260,20 @@ def start_agents(
     remote_config: pathlib.PurePosixPath,
     remote_log_dir: pathlib.PurePosixPath,
     agent_port: int,
+    role: str,
     timeout_s: int,
 ) -> None:
     commands = [
         f"cd {shlex.quote(remote_root)}",
         f"mkdir -p {shlex.quote(str(remote_log_dir))}",
         "PRIVATE_IP=$(hostname -I | awk '{print $1}')",
-        'AGENT_ID="client-${PRIVATE_IP//./-}"',
+        f'AGENT_ID="{role}-${{PRIVATE_IP//./-}}"',
         'pkill -f "run_agent.py .*--agent-id ${AGENT_ID}" || true',
         (
             f"nohup tools/scripts/storage-api-bench/run_agent.py "
             f"--config {shlex.quote(str(remote_config))} "
             '"--agent-id" "${AGENT_ID}" '
+            f"--role {role} "
             f"--bind 0.0.0.0:{agent_port} "
             f'> "{remote_log_dir}/agent-${{AGENT_ID}}.log" 2>&1 &'
         ),

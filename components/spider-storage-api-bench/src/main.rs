@@ -2,7 +2,10 @@ use std::{
     collections::{HashSet, VecDeque},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -105,6 +108,8 @@ struct AgentArgs {
     config: PathBuf,
     #[arg(long)]
     agent_id: String,
+    #[arg(long)]
+    role: distributed::AgentRole,
 }
 
 #[derive(Debug, Parser)]
@@ -165,9 +170,15 @@ struct WorkloadMeasurements {
     server_metrics: ServerMetricsSessionReport,
 }
 
-struct ClientWorkloadMeasurements {
+pub(crate) struct ClientWorkloadMeasurements {
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
+}
+
+pub(crate) struct PreparedWorkload {
+    pub(crate) session_id: u64,
+    pub(crate) resource_group_id: String,
+    pub(crate) request_latency: Vec<RequestLatencySample>,
 }
 
 pub(crate) struct ClientRunOptions {
@@ -300,7 +311,7 @@ fn print_report(report: &BenchmarkReport) {
 }
 
 impl BenchmarkSetup {
-    fn new(
+    pub(crate) fn new(
         protocol: ServerProtocol,
         target: String,
         workload: WorkloadKind,
@@ -368,7 +379,7 @@ async fn run_measured_workload<ClientType: StorageApiClient>(
     })
 }
 
-const fn empty_server_metrics_report() -> ServerMetricsSessionReport {
+pub(crate) const fn empty_server_metrics_report() -> ServerMetricsSessionReport {
     ServerMetricsSessionReport {
         metrics_session_id: String::new(),
         label: None,
@@ -384,30 +395,12 @@ async fn run_workload<ClientType: StorageApiClient>(
     workload_kind: WorkloadKind,
     config: &BenchConfig,
 ) -> anyhow::Result<ClientWorkloadMeasurements> {
-    let mut request_latency_samples = Vec::new();
     let worker_clients = clients.split_off(config.benchmark.client_count);
     let submit_clients = clients;
     let setup_client = submit_clients
         .first()
         .ok_or_else(|| anyhow::anyhow!("client_count must be greater than 0"))?;
-    let session_id = record_request(
-        &mut request_latency_samples,
-        "get_session",
-        RequestCategory::NonBlocking,
-        setup_client.get_session(GetSessionRequest {}),
-    )
-    .await?
-    .session_id;
-    let resource_group = record_request(
-        &mut request_latency_samples,
-        "add_resource_group",
-        RequestCategory::NonBlocking,
-        setup_client.add_resource_group(AddResourceGroupRequest {
-            external_id: format!("storage-api-bench-{}", uuid::Uuid::new_v4()),
-            password: b"storage-api-bench".to_vec(),
-        }),
-    )
-    .await?;
+    let mut prepared = prepare_workload(setup_client).await?;
 
     let jobs = build_jobs(
         workload_kind,
@@ -422,14 +415,15 @@ async fn run_workload<ClientType: StorageApiClient>(
         worker_clients,
         &completed,
         config.benchmark.job_count,
-        session_id,
+        prepared.session_id,
         config,
+        None,
     );
     let mut measurements = match run_submit_clients(
         submit_clients,
         job_queue,
         &completed,
-        resource_group.resource_group_id,
+        prepared.resource_group_id,
         config.benchmark.poll_wait_ms,
     )
     .await
@@ -441,12 +435,93 @@ async fn run_workload<ClientType: StorageApiClient>(
         }
     };
     while let Some(result) = worker_tasks.join_next().await {
-        request_latency_samples.extend(result??);
+        prepared.request_latency.extend(result??);
     }
-    request_latency_samples.append(&mut measurements.request_latency);
+    prepared
+        .request_latency
+        .append(&mut measurements.request_latency);
     Ok(ClientWorkloadMeasurements {
         job_latency: measurements.job_latency,
-        request_latency: request_latency_samples,
+        request_latency: prepared.request_latency,
+    })
+}
+
+pub(crate) async fn prepare_workload<ClientType: StorageApiClient>(
+    setup_client: &ClientType,
+) -> anyhow::Result<PreparedWorkload> {
+    let mut request_latency = Vec::new();
+    let session_id = record_request(
+        &mut request_latency,
+        "get_session",
+        RequestCategory::NonBlocking,
+        setup_client.get_session(GetSessionRequest {}),
+    )
+    .await?
+    .session_id;
+    let resource_group = record_request(
+        &mut request_latency,
+        "add_resource_group",
+        RequestCategory::NonBlocking,
+        setup_client.add_resource_group(AddResourceGroupRequest {
+            external_id: format!("storage-api-bench-{}", uuid::Uuid::new_v4()),
+            password: b"storage-api-bench".to_vec(),
+        }),
+    )
+    .await?;
+    Ok(PreparedWorkload {
+        session_id,
+        resource_group_id: resource_group.resource_group_id,
+        request_latency,
+    })
+}
+
+pub(crate) async fn run_submitter_workload<ClientType: StorageApiClient>(
+    clients: Vec<ClientType>,
+    workload_kind: WorkloadKind,
+    resource_group_id: String,
+    config: &BenchConfig,
+) -> anyhow::Result<ClientWorkloadMeasurements> {
+    let jobs = build_jobs(
+        workload_kind,
+        config.benchmark.job_count,
+        config.benchmark.task_count,
+        config.benchmark.payload_bytes,
+        config.benchmark.flat_percent,
+    )?;
+    let completed = Arc::new(Mutex::new(HashSet::new()));
+    let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
+    run_submit_clients(
+        clients,
+        job_queue,
+        &completed,
+        resource_group_id,
+        config.benchmark.poll_wait_ms,
+    )
+    .await
+}
+
+pub(crate) async fn run_worker_workload<ClientType: StorageApiClient>(
+    clients: Vec<ClientType>,
+    session_id: u64,
+    config: &BenchConfig,
+    stop_requested: Arc<AtomicBool>,
+) -> anyhow::Result<ClientWorkloadMeasurements> {
+    let completed = Arc::new(Mutex::new(HashSet::new()));
+    let mut worker_tasks = spawn_worker_tasks(
+        clients,
+        &completed,
+        usize::MAX,
+        session_id,
+        config,
+        Some(&stop_requested),
+    );
+    let mut request_latency = Vec::new();
+    while let Some(result) = worker_tasks.join_next().await {
+        request_latency.extend(result??);
+    }
+    Ok(ClientWorkloadMeasurements {
+        job_latency: Vec::new(),
+        request_latency,
     })
 }
 
@@ -458,6 +533,7 @@ struct ClientWorker<ClientType: StorageApiClient> {
     poll_batch: usize,
     poll_wait_ms: u64,
     session_id: u64,
+    stop_requested: Option<Arc<AtomicBool>>,
 }
 
 struct SubmitClient<ClientType: StorageApiClient> {
@@ -474,6 +550,7 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
     job_count: usize,
     session_id: u64,
     config: &BenchConfig,
+    stop_requested: Option<&Arc<AtomicBool>>,
 ) -> JoinSet<anyhow::Result<Vec<RequestLatencySample>>> {
     let mut workers = JoinSet::new();
     for client in clients {
@@ -485,6 +562,7 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
             poll_batch: config.benchmark.poll_batch,
             poll_wait_ms: config.benchmark.poll_wait_ms,
             session_id,
+            stop_requested: stop_requested.cloned(),
         }));
     }
     workers
@@ -590,7 +668,7 @@ async fn run_client_worker<ClientType: StorageApiClient>(
     .await?
     .execution_manager_id;
     let outputs = TaskOutputsSerializer::from_tuple(&(Vec::<u8>::new(),))?;
-    while !all_jobs_completed(&worker.completed, worker.job_count).await {
+    while should_worker_continue(&worker).await {
         let ready = record_request(
             &mut request_latency_samples,
             "poll_ready_tasks",
@@ -639,6 +717,19 @@ async fn run_client_worker<ClientType: StorageApiClient>(
         }
     }
     Ok(request_latency_samples)
+}
+
+async fn should_worker_continue<ClientType: StorageApiClient>(
+    worker: &ClientWorker<ClientType>,
+) -> bool {
+    if worker
+        .stop_requested
+        .as_ref()
+        .is_some_and(|stop| stop.load(Ordering::Relaxed))
+    {
+        return false;
+    }
+    !all_jobs_completed(&worker.completed, worker.job_count).await
 }
 
 async fn monitor_job<ClientType: StorageApiClient>(
@@ -704,7 +795,7 @@ const fn total_connection_count(config: &BenchConfig) -> usize {
     config.benchmark.client_count + execution_manager_worker_count(config)
 }
 
-async fn connect_grpc_clients(
+pub(crate) async fn connect_grpc_clients(
     target: &str,
     count: usize,
 ) -> spider_storage_api_bench::api::ApiResult<Vec<GrpcStorageApiClient>> {

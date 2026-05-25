@@ -29,6 +29,10 @@ output_dir = "data/"
 agent_timeout_sec = 1800
 poll_interval_ms = 1000
 
-[[distributed.agents]]
-id = "client-10-1-0-7"
+[distributed.submitter]
+id = "submitter-10-1-0-7"
 url = "http://10.1.0.7:19091"
+
+[[distributed.workers]]
+id = "worker-10-1-0-8"
+url = "http://10.1.0.8:19091"

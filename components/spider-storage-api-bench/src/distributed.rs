@@ -1,9 +1,10 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use spider_storage_api_bench::{
     metrics::{
         JobLatencySummary,
+        RequestLatencySample,
         RequestLatencySummary,
         ServerMetricsSessionReport,
         summarize,
@@ -18,11 +19,16 @@ use crate::{BenchmarkReport, BenchmarkSetup};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRunRequest {
     pub(crate) run_id: String,
+    pub(crate) role: AgentRole,
     pub(crate) protocol: ServerProtocol,
     pub(crate) workload: WorkloadKind,
     pub(crate) target: String,
     pub(crate) job_count: usize,
     pub(crate) flat_percent: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resource_group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,8 +53,28 @@ pub struct AgentRunStatus {
 pub enum AgentRunState {
     Accepted,
     Running,
+    Stopping,
     Succeeded,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentRole {
+    Submitter,
+    Worker,
+}
+
+impl FromStr for AgentRole {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "submitter" => Ok(Self::Submitter),
+            "worker" => Ok(Self::Worker),
+            _ => anyhow::bail!("agent role must be submitter or worker"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,7 +91,8 @@ pub struct AgentJobAllocation {
     pub(crate) job_count: usize,
 }
 
-pub fn allocate_jobs(
+#[cfg(test)]
+fn allocate_jobs(
     total_jobs: usize,
     agent_ids: &[String],
 ) -> anyhow::Result<Vec<AgentJobAllocation>> {
@@ -90,9 +117,10 @@ pub fn merge_agent_reports(
     server_metrics: ServerMetricsSessionReport,
     job_allocation: Vec<AgentJobAllocation>,
     controller_wall_time: Duration,
+    controller_request_samples: Vec<RequestLatencySample>,
 ) -> BenchmarkReport {
     let mut job_samples = Vec::new();
-    let mut request_samples = Vec::new();
+    let mut request_samples = controller_request_samples;
 
     for (_, report) in &agent_reports {
         job_samples.extend(report.job_latency_samples.iter().cloned());

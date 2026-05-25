@@ -37,15 +37,15 @@ class AwsSetupConfigTest(unittest.TestCase):
                     node_counts = [1, 2, 4, 8, 16, 64, 128]
                     protocols = ["grpc", "rest"]
                     workloads = ["flat", "deep", "mixed"]
-                    jobs_per_agent = 20
+                    jobs_per_worker = 20
                     tasks_per_job = 2000
                     payload_bytes = 256
-                    client_count = 12
+                    submitter_count = 12
                     worker_count = 24
                     flat_percent = 60
 
                     [instances]
-                    client_count = 128
+                    worker_count = 128
 
                     [database]
                     name = "spider_db"
@@ -68,15 +68,15 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual([1, 2, 4, 8, 16, 64, 128], config.benchmark.node_counts)
         self.assertEqual(["grpc", "rest"], config.benchmark.protocols)
         self.assertEqual(["flat", "deep", "mixed"], config.benchmark.workloads)
-        self.assertEqual(20, config.benchmark.jobs_per_agent)
+        self.assertEqual(20, config.benchmark.jobs_per_worker)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
-        self.assertEqual(128, config.instances.client_count)
+        self.assertEqual(128, config.instances.worker_count)
         self.assertEqual("ami-base", config.artifact.base_ami_id)
         self.assertEqual("c7i.xlarge", config.artifact.builder_instance_type)
         self.assertEqual("builder-profile", config.artifact.builder_iam_instance_profile)
         self.assertEqual("bench-image", config.artifact.image_name_prefix)
 
-    def test_config_rejects_node_count_larger_than_client_fleet(self):
+    def test_config_rejects_node_count_larger_than_worker_fleet(self):
         config_module = load_module("config")
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "config.toml"
@@ -87,7 +87,7 @@ class AwsSetupConfigTest(unittest.TestCase):
                     node_counts = [1, 4]
 
                     [instances]
-                    client_count = 2
+                    worker_count = 2
                     """
                 ),
                 encoding="utf-8",
