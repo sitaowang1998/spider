@@ -11,6 +11,7 @@ import ami_state
 import aws_cli
 import config as config_module
 import env as env_module
+import progress as progress_module
 import state as state_module
 
 
@@ -19,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and credentials")
     config = config_module.load_config(args.config)
     secret = env_module.load_secret(args.secret)
     aws_env = env_module.build_aws_env(
@@ -33,8 +35,11 @@ def main() -> int:
     )
     state = state_module.load_state(args.state)
     config.instances.ami_id = resolve_runtime_ami_id(config, args.ami_state)
+    progress(f"using benchmark AMI {config.instances.ami_id}")
     provision(config, client, state)
+    progress(f"saving state to {args.state}")
     state_module.save_state(args.state, state)
+    progress("provision complete")
     return 0
 
 
@@ -72,19 +77,35 @@ def provision(
         msg = "state resources must be an object"
         raise ValueError(msg)
 
+    progress("ensuring network resources")
     ensure_network(client, config, resources)
+    progress("ensuring SSM instance profile")
     ensure_ssm_instance_profile(client, config)
+    progress("ensuring placement group")
     ensure_placement_group(client, config)
+    progress("ensuring RDS subnet group")
     ensure_rds_subnet_group(client, config)
+    progress("launching benchmark instances")
     launch_instances(client, config)
+    progress("creating RDS instance")
     create_rds(client, config)
+    progress("ensuring results bucket")
     ensure_results_bucket(client, config, resources)
 
     resources["run_id"] = config.aws.run_id
     resources["rds_instance_id"] = rds_instance_id(config)
+    progress("waiting for RDS instance to become available")
     wait_for_rds(client, config)
+    progress("discovering RDS endpoint")
     resources["rds_endpoint"] = discover_rds_endpoint(client, config)
+    progress(f"RDS endpoint: {resources['rds_endpoint']}")
+    progress("waiting for EC2 instances to enter running state")
     wait_for_ec2(client, config)
+    progress("EC2 instances are running")
+
+
+def progress(message: str) -> None:
+    progress_module.log("provision", message)
 
 
 def ensure_network(
@@ -93,9 +114,12 @@ def ensure_network(
     resources: dict[str, object],
 ) -> None:
     if not config.network.vpc_id:
+        progress("creating VPC")
         config.network.vpc_id = create_vpc(client, config)
         resources["vpc_id"] = config.network.vpc_id
+        progress(f"created VPC {config.network.vpc_id}")
     if not config.network.subnet_id:
+        progress("creating primary subnet")
         config.network.subnet_id = create_subnet(
             client,
             config,
@@ -103,7 +127,9 @@ def ensure_network(
             config.aws.availability_zone,
         )
         resources["subnet_id"] = config.network.subnet_id
+        progress(f"created primary subnet {config.network.subnet_id}")
     if not config.network.rds_subnet_ids:
+        progress("creating RDS subnets")
         availability_zones = config.network.rds_subnet_availability_zones or [
             config.aws.availability_zone,
             second_az(config.aws.availability_zone),
@@ -113,7 +139,9 @@ def ensure_network(
             for cidr, az in zip(config.network.rds_subnet_cidrs, availability_zones, strict=False)
         ]
         resources["rds_subnet_ids"] = config.network.rds_subnet_ids
+        progress(f"created RDS subnets: {', '.join(config.network.rds_subnet_ids)}")
     if not config.network.security_group_id:
+        progress("creating EC2 security group")
         config.network.security_group_id = create_security_group(
             client,
             config,
@@ -122,7 +150,9 @@ def ensure_network(
         )
         resources["security_group_id"] = config.network.security_group_id
         authorize_self_ingress(client, config.network.security_group_id, [8091, 50051, 19091])
+        progress(f"created EC2 security group {config.network.security_group_id}")
     if not config.network.rds_security_group_id:
+        progress("creating RDS security group")
         config.network.rds_security_group_id = create_security_group(
             client,
             config,
@@ -136,6 +166,7 @@ def ensure_network(
             config.network.security_group_id,
             config.database.port,
         )
+        progress(f"created RDS security group {config.network.rds_security_group_id}")
 
 
 def create_vpc(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> str:
@@ -295,8 +326,11 @@ def launch_instances(
     client: aws_cli.AwsCli,
     config: config_module.AwsBenchConfig,
 ) -> None:
+    progress("launching storage server instance")
     launch_role(client, config, "storage-server", config.instances.server_type, 1)
+    progress("launching controller instance")
     launch_role(client, config, "controller", config.instances.controller_type, 1)
+    progress(f"launching {config.instances.client_count} benchmark client instances")
     launch_role(
         client,
         config,

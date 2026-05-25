@@ -15,6 +15,7 @@ import ami_state
 import aws_cli
 import config as config_module
 import env as env_module
+import progress as progress_module
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -73,23 +74,45 @@ def build_ami(
     ami_state_path: pathlib.Path,
     localstack_smoke: bool,
 ) -> dict[str, object]:
+    progress(f"creating source archive from {source_root}")
     archive = create_source_archive(source_root, artifact_dir / SOURCE_ARCHIVE_NAME)
+    progress(f"source archive ready: {archive} ({archive.stat().st_size:,} bytes)")
     source_s3_uri = resolve_source_s3_uri(config)
+    progress(f"ensuring artifact bucket for {source_s3_uri}")
     ensure_artifact_bucket(client, config.aws.region, source_s3_uri)
+    progress(f"uploading source archive to {source_s3_uri}")
     client.run(["s3", "cp", str(archive), source_s3_uri])
 
+    progress(f"ensuring builder instance profile {config.artifact.builder_iam_instance_profile}")
     ensure_builder_instance_profile(client, config)
+    progress(
+        f"launching AMI builder from {config.artifact.base_ami_id} "
+        f"as {config.artifact.builder_instance_type}"
+    )
     builder_instance_id = launch_builder_instance(client, config)
+    progress(f"builder instance launched: {builder_instance_id}")
     try:
+        progress(f"waiting for builder instance {builder_instance_id} to enter running state")
         wait_for_builder_instance(client, builder_instance_id)
+        progress(f"sending build commands to builder instance {builder_instance_id}")
         run_builder_commands(client, config, builder_instance_id, source_s3_uri, localstack_smoke)
+        progress(f"creating benchmark AMI from builder instance {builder_instance_id}")
         ami_id = create_image(client, config, builder_instance_id)
+        progress(f"AMI creation started: {ami_id}; waiting until image is available")
         wait_for_image(client, ami_id)
+        progress(f"AMI is available: {ami_id}")
         metadata = build_metadata(config, source_root, source_s3_uri, builder_instance_id, ami_id)
+        progress(f"writing AMI metadata to {ami_state_path}")
         ami_state.save_ami_state(ami_state_path, metadata)
     finally:
+        progress(f"terminating builder instance {builder_instance_id}")
         terminate_builder_instance(client, builder_instance_id)
+        progress(f"terminate request sent for builder instance {builder_instance_id}")
     return metadata
+
+
+def progress(message: str) -> None:
+    progress_module.log("build_ami", message)
 
 
 def create_source_archive(source_root: pathlib.Path, archive_path: pathlib.Path) -> pathlib.Path:
@@ -232,6 +255,7 @@ def run_builder_commands(
     localstack_smoke: bool,
 ) -> None:
     commands = localstack_builder_commands(source_s3_uri) if localstack_smoke else builder_commands(config, source_s3_uri)
+    progress(f"builder command count: {len(commands)}")
     data = client.run_json(
         [
             "ssm",
@@ -248,7 +272,11 @@ def run_builder_commands(
     )
     command_id = data.get("Command", {}).get("CommandId") if isinstance(data, dict) else None
     if command_id:
+        progress(f"SSM command submitted: {command_id}; waiting for completion")
         client.run(["ssm", "wait", "command-executed", "--command-id", command_id, "--instance-id", instance_id])
+        progress(f"SSM command completed: {command_id}")
+    else:
+        progress("SSM command submitted; no command id returned, skipping SSM wait")
 
 
 def builder_commands(config: config_module.AwsBenchConfig, source_s3_uri: str) -> list[str]:

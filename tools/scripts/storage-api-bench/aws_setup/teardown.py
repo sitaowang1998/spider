@@ -10,6 +10,7 @@ import sys
 import aws_cli
 import config as config_module
 import env as env_module
+import progress as progress_module
 import state as state_module
 
 
@@ -18,6 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and credentials")
     config = config_module.load_config(args.config)
     secret = env_module.load_secret(args.secret)
     aws_env = env_module.build_aws_env(
@@ -32,6 +34,7 @@ def main() -> int:
     )
     state = state_module.load_state(args.state)
     teardown(config, client, state)
+    progress("teardown complete")
     return 0
 
 
@@ -49,9 +52,14 @@ def teardown(
     client: aws_cli.AwsCli,
     state: dict[str, object],
 ) -> None:
+    progress("discovering benchmark instances")
     instance_ids = discover_all_instance_ids(client, config.aws.run_id)
     if instance_ids:
+        progress(f"terminating {len(instance_ids)} instance(s)")
         client.run(["ec2", "terminate-instances", "--instance-ids", *instance_ids])
+    else:
+        progress("no benchmark instances found")
+    progress("deleting RDS instance")
     client.run(
         [
             "rds",
@@ -62,6 +70,7 @@ def teardown(
             "--delete-automated-backups",
         ]
     )
+    progress("deleting RDS subnet group")
     client.run(
         [
             "rds",
@@ -70,8 +79,14 @@ def teardown(
             f"{config.aws.run_id}-rds-subnets",
         ]
     )
+    progress("deleting placement group")
     client.run(["ec2", "delete-placement-group", "--group-name", config.network.placement_group])
+    progress("deleting results bucket data")
     delete_results_bucket(client, state)
+
+
+def progress(message: str) -> None:
+    progress_module.log("teardown", message)
 
 
 def delete_results_bucket(client: aws_cli.AwsCli, state: dict[str, object]) -> None:
@@ -81,8 +96,10 @@ def delete_results_bucket(client: aws_cli.AwsCli, state: dict[str, object]) -> N
     bucket = resources.get("result_bucket")
     results_s3_uri = resources.get("results_s3_uri")
     if isinstance(results_s3_uri, str) and results_s3_uri:
+        progress(f"removing result objects under {results_s3_uri}")
         client.run(["s3", "rm", results_s3_uri, "--recursive"])
     if isinstance(bucket, str) and bucket:
+        progress(f"deleting result bucket {bucket}")
         client.run(["s3api", "delete-bucket", "--bucket", bucket])
 
 

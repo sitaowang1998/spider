@@ -13,6 +13,7 @@ import bootstrap_controller
 import config as config_module
 import controller_common
 import env as env_module
+import progress as progress_module
 import state as state_module
 
 
@@ -21,6 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and state")
     config = config_module.load_config(args.config)
     state = state_module.load_state(args.state)
     s3_uri = config.results.s3_uri or lookup_results_s3_uri(state)
@@ -41,7 +43,9 @@ def main() -> int:
         env=aws_env,
         dry_run=args.dry_run,
     )
+    progress("discovering controller instance")
     controller_id = controller_common.discover_controller_instance_id(client, config.aws.run_id)
+    progress(f"controller instance: {controller_id}")
     upload_commands = build_result_upload_commands(
         remote_root=config.instances.remote_root,
         remote_workspace=bootstrap_controller.controller_workspace(config),
@@ -54,6 +58,7 @@ def main() -> int:
         commands=upload_commands,
         comment="upload spider benchmark results",
     )
+    progress(f"controller upload command submitted; syncing {s3_uri} to {args.data_dir}")
     command = ["aws", "s3", "sync", s3_uri, str(args.data_dir)]
     if config.aws.endpoint_url is not None:
         command[1:1] = ["--endpoint-url", config.aws.endpoint_url]
@@ -61,7 +66,14 @@ def main() -> int:
         print(" ".join(command))
         return 0
     args.data_dir.mkdir(parents=True, exist_ok=True)
-    return subprocess.run(command, cwd=ROOT, env=aws_env, check=False).returncode
+    result = subprocess.run(command, cwd=ROOT, env=aws_env, check=False).returncode
+    if result == 0:
+        progress("result fetch complete")
+    return result
+
+
+def progress(message: str) -> None:
+    progress_module.log("fetch_results", message)
 
 
 def parse_args() -> argparse.Namespace:

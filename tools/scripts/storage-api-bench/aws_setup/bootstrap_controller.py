@@ -12,6 +12,7 @@ import aws_cli
 import config as config_module
 import controller_common
 import env as env_module
+import progress as progress_module
 import state as state_module
 
 
@@ -20,6 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and credentials")
     config = config_module.load_config(args.config)
     secret_values = env_module.load_secret(args.secret)
     aws_env = env_module.build_aws_env(
@@ -32,7 +34,9 @@ def main() -> int:
         env=aws_env,
         dry_run=args.dry_run,
     )
+    progress("discovering controller instance")
     controller_id = controller_common.discover_controller_instance_id(client, config.aws.run_id)
+    progress(f"controller instance: {controller_id}")
     commands = build_bootstrap_commands(
         remote_root=config.instances.remote_root,
         remote_workspace=controller_workspace(config),
@@ -48,8 +52,13 @@ def main() -> int:
         commands=commands,
         comment="bootstrap spider benchmark controller",
     )
+    progress(f"bootstrap command submitted: {command_id}")
     print(command_id)
     return 0
+
+
+def progress(message: str) -> None:
+    progress_module.log("bootstrap_controller", message)
 
 
 def parse_args() -> argparse.Namespace:

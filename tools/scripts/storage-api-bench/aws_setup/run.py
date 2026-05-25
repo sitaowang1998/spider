@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 import config as config_module
+import progress as progress_module
 import state as state_module
 
 
@@ -18,9 +19,11 @@ SCRIPT_DIR = ROOT / "tools/scripts/storage-api-bench"
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and state")
     config = config_module.load_config(args.config)
     state = state_module.load_state(args.state)
     database_endpoint = args.database_endpoint or lookup_database_endpoint(state)
+    progress(f"using database endpoint {database_endpoint}")
     command = build_matrix_command(
         config,
         database_endpoint=database_endpoint,
@@ -30,7 +33,17 @@ def main() -> int:
     if args.dry_run:
         print(" ".join(command))
         return 0
-    return subprocess.run(command, cwd=ROOT, check=False).returncode
+    progress("starting benchmark matrix")
+    result = subprocess.run(command, cwd=ROOT, check=False).returncode
+    if result == 0:
+        progress("benchmark matrix complete")
+    else:
+        progress(f"benchmark matrix failed with exit code {result}")
+    return result
+
+
+def progress(message: str) -> None:
+    progress_module.log("run", message)
 
 
 def parse_args() -> argparse.Namespace:

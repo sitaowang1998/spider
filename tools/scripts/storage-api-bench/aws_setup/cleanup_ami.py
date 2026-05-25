@@ -11,6 +11,7 @@ import ami_state
 import aws_cli
 import config as config_module
 import env as env_module
+import progress as progress_module
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -18,6 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and credentials")
     config = config_module.load_config(args.config)
     secret = env_module.load_secret(args.secret)
     aws_env = env_module.build_aws_env(
@@ -33,7 +35,9 @@ def main() -> int:
     metadata = ami_state.load_ami_state(args.ami_state)
     cleanup_ami(client, metadata)
     metadata["cleaned_at"] = ami_state.timestamp()
+    progress(f"updating AMI state at {args.ami_state}")
     ami_state.save_ami_state(args.ami_state, metadata)
+    progress("AMI cleanup complete")
     return 0
 
 
@@ -51,13 +55,21 @@ def cleanup_ami(client: aws_cli.AwsCli, metadata: dict[str, object]) -> None:
     if not isinstance(ami_id, str) or not ami_id:
         msg = "AMI state does not contain ami_id"
         raise ValueError(msg)
+    progress(f"describing snapshots for AMI {ami_id}")
     snapshot_ids = describe_image_snapshots(client, ami_id)
+    progress(f"deregistering AMI {ami_id}")
     client.run(["ec2", "deregister-image", "--image-id", ami_id])
     for snapshot_id in snapshot_ids:
+        progress(f"deleting snapshot {snapshot_id}")
         client.run(["ec2", "delete-snapshot", "--snapshot-id", snapshot_id])
     builder_instance_id = metadata.get("builder_instance_id")
     if isinstance(builder_instance_id, str) and builder_instance_id:
+        progress(f"terminating recorded builder instance {builder_instance_id}")
         client.run(["ec2", "terminate-instances", "--instance-ids", builder_instance_id])
+
+
+def progress(message: str) -> None:
+    progress_module.log("cleanup_ami", message)
 
 
 def describe_image_snapshots(client: aws_cli.AwsCli, ami_id: str) -> list[str]:

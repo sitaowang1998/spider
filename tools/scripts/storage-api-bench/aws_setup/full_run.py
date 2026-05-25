@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 import config as config_module
+import progress as progress_module
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -20,6 +21,7 @@ def main() -> int:
     run_id = parse_run_id(args.config, args.run_id)
     state = args.state or ROOT / ".aws-bench" / run_id / "state.json"
     for step in full_run_steps(teardown=args.teardown):
+        progress(f"starting step: {step}")
         command = step_command(
             step,
             args.config,
@@ -31,7 +33,10 @@ def main() -> int:
         )
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
+            progress(f"step failed: {step}")
             return result.returncode
+        progress(f"finished step: {step}")
+    progress("full run complete")
     return 0
 
 
@@ -54,6 +59,10 @@ def parse_run_id(config_path: pathlib.Path, run_id: str | None) -> str:
         msg = f"--run-id {run_id} does not match config aws.run_id {config.aws.run_id}"
         raise SystemExit(msg)
     return config.aws.run_id
+
+
+def progress(message: str) -> None:
+    progress_module.log("full_run", message)
 
 
 def full_run_steps(*, teardown: bool) -> list[str]:

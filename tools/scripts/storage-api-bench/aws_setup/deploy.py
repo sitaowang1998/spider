@@ -12,6 +12,7 @@ import sys
 import aws_cli
 import config as config_module
 import env as env_module
+import progress as progress_module
 import state as state_module
 
 
@@ -20,6 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 def main() -> int:
     args = parse_args()
+    progress("loading config and credentials")
     config = config_module.load_config(args.config)
     secret = env_module.load_secret(args.secret)
     aws_env = env_module.build_aws_env(
@@ -34,6 +36,7 @@ def main() -> int:
     )
     state = state_module.load_state(args.state)
     deploy(config, client, state)
+    progress("deploy check command submitted")
     return 0
 
 
@@ -51,6 +54,7 @@ def deploy(
     client: aws_cli.AwsCli,
     _state: dict[str, object],
 ) -> None:
+    progress("discovering running benchmark instances")
     instance_ids = discover_all_instance_ids(client, config.aws.run_id)
     if not instance_ids:
         if client.dry_run:
@@ -58,6 +62,7 @@ def deploy(
         else:
             msg = "no benchmark instances found for deployment"
             raise RuntimeError(msg)
+    progress(f"sending deploy validation command to {len(instance_ids)} instance(s)")
     commands = deployment_commands(config)
     client.run(
         [
@@ -73,6 +78,10 @@ def deploy(
             json.dumps({"commands": commands}),
         ]
     )
+
+
+def progress(message: str) -> None:
+    progress_module.log("deploy", message)
 
 
 def deployment_commands(config: config_module.AwsBenchConfig) -> list[str]:
