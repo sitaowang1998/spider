@@ -140,6 +140,7 @@ class AmiTest(unittest.TestCase):
             with tarfile.open(archive_path) as archive:
                 names = archive.getnames()
         self.assertIn("spider/target/release/spider-storage-api-bench", names)
+        self.assertIn("spider/tools/scripts/storage-api-bench/aws_make_config.py", names)
         self.assertIn("spider/tools/scripts/storage-api-bench/run_agent.py", names)
         self.assertIn("spider/tools/scripts/storage-api-bench/aws_setup/run.py", names)
         self.assertIn("spider/components/spider-storage-api-bench/config/default.toml", names)

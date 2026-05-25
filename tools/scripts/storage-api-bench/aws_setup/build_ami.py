@@ -28,6 +28,7 @@ RUNTIME_FILES = (
     pathlib.Path("components/spider-storage-api-bench/config/default.toml"),
     pathlib.Path("tools/scripts/storage-api-bench/aws_common.py"),
     pathlib.Path("tools/scripts/storage-api-bench/aws_discover.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_make_config.py"),
     pathlib.Path("tools/scripts/storage-api-bench/aws_run_matrix.py"),
     pathlib.Path("tools/scripts/storage-api-bench/aws_run_protocol.py"),
     pathlib.Path("tools/scripts/storage-api-bench/reset_database.py"),
