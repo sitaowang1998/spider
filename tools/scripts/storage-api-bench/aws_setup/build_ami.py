@@ -20,7 +20,25 @@ import progress as progress_module
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 DEFAULT_ARTIFACT_DIR = ROOT / ".aws-bench/artifacts"
-SOURCE_ARCHIVE_NAME = "spider-source.tar.gz"
+RUNTIME_ARCHIVE_NAME = "spider-runtime.tar.gz"
+BENCH_BINARY = pathlib.Path("target/release/spider-storage-api-bench")
+RUNTIME_FILES = (
+    pathlib.Path("components/spider-storage-api-bench/config/default.toml"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_common.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_discover.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_run_matrix.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_run_protocol.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/reset_database.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/run_agent.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/run_client.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/run_distributed.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/run_distributed_protocol.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/run_server.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_setup/config.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_setup/progress.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_setup/run.py"),
+    pathlib.Path("tools/scripts/storage-api-bench/aws_setup/state.py"),
+)
 
 
 def main() -> int:
@@ -74,14 +92,16 @@ def build_ami(
     ami_state_path: pathlib.Path,
     localstack_smoke: bool,
 ) -> dict[str, object]:
-    progress(f"creating source archive from {source_root}")
-    archive = create_source_archive(source_root, artifact_dir / SOURCE_ARCHIVE_NAME)
-    progress(f"source archive ready: {archive} ({archive.stat().st_size:,} bytes)")
-    source_s3_uri = resolve_source_s3_uri(config)
-    progress(f"ensuring artifact bucket for {source_s3_uri}")
-    ensure_artifact_bucket(client, config.aws.region, source_s3_uri)
-    progress(f"uploading source archive to {source_s3_uri}")
-    client.run(["s3", "cp", str(archive), source_s3_uri])
+    progress("building local benchmark binary in release mode")
+    build_local_binary(source_root)
+    progress(f"creating runtime archive from {source_root}")
+    archive = create_runtime_archive(source_root, artifact_dir / RUNTIME_ARCHIVE_NAME)
+    progress(f"runtime archive ready: {archive} ({archive.stat().st_size:,} bytes)")
+    runtime_s3_uri = resolve_runtime_s3_uri(config)
+    progress(f"ensuring artifact bucket for {runtime_s3_uri}")
+    ensure_artifact_bucket(client, config.aws.region, runtime_s3_uri)
+    progress(f"uploading runtime archive to {runtime_s3_uri}")
+    client.run(["s3", "cp", str(archive), runtime_s3_uri])
 
     progress(f"ensuring builder instance profile {config.artifact.builder_iam_instance_profile}")
     ensure_builder_instance_profile(client, config)
@@ -95,13 +115,13 @@ def build_ami(
         progress(f"waiting for builder instance {builder_instance_id} to enter running state")
         wait_for_builder_instance(client, builder_instance_id)
         progress(f"sending build commands to builder instance {builder_instance_id}")
-        run_builder_commands(client, config, builder_instance_id, source_s3_uri, localstack_smoke)
+        run_builder_commands(client, config, builder_instance_id, runtime_s3_uri, localstack_smoke)
         progress(f"creating benchmark AMI from builder instance {builder_instance_id}")
         ami_id = create_image(client, config, builder_instance_id)
         progress(f"AMI creation started: {ami_id}; waiting until image is available")
         wait_for_image(client, ami_id)
         progress(f"AMI is available: {ami_id}")
-        metadata = build_metadata(config, source_root, source_s3_uri, builder_instance_id, ami_id)
+        metadata = build_metadata(config, source_root, runtime_s3_uri, builder_instance_id, ami_id)
         progress(f"writing AMI metadata to {ami_state_path}")
         ami_state.save_ami_state(ami_state_path, metadata)
     finally:
@@ -115,32 +135,50 @@ def progress(message: str) -> None:
     progress_module.log("build_ami", message)
 
 
-def create_source_archive(source_root: pathlib.Path, archive_path: pathlib.Path) -> pathlib.Path:
+def build_local_binary(source_root: pathlib.Path) -> None:
+    subprocess.run(
+        ["cargo", "build", "--release", "--package", "spider-storage-api-bench"],
+        cwd=source_root,
+        check=True,
+    )
+
+
+def create_runtime_archive(source_root: pathlib.Path, archive_path: pathlib.Path) -> pathlib.Path:
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive_path, "w:gz") as archive:
-        archive.add(
-            source_root,
-            arcname="spider",
-            filter=source_archive_filter,
-        )
+    with tarfile.open(archive_path, "w:gz", compresslevel=1) as archive:
+        add_runtime_file(archive, source_root, BENCH_BINARY)
+        for relative_path in RUNTIME_FILES:
+            add_runtime_file(archive, source_root, relative_path)
     return archive_path
 
 
-def source_archive_filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
-    parts = pathlib.PurePosixPath(info.name).parts
-    excluded = {".git", ".aws-bench", "target"}
-    if any(part in excluded for part in parts):
-        return None
-    if len(parts) > 1 and parts[1] == "data":
-        return None
-    return info
+def add_runtime_file(
+    archive: tarfile.TarFile,
+    source_root: pathlib.Path,
+    relative_path: pathlib.Path,
+) -> None:
+    source_path = source_root / relative_path
+    if not source_path.exists():
+        msg = f"runtime artifact file does not exist: {source_path}"
+        raise FileNotFoundError(msg)
+    stat = source_path.stat()
+    info = tarfile.TarInfo(str(pathlib.PurePosixPath("spider", *relative_path.parts)))
+    info.mode = stat.st_mode
+    info.mtime = int(stat.st_mtime)
+    info.size = stat.st_size
+    info.uid = 0
+    info.gid = 0
+    info.uname = "root"
+    info.gname = "root"
+    with source_path.open("rb") as file:
+        archive.addfile(info, file)
 
 
-def resolve_source_s3_uri(config: config_module.AwsBenchConfig) -> str:
+def resolve_runtime_s3_uri(config: config_module.AwsBenchConfig) -> str:
     if config.artifact.s3_uri is not None:
         return config.artifact.s3_uri
     bucket = f"spider-bench-artifacts-{sanitize_name(config.aws.run_id)}-{config.aws.region}"
-    return f"s3://{bucket}/{config.aws.run_id}/{SOURCE_ARCHIVE_NAME}"
+    return f"s3://{bucket}/{config.aws.run_id}/{RUNTIME_ARCHIVE_NAME}"
 
 
 def sanitize_name(value: str) -> str:
@@ -251,10 +289,10 @@ def run_builder_commands(
     client: aws_cli.AwsCli,
     config: config_module.AwsBenchConfig,
     instance_id: str,
-    source_s3_uri: str,
+    runtime_s3_uri: str,
     localstack_smoke: bool,
 ) -> None:
-    commands = localstack_builder_commands(source_s3_uri) if localstack_smoke else builder_commands(config, source_s3_uri)
+    commands = localstack_builder_commands(runtime_s3_uri) if localstack_smoke else builder_commands(config, runtime_s3_uri)
     progress(f"builder command count: {len(commands)}")
     data = client.run_json(
         [
@@ -279,28 +317,32 @@ def run_builder_commands(
         progress("SSM command submitted; no command id returned, skipping SSM wait")
 
 
-def builder_commands(config: config_module.AwsBenchConfig, source_s3_uri: str) -> list[str]:
+def builder_commands(config: config_module.AwsBenchConfig, runtime_s3_uri: str) -> list[str]:
     remote_root = config.instances.remote_root.replace("~", "/root", 1)
     return [
         "set -eux",
-        "sudo dnf install -y awscli git gcc gcc-c++ make pkgconfig openssl-devel mariadb105 || sudo yum install -y awscli git gcc gcc-c++ make pkgconfig openssl-devel mariadb",
-        "test -x /root/.cargo/bin/cargo || curl https://sh.rustup.rs -sSf | sh -s -- -y",
+        "sudo dnf install -y awscli mariadb105 openssl-libs python3 || sudo yum install -y awscli mariadb openssl-libs python3",
         f"rm -rf {remote_root}",
         f"mkdir -p {remote_root}",
-        f"aws s3 cp {source_s3_uri} /tmp/{SOURCE_ARCHIVE_NAME}",
-        f"tar -xzf /tmp/{SOURCE_ARCHIVE_NAME} -C {remote_root} --strip-components=1",
-        f"cd {remote_root} && /root/.cargo/bin/cargo build --release --package spider-storage-api-bench",
+        f"aws s3 cp {runtime_s3_uri} /tmp/{RUNTIME_ARCHIVE_NAME}",
+        f"tar -xzf /tmp/{RUNTIME_ARCHIVE_NAME} -C {remote_root} --strip-components=1",
+        f"chmod +x {remote_root}/target/release/spider-storage-api-bench",
+        f"chmod +x {remote_root}/tools/scripts/storage-api-bench/*.py",
+        f"chmod +x {remote_root}/tools/scripts/storage-api-bench/aws_setup/*.py",
         f"test -x {remote_root}/target/release/spider-storage-api-bench",
+        f"{remote_root}/target/release/spider-storage-api-bench --help >/dev/null",
+        f"python3 {remote_root}/tools/scripts/storage-api-bench/run_agent.py --help >/dev/null",
+        f"python3 {remote_root}/tools/scripts/storage-api-bench/aws_setup/run.py --help >/dev/null",
         "python3 --version",
         "aws --version",
         "command -v mariadb || command -v mysql",
     ]
 
 
-def localstack_builder_commands(source_s3_uri: str) -> list[str]:
+def localstack_builder_commands(runtime_s3_uri: str) -> list[str]:
     return [
         "python3 --version",
-        f"echo {source_s3_uri}",
+        f"echo {runtime_s3_uri}",
     ]
 
 
@@ -349,7 +391,7 @@ def terminate_builder_instance(client: aws_cli.AwsCli, instance_id: str) -> None
 def build_metadata(
     config: config_module.AwsBenchConfig,
     source_root: pathlib.Path,
-    source_s3_uri: str,
+    runtime_s3_uri: str,
     builder_instance_id: str,
     ami_id: str,
 ) -> dict[str, object]:
@@ -363,7 +405,7 @@ def build_metadata(
         "image_name_prefix": config.artifact.image_name_prefix,
         "region": config.aws.region,
         "run_id": config.aws.run_id,
-        "source_archive_s3_uri": source_s3_uri,
+        "runtime_archive_s3_uri": runtime_s3_uri,
     }
 
 

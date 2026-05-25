@@ -57,15 +57,15 @@ class FakeAwsCli:
 
 
 class AmiTest(unittest.TestCase):
-    def test_build_ami_uploads_source_and_writes_state(self):
+    def test_build_ami_uploads_runtime_archive_and_writes_state(self):
         build_ami = load_module("build_ami")
         config_module = load_module("config")
+        build_ami.build_local_binary = lambda _source_root: None
         client = FakeAwsCli()
         with tempfile.TemporaryDirectory() as directory:
             temp_dir = pathlib.Path(directory)
             source = temp_dir / "source"
-            source.mkdir()
-            (source / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            create_runtime_tree(source)
             config_path = temp_dir / "config.toml"
             config_path.write_text(
                 textwrap.dedent(
@@ -82,7 +82,7 @@ class AmiTest(unittest.TestCase):
 
                     [artifact]
                     base_ami_id = "ami-base"
-                    s3_uri = "s3://bench-artifacts/source.tar.gz"
+                    s3_uri = "s3://bench-artifacts/runtime.tar.gz"
                     """
                 ),
                 encoding="utf-8",
@@ -115,27 +115,23 @@ class AmiTest(unittest.TestCase):
         self.assertIn("--create-bucket-configuration", command)
         self.assertIn("LocationConstraint=us-east-2", command)
 
-    def test_source_archive_excludes_heavy_local_directories(self):
+    def test_runtime_archive_contains_only_required_runtime_files(self):
         build_ami = load_module("build_ami")
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory) / "repo"
-            (root / ".git").mkdir(parents=True)
-            (root / "target").mkdir()
+            create_runtime_tree(root)
             (root / "data").mkdir()
-            (root / "tools").mkdir()
-            (root / ".git" / "HEAD").write_text("ref", encoding="utf-8")
-            (root / "target" / "binary").write_text("bin", encoding="utf-8")
             (root / "data" / "result.json").write_text("{}", encoding="utf-8")
-            (root / "tools" / "script.py").write_text("print('ok')", encoding="utf-8")
-            archive_path = pathlib.Path(directory) / "source.tar.gz"
+            archive_path = pathlib.Path(directory) / "runtime.tar.gz"
 
-            build_ami.create_source_archive(root, archive_path)
+            build_ami.create_runtime_archive(root, archive_path)
 
             with tarfile.open(archive_path) as archive:
                 names = archive.getnames()
-        self.assertIn("spider/tools/script.py", names)
-        self.assertNotIn("spider/.git/HEAD", names)
-        self.assertNotIn("spider/target/binary", names)
+        self.assertIn("spider/target/release/spider-storage-api-bench", names)
+        self.assertIn("spider/tools/scripts/storage-api-bench/run_agent.py", names)
+        self.assertIn("spider/tools/scripts/storage-api-bench/aws_setup/run.py", names)
+        self.assertIn("spider/components/spider-storage-api-bench/config/default.toml", names)
         self.assertNotIn("spider/data/result.json", names)
 
     def test_cleanup_ami_deregisters_image_and_deletes_snapshots(self):
@@ -188,6 +184,14 @@ class AmiTest(unittest.TestCase):
             ["docker", "tag", "spider-node:local", "localstack-ec2/spider-bench-node:ami-000001"],
             tag_command,
         )
+
+
+def create_runtime_tree(root: pathlib.Path) -> None:
+    build_ami = load_module("build_ami")
+    for relative_path in (build_ami.BENCH_BINARY, *build_ami.RUNTIME_FILES):
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

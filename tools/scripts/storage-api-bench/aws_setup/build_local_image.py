@@ -19,13 +19,14 @@ DEFAULT_TAG = "spider-storage-api-bench-node:local"
 
 def main() -> int:
     args = parse_args()
+    build_ami.build_local_binary(args.source_root)
     with tempfile.TemporaryDirectory() as directory:
         context = pathlib.Path(directory)
-        source_archive = build_ami.create_source_archive(
+        runtime_archive = build_ami.create_runtime_archive(
             args.source_root,
-            context / build_ami.SOURCE_ARCHIVE_NAME,
+            context / build_ami.RUNTIME_ARCHIVE_NAME,
         )
-        dockerfile = write_dockerfile(context / "Dockerfile", source_archive.name)
+        dockerfile = write_dockerfile(context / "Dockerfile", runtime_archive.name)
         result = subprocess.run(build_command(args.tag, context, dockerfile), cwd=ROOT, check=False)
         if result.returncode != 0:
             return result.returncode
@@ -48,12 +49,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def write_dockerfile(path: pathlib.Path, source_archive_name: str) -> pathlib.Path:
-    path.write_text(dockerfile_text(source_archive_name), encoding="utf-8")
+def write_dockerfile(path: pathlib.Path, runtime_archive_name: str) -> pathlib.Path:
+    path.write_text(dockerfile_text(runtime_archive_name), encoding="utf-8")
     return path
 
 
-def dockerfile_text(source_archive_name: str) -> str:
+def dockerfile_text(runtime_archive_name: str) -> str:
     return textwrap.dedent(
         f"""
         FROM ubuntu:22.04
@@ -62,20 +63,16 @@ def dockerfile_text(source_archive_name: str) -> str:
             && apt-get install -y --no-install-recommends \\
                 awscli \\
                 ca-certificates \\
-                curl \\
-                g++ \\
-                gcc \\
-                make \\
                 mariadb-client \\
-                pkg-config \\
                 python3 \\
-                libssl-dev \\
+                libssl3 \\
             && rm -rf /var/lib/apt/lists/*
-        ADD {source_archive_name} /root/
+        ADD {runtime_archive_name} /root/
         WORKDIR /root/spider
-        RUN curl https://sh.rustup.rs -sSf | sh -s -- -y \\
-            && /root/.cargo/bin/cargo build --release --package spider-storage-api-bench \\
-            && test -x target/release/spider-storage-api-bench \\
+        RUN test -x target/release/spider-storage-api-bench \\
+            && target/release/spider-storage-api-bench --help >/dev/null \\
+            && python3 tools/scripts/storage-api-bench/run_agent.py --help >/dev/null \\
+            && python3 tools/scripts/storage-api-bench/aws_setup/run.py --help >/dev/null \\
             && python3 --version \\
             && aws --version \\
             && mariadb --version
