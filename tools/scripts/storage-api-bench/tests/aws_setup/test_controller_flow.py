@@ -127,6 +127,32 @@ class ControllerFlowTest(unittest.TestCase):
         self.assertEqual(7, result)
         self.assertEqual(["provision.py"], calls)
 
+    def test_full_run_can_preserve_resources_after_failure(self):
+        full_run = load_module("full_run")
+        calls = []
+
+        def fake_run(command, cwd, check):
+            del cwd, check
+            script = pathlib.Path(command[1]).name
+            calls.append(script)
+            if script == "run_controller.py":
+                return subprocess.CompletedProcess(command, 9)
+            return subprocess.CompletedProcess(command, 0)
+
+        original_run = full_run.subprocess.run
+        full_run.subprocess.run = fake_run
+        try:
+            args = argparse_namespace(teardown=True, preserve_on_failure=True)
+            result = full_run.run_full_steps(args, pathlib.Path("/tmp/state.json"))
+        finally:
+            full_run.subprocess.run = original_run
+
+        self.assertEqual(9, result)
+        self.assertEqual(
+            ["provision.py", "deploy.py", "bootstrap_controller.py", "run_controller.py"],
+            calls,
+        )
+
     def test_full_run_rejects_run_id_that_differs_from_config(self):
         full_run = load_module("full_run")
         with tempfile.TemporaryDirectory() as directory:
@@ -150,7 +176,7 @@ class ControllerFlowTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "does not match"):
                 full_run.parse_run_id(config_path, "other-run")
 
-def argparse_namespace(*, teardown: bool):
+def argparse_namespace(*, teardown: bool, preserve_on_failure: bool = False):
     class Args:
         config = pathlib.Path("/tmp/config.toml")
         secret = pathlib.Path("/tmp/.secret")
@@ -160,6 +186,7 @@ def argparse_namespace(*, teardown: bool):
 
     args = Args()
     args.teardown = teardown
+    args.preserve_on_failure = preserve_on_failure
     return args
 
 

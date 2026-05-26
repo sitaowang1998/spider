@@ -43,10 +43,15 @@ def run_full_steps(args: argparse.Namespace, state: pathlib.Path) -> int:
             failed_returncode = result.returncode
             break
         progress(f"finished step: {step}")
-    if args.teardown:
+    should_teardown = args.teardown and (
+        failed_returncode == 0 or not args.preserve_on_failure
+    )
+    if should_teardown:
         teardown_returncode = run_teardown_step(args, state)
         if failed_returncode == 0 and teardown_returncode != 0:
             return teardown_returncode
+    elif failed_returncode != 0 and args.teardown:
+        progress("preserving AWS resources after failure")
     if failed_returncode != 0:
         progress("full run failed")
         return failed_returncode
@@ -83,6 +88,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ami-state", type=pathlib.Path, default=ROOT / ".aws-bench/ami/latest.json")
     parser.add_argument("--data-dir", type=pathlib.Path, required=True)
     parser.add_argument("--teardown", action="store_true")
+    parser.add_argument(
+        "--preserve-on-failure",
+        action="store_true",
+        help="With --teardown, skip teardown when a step fails so failed instances remain debuggable.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
