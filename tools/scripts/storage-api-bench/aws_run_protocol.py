@@ -303,14 +303,27 @@ def start_agents(
         f"mkdir -p {shlex.quote(str(remote_log_dir))}",
         "PRIVATE_IP=$(hostname -I | awk '{print $1}')",
         f'AGENT_ID="{role}-${{PRIVATE_IP//./-}}"',
+        f'LOG_PATH="{remote_log_dir}/agent-${{AGENT_ID}}.log"',
+        'pkill -f "spider-storage-api-bench agent .*--agent-id ${AGENT_ID}" || true',
         'pkill -f "run_agent.py .*--agent-id ${AGENT_ID}" || true',
+        'for _ in $(seq 1 30); do pgrep -f "spider-storage-api-bench agent .*--agent-id ${AGENT_ID}" >/dev/null || break; sleep 1; done',
         (
             f"nohup tools/scripts/storage-api-bench/run_agent.py "
             f"--config {shlex.quote(str(remote_config))} "
             '"--agent-id" "${AGENT_ID}" '
             f"--role {role} "
             f"--bind 0.0.0.0:{agent_port} "
-            f'> "{remote_log_dir}/agent-${{AGENT_ID}}.log" 2>&1 &'
+            '> "${LOG_PATH}" 2>&1 &'
+        ),
+        (
+            'for _ in $(seq 1 30); do '
+            'if grep -q "^Error:" "${LOG_PATH}"; then '
+            'cat "${LOG_PATH}"; exit 1; '
+            "fi; "
+            'pgrep -f "spider-storage-api-bench agent .*--agent-id ${AGENT_ID}" >/dev/null && exit 0; '
+            "sleep 1; "
+            "done; "
+            'cat "${LOG_PATH}"; exit 1'
         ),
     ]
     aws_common.send_shell_command(

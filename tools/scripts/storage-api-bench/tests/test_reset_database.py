@@ -92,16 +92,16 @@ max_connections = 512
 
         self.assertEqual([], args)
 
-    def test_reset_sql_truncates_storage_tables_with_foreign_keys_disabled(self):
+    def test_reset_sql_drops_storage_tables_with_foreign_keys_disabled(self):
         module = load_module()
 
         sql = module.reset_sql()
 
         self.assertIn("SET FOREIGN_KEY_CHECKS = 0;", sql)
-        self.assertIn("TRUNCATE TABLE `jobs`;", sql)
-        self.assertIn("TRUNCATE TABLE `resource_groups`;", sql)
-        self.assertIn("TRUNCATE TABLE `execution_managers`;", sql)
-        self.assertIn("TRUNCATE TABLE `sessions`;", sql)
+        self.assertIn("DROP TABLE IF EXISTS `jobs`;", sql)
+        self.assertIn("DROP TABLE IF EXISTS `resource_groups`;", sql)
+        self.assertIn("DROP TABLE IF EXISTS `execution_managers`;", sql)
+        self.assertIn("DROP TABLE IF EXISTS `sessions`;", sql)
         self.assertTrue(sql.strip().endswith("SET FOREIGN_KEY_CHECKS = 1;"))
 
 

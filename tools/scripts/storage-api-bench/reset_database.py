@@ -88,7 +88,7 @@ def load_database_config(config: pathlib.Path) -> DatabaseConfig:
 
 def reset_sql() -> str:
     lines = ["SET FOREIGN_KEY_CHECKS = 0;"]
-    lines.extend(f"TRUNCATE TABLE `{table}`;" for table in TABLES)
+    lines.extend(f"DROP TABLE IF EXISTS `{table}`;" for table in TABLES)
     lines.append("SET FOREIGN_KEY_CHECKS = 1;")
     return "\n".join(lines) + "\n"
 
