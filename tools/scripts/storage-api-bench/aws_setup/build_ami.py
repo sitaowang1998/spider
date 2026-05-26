@@ -186,6 +186,9 @@ def add_runtime_file(
         msg = f"runtime artifact file does not exist: {source_path}"
         raise FileNotFoundError(msg)
     stat = source_path.stat()
+    if stat.st_size == 0:
+        msg = f"runtime artifact file is empty: {source_path}"
+        raise ValueError(msg)
     info = tarfile.TarInfo(str(pathlib.PurePosixPath("spider", *relative_path.parts)))
     info.mode = stat.st_mode
     info.mtime = int(stat.st_mtime)
@@ -398,7 +401,11 @@ def builder_commands(config: config_module.AwsBenchConfig, runtime_s3_uri: str) 
         f"chmod +x {remote_root}/target/release/spider-storage-api-bench",
         f"chmod +x {remote_root}/tools/scripts/storage-api-bench/*.py",
         f"chmod +x {remote_root}/tools/scripts/storage-api-bench/aws_setup/*.py",
-        f"test -x {remote_root}/target/release/spider-storage-api-bench",
+        f"test -s {remote_root}/target/release/spider-storage-api-bench",
+        f"test -s {remote_root}/components/spider-storage-api-bench/config/default.toml",
+        f"test -s {remote_root}/tools/scripts/storage-api-bench/aws_run_protocol.py",
+        f"test -s {remote_root}/tools/scripts/storage-api-bench/aws_setup/run.py",
+        f"file {remote_root}/target/release/spider-storage-api-bench | grep -q ELF",
         f"{remote_root}/target/release/spider-storage-api-bench --help >/dev/null",
         f"python3 {remote_root}/tools/scripts/storage-api-bench/run_agent.py --help >/dev/null",
         f"python3 {remote_root}/tools/scripts/storage-api-bench/aws_setup/run.py --help >/dev/null",

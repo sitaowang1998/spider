@@ -78,7 +78,12 @@ def progress(message: str) -> None:
 def deployment_commands(config: config_module.AwsBenchConfig) -> list[str]:
     return [
         f"cd {controller_common.quote_path(config.instances.remote_root)}",
+        "test -s target/release/spider-storage-api-bench",
+        "test -s components/spider-storage-api-bench/config/default.toml",
+        "test -s tools/scripts/storage-api-bench/aws_run_protocol.py",
+        "test -s tools/scripts/storage-api-bench/aws_setup/run.py",
         "test -x target/release/spider-storage-api-bench",
+        "file target/release/spider-storage-api-bench | grep -q ELF",
         "test -x tools/scripts/storage-api-bench/run_agent.py",
         "test -x tools/scripts/storage-api-bench/run_server.py",
         "command -v mariadb >/dev/null || command -v mysql >/dev/null || true",
