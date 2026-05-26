@@ -63,32 +63,42 @@ def main() -> int:
         args.agent_start_timeout,
     )
 
-    port = args.grpc_port if args.protocol == "grpc" else args.rest_port
-    start_server(
-        server_instance_id,
-        args.protocol,
-        args.remote_root,
-        remote_config,
-        remote_log_dir,
-        port,
-    )
-    aws_common.wait_for_tcp(server_ip, port, args.server_start_timeout)
-    try:
-        result = subprocess.run(
-            build_controller_command(
-                args.protocol,
-                config,
-                args.data_dir,
-                args.reset_database,
-                args.database_reset_client_bin,
-                args.workloads,
-            ),
-            cwd=aws_common.ROOT,
-            check=False,
+    for workload in parse_workloads(args.workloads):
+        if args.reset_database:
+            result = subprocess.run(
+                build_reset_database_command(config, args.database_reset_client_bin),
+                cwd=aws_common.ROOT,
+                check=False,
+            )
+            if result.returncode != 0:
+                return result.returncode
+
+        port = args.grpc_port if args.protocol == "grpc" else args.rest_port
+        start_server(
+            server_instance_id,
+            args.protocol,
+            args.remote_root,
+            remote_config,
+            remote_log_dir,
+            port,
         )
-        return result.returncode
-    finally:
-        stop_server(server_instance_id)
+        try:
+            aws_common.wait_for_tcp(server_ip, port, args.server_start_timeout)
+            result = subprocess.run(
+                build_controller_command(
+                    args.protocol,
+                    config,
+                    args.data_dir,
+                    workload,
+                ),
+                cwd=aws_common.ROOT,
+                check=False,
+            )
+        finally:
+            stop_server(server_instance_id)
+        if result.returncode != 0:
+            return result.returncode
+    return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -144,11 +154,9 @@ def build_controller_command(
     protocol: str,
     config: pathlib.Path,
     data_dir: pathlib.Path,
-    reset_database: bool,
-    database_reset_client_bin: str | None,
-    workloads: str = "flat,deep,mixed",
+    workload: str,
 ) -> list[str]:
-    command = [
+    return [
         sys.executable,
         str(aws_common.SCRIPT_DIR / "run_distributed_protocol.py"),
         "--protocol",
@@ -158,13 +166,33 @@ def build_controller_command(
         "--data-dir",
         str(data_dir),
         "--workloads",
-        workloads,
+        workload,
     ]
-    if reset_database:
-        command.append("--reset-database")
-        if database_reset_client_bin is not None:
-            command.extend(["--database-reset-client-bin", database_reset_client_bin])
+
+
+def build_reset_database_command(
+    config: pathlib.Path,
+    database_reset_client_bin: str | None,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(aws_common.SCRIPT_DIR / "reset_database.py"),
+        "--config",
+        str(config),
+        "--yes",
+    ]
+    if database_reset_client_bin is not None:
+        command.extend(["--client-bin", database_reset_client_bin])
     return command
+
+
+def parse_workloads(value: str) -> list[str]:
+    workloads = [workload for workload in value.split(",") if workload]
+    invalid = sorted(set(workloads) - {"flat", "deep", "mixed"})
+    if invalid:
+        msg = f"invalid workloads: {', '.join(invalid)}"
+        raise ValueError(msg)
+    return workloads
 
 
 def write_discovery_files(

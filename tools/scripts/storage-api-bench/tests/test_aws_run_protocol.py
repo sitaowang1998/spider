@@ -20,32 +20,38 @@ def load_module():
 
 
 class AwsRunProtocolTest(unittest.TestCase):
-    def test_controller_command_resets_database_by_default(self):
+    def test_controller_command_runs_one_workload_without_database_reset(self):
         module = load_module()
 
         command = module.build_controller_command(
             protocol="grpc",
             config=pathlib.Path("/tmp/config.toml"),
             data_dir=pathlib.Path("/tmp/data"),
-            reset_database=True,
-            database_reset_client_bin=None,
+            workload="flat",
         )
 
-        self.assertIn("--reset-database", command)
+        self.assertIn("--workloads", command)
+        self.assertIn("flat", command)
+        self.assertNotIn("--reset-database", command)
 
-    def test_controller_command_can_disable_database_reset(self):
+    def test_reset_database_command_forwards_client_binary(self):
         module = load_module()
 
-        command = module.build_controller_command(
-            protocol="rest",
+        command = module.build_reset_database_command(
             config=pathlib.Path("/tmp/config.toml"),
-            data_dir=pathlib.Path("/tmp/data"),
-            reset_database=False,
             database_reset_client_bin="/usr/bin/mysql",
         )
 
-        self.assertNotIn("--reset-database", command)
-        self.assertNotIn("--database-reset-client-bin", command)
+        self.assertIn(str(SCRIPT_DIR / "reset_database.py"), command)
+        self.assertIn("--yes", command)
+        self.assertIn("--client-bin", command)
+        self.assertIn("/usr/bin/mysql", command)
+
+    def test_parse_workloads_rejects_unknown_workload(self):
+        module = load_module()
+
+        with self.assertRaisesRegex(ValueError, "invalid workloads"):
+            module.parse_workloads("flat,wide")
 
 
 if __name__ == "__main__":
