@@ -36,6 +36,7 @@ name = "spider_bench"
 username = "bench_user"
 password = "bench_password"
 max_connections = 512
+ssl_mode = "required"
 """,
                 encoding="utf-8",
             )
@@ -47,6 +48,49 @@ max_connections = 512
         self.assertEqual("spider_bench", database.name)
         self.assertEqual("bench_user", database.username)
         self.assertEqual("bench_password", database.password)
+        self.assertEqual("required", database.ssl_mode)
+
+    def test_load_database_config_defaults_ssl_mode_to_preferred(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            config = pathlib.Path(directory) / "config.toml"
+            config.write_text(
+                """
+[database]
+host = "db.example.internal"
+port = 3307
+name = "spider_bench"
+username = "bench_user"
+password = "bench_password"
+max_connections = 512
+""",
+                encoding="utf-8",
+            )
+
+            database = module.load_database_config(config)
+
+        self.assertEqual("preferred", database.ssl_mode)
+
+    def test_ssl_client_args_use_preferred_tls_for_mysql(self):
+        module = load_module()
+
+        args = module.ssl_client_args("/usr/bin/mysql", "preferred")
+
+        self.assertEqual(["--ssl-mode=PREFERRED"], args)
+
+    def test_ssl_client_args_use_ssl_for_mariadb(self):
+        module = load_module()
+
+        args = module.ssl_client_args("/usr/bin/mariadb", "preferred")
+
+        self.assertEqual(["--ssl"], args)
+
+    def test_ssl_client_args_can_disable_tls(self):
+        module = load_module()
+
+        args = module.ssl_client_args("/usr/bin/mysql", "disabled")
+
+        self.assertEqual([], args)
 
     def test_reset_sql_truncates_storage_tables_with_foreign_keys_disabled(self):
         module = load_module()

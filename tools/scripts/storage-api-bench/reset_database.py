@@ -24,6 +24,7 @@ class DatabaseConfig:
     name: str
     username: str
     password: str
+    ssl_mode: str
 
 
 def main() -> int:
@@ -81,6 +82,7 @@ def load_database_config(config: pathlib.Path) -> DatabaseConfig:
         name=database["name"],
         username=database["username"],
         password=database["password"],
+        ssl_mode=database.get("ssl_mode", "preferred"),
     )
 
 
@@ -108,6 +110,7 @@ def reset_database(database: DatabaseConfig, sql: str, client_bin: str | None) -
             database.name,
             "--batch",
             "--skip-column-names",
+            *ssl_client_args(binary, database.ssl_mode),
         ],
         input=sql,
         text=True,
@@ -115,6 +118,14 @@ def reset_database(database: DatabaseConfig, sql: str, client_bin: str | None) -
         cwd=ROOT,
         check=True,
     )
+
+
+def ssl_client_args(binary: str, ssl_mode: str) -> list[str]:
+    if ssl_mode == "disabled":
+        return []
+    if pathlib.Path(binary).name == "mysql":
+        return ["--ssl-mode=PREFERRED"]
+    return ["--ssl"]
 
 
 def resolve_client_binary(client_bin: str | None) -> str:

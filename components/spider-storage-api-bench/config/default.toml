@@ -11,6 +11,7 @@ name = "spider-db"
 username = "spider-user"
 password = "spider-password"
 max_connections = 32
+ssl_mode = "preferred"
 
 [benchmark]
 task_count = 1000

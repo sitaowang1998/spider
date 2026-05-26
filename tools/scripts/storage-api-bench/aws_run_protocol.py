@@ -117,6 +117,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-password", default="spider-password")
     parser.add_argument("--database-max-connections", type=int, default=256)
     parser.add_argument(
+        "--database-ssl-mode",
+        choices=["disabled", "preferred", "required", "verify_ca", "verify_identity"],
+        default="preferred",
+    )
+    parser.add_argument(
         "--no-reset-database",
         dest="reset_database",
         action="store_false",
@@ -228,6 +233,8 @@ def make_config(
             args.database_password,
             "--database-max-connections",
             str(args.database_max_connections),
+            "--database-ssl-mode",
+            args.database_ssl_mode,
         ],
         cwd=aws_common.ROOT,
         check=True,

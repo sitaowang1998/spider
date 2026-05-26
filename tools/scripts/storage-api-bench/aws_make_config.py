@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-username", default="spider-user")
     parser.add_argument("--database-password", default="spider-password")
     parser.add_argument("--database-max-connections", type=int, default=256)
+    parser.add_argument(
+        "--database-ssl-mode",
+        choices=["disabled", "preferred", "required", "verify_ca", "verify_identity"],
+        default="preferred",
+    )
     return parser.parse_args()
 
 
@@ -110,6 +115,7 @@ def render_config(
         f'username = "{args.database_username}"',
         f'password = "{args.database_password}"',
         f"max_connections = {args.database_max_connections}",
+        f'ssl_mode = "{args.database_ssl_mode}"',
         "",
         "[benchmark]",
         f"task_count = {args.tasks_per_job}",

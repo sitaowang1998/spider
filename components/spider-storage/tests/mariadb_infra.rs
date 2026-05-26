@@ -2,6 +2,7 @@ use secrecy::SecretString;
 use spider_core::types::id::ResourceGroupId;
 use spider_storage::{
     DatabaseConfig,
+    DatabaseSslMode,
     db::{MariaDbStorageConnector, ResourceGroupManagement},
 };
 
@@ -31,6 +32,7 @@ pub async fn create_mariadb_connector() -> MariaDbStorageConnector {
         username,
         password: SecretString::from(password),
         max_connections: 5,
+        ssl_mode: DatabaseSslMode::Preferred,
     };
     MariaDbStorageConnector::connect(&config)
         .await

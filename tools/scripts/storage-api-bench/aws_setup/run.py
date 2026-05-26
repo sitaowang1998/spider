@@ -107,6 +107,8 @@ def build_matrix_command(
         config.database.password,
         "--database-max-connections",
         str(config.database.max_connections),
+        "--database-ssl-mode",
+        config.database.ssl_mode,
     ]
     return command
 

@@ -70,6 +70,7 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(["flat", "deep", "mixed"], config.benchmark.workloads)
         self.assertEqual(20, config.benchmark.jobs_per_worker)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
+        self.assertEqual("preferred", config.database.ssl_mode)
         self.assertEqual(128, config.instances.worker_count)
         self.assertEqual("", config.network.placement_group)
         self.assertEqual("cluster", config.network.placement_strategy)
@@ -113,6 +114,23 @@ class AwsSetupConfigTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "placement_strategy"):
+                config_module.load_config(path)
+
+    def test_config_rejects_invalid_database_ssl_mode(self):
+        config_module = load_module("config")
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "config.toml"
+            path.write_text(
+                textwrap.dedent(
+                    """
+                    [database]
+                    ssl_mode = "sometimes"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "database.ssl_mode"):
                 config_module.load_config(path)
 
     def test_config_rejects_home_relative_remote_paths(self):

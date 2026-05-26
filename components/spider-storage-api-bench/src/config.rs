@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use spider_storage::DatabaseConfig;
+use spider_storage::{DatabaseConfig, DatabaseSslMode};
 
 /// Top-level benchmark configuration loaded from TOML.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -46,6 +46,7 @@ impl BenchConfig {
             username: self.database.username.clone(),
             password: SecretString::from(self.database.password.clone()),
             max_connections: self.database.max_connections,
+            ssl_mode: self.database.ssl_mode,
         }
     }
 }
@@ -68,6 +69,8 @@ pub struct BenchDatabaseConfig {
     pub username: String,
     pub password: String,
     pub max_connections: u32,
+    #[serde(default)]
+    pub ssl_mode: DatabaseSslMode,
 }
 
 impl From<&DatabaseConfig> for BenchDatabaseConfig {
@@ -79,6 +82,7 @@ impl From<&DatabaseConfig> for BenchDatabaseConfig {
             username: config.username.clone(),
             password: config.password.expose_secret().to_owned(),
             max_connections: config.max_connections,
+            ssl_mode: config.ssl_mode,
         }
     }
 }

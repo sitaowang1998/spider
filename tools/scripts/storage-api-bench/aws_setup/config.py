@@ -56,6 +56,7 @@ class DatabaseConfig:
     allocated_storage: int = 200
     storage_type: str = "gp3"
     max_connections: int = 256
+    ssl_mode: str = "preferred"
 
 
 @dataclasses.dataclass
@@ -138,6 +139,15 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if not config.results.remote_data_dir.startswith("/"):
         msg = "results.remote_data_dir must be an absolute path, for example /var/lib/spider-bench/data"
+        raise ValueError(msg)
+    if config.database.ssl_mode not in {
+        "disabled",
+        "preferred",
+        "required",
+        "verify_ca",
+        "verify_identity",
+    }:
+        msg = "database.ssl_mode must be disabled, preferred, required, verify_ca, or verify_identity"
         raise ValueError(msg)
     if not config.network.placement_strategy:
         config.network.placement_strategy = "cluster"

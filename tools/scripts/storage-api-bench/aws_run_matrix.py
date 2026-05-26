@@ -66,6 +66,8 @@ def main() -> int:
                 args.database_password,
                 "--database-max-connections",
                 str(args.database_max_connections),
+                "--database-ssl-mode",
+                args.database_ssl_mode,
             ]
             if not args.reset_database:
                 command.append("--no-reset-database")
@@ -103,6 +105,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-username", default="spider-user")
     parser.add_argument("--database-password", default="spider-password")
     parser.add_argument("--database-max-connections", type=int, default=256)
+    parser.add_argument(
+        "--database-ssl-mode",
+        choices=["disabled", "preferred", "required", "verify_ca", "verify_identity"],
+        default="preferred",
+    )
     parser.add_argument(
         "--no-reset-database",
         dest="reset_database",

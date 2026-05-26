@@ -11,11 +11,14 @@ use spider_core::{
     },
 };
 use spider_derive::MySqlEnum;
-use sqlx::{MySqlPool, mysql::MySqlDatabaseError};
+use sqlx::{
+    MySqlPool,
+    mysql::{MySqlDatabaseError, MySqlSslMode},
+};
 
 use crate::{
     cache::job_submission::ValidatedJobSubmission,
-    config::DatabaseConfig,
+    config::{DatabaseConfig, DatabaseSslMode},
     db::{
         DbError,
         DbStorage,
@@ -66,7 +69,8 @@ impl MariaDbStorageConnector {
             .port(config.port)
             .database(&config.name)
             .username(&config.username)
-            .password(config.password.expose_secret());
+            .password(config.password.expose_secret())
+            .ssl_mode(config.ssl_mode.into());
 
         let pool = sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
@@ -92,6 +96,18 @@ impl MariaDbStorageConnector {
             .await?;
 
         Ok(Self { pool, session_id })
+    }
+}
+
+impl From<DatabaseSslMode> for MySqlSslMode {
+    fn from(value: DatabaseSslMode) -> Self {
+        match value {
+            DatabaseSslMode::Disabled => Self::Disabled,
+            DatabaseSslMode::Preferred => Self::Preferred,
+            DatabaseSslMode::Required => Self::Required,
+            DatabaseSslMode::VerifyCa => Self::VerifyCa,
+            DatabaseSslMode::VerifyIdentity => Self::VerifyIdentity,
+        }
     }
 }
 

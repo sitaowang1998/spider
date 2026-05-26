@@ -39,6 +39,7 @@ instance_class = "db.r7i.2xlarge"
 allocated_storage = 200
 storage_type = "gp3"
 max_connections = 256
+ssl_mode = "preferred"
 
 [network]
 vpc_id = ""
