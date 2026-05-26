@@ -73,6 +73,13 @@ async fn run_controller_workload(
     }))
     .collect::<Vec<_>>();
     let run_name = format!("{}_{}", protocol_name(protocol), workload_name(workload));
+    println!(
+        "=== controller benchmark start: protocol={} workload={} jobs={} workers={} ===",
+        protocol_name(protocol),
+        workload_name(workload),
+        config.benchmark.job_count,
+        workers.len(),
+    );
     let metrics_session = start_server_metrics(protocol, &target, &run_name).await?;
     let wall_start = Instant::now();
     let distributed = config
@@ -114,6 +121,12 @@ async fn run_controller_workload(
         controller_request_samples,
     );
     write_reports(data_dir, &run_name, &agent_reports, &merged)?;
+    println!(
+        "=== controller benchmark complete: protocol={} workload={} elapsed_sec={:.3} ===",
+        protocol_name(protocol),
+        workload_name(workload),
+        wall_start.elapsed().as_secs_f64(),
+    );
     Ok(())
 }
 

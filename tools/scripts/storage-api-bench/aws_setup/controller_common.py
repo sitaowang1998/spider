@@ -70,10 +70,26 @@ def wait_for_controller_command(
     command_id: str,
     controller_instance_id: str,
     poll_interval_sec: int = 2,
+    progress_log_path: str | None = None,
+    progress_poll_interval_sec: int = 15,
 ) -> None:
     if client.dry_run:
         return
+    progress_offset = 0
+    last_progress_poll = 0.0
     while True:
+        now = time.monotonic()
+        if (
+            progress_log_path is not None
+            and now - last_progress_poll >= progress_poll_interval_sec
+        ):
+            progress_offset = print_remote_progress(
+                client,
+                controller_instance_id=controller_instance_id,
+                progress_log_path=progress_log_path,
+                offset=progress_offset,
+            )
+            last_progress_poll = now
         data = client.run_json(
             [
                 "ssm",
@@ -86,6 +102,13 @@ def wait_for_controller_command(
         )
         status = data.get("Status") if isinstance(data, dict) else None
         if status == "Success":
+            if progress_log_path is not None:
+                print_remote_progress(
+                    client,
+                    controller_instance_id=controller_instance_id,
+                    progress_log_path=progress_log_path,
+                    offset=progress_offset,
+                )
             return
         if status in {"Cancelled", "Failed", "TimedOut", "Cancelling"}:
             stdout = data.get("StandardOutputContent", "") if isinstance(data, dict) else ""
@@ -99,6 +122,59 @@ def wait_for_controller_command(
             msg = f"SSM command {command_id} failed on controller with status {status}{suffix}"
             raise RuntimeError(msg)
         time.sleep(poll_interval_sec)
+
+
+def print_remote_progress(
+    client: aws_cli.AwsCli,
+    *,
+    controller_instance_id: str,
+    progress_log_path: str,
+    offset: int,
+) -> int:
+    script = (
+        "import pathlib; "
+        f"p=pathlib.Path({progress_log_path!r}); "
+        "data=p.read_text(errors='replace') if p.exists() else ''; "
+        f"print(data[{offset}:], end='')"
+    )
+    command_id = send_controller_command(
+        client,
+        controller_instance_id=controller_instance_id,
+        commands=[f"python3 -c {shlex.quote(script)}"],
+        comment="read spider benchmark controller progress",
+    )
+    data = wait_for_progress_read_command(client, command_id, controller_instance_id)
+    output = data.get("StandardOutputContent", "") if isinstance(data, dict) else ""
+    if output:
+        print(output, end="", flush=True)
+        return offset + len(output)
+    return offset
+
+
+def wait_for_progress_read_command(
+    client: aws_cli.AwsCli,
+    command_id: str,
+    controller_instance_id: str,
+) -> object:
+    for _ in range(10):
+        returncode, data = client.try_run_json(
+            [
+                "ssm",
+                "get-command-invocation",
+                "--command-id",
+                command_id,
+                "--instance-id",
+                controller_instance_id,
+            ]
+        )
+        if returncode != 0:
+            time.sleep(1)
+            continue
+        status = data.get("Status") if isinstance(data, dict) else None
+        if status in {"Success", "Cancelled", "Failed", "TimedOut"}:
+            return data
+        time.sleep(1)
+    return {}
 
 
 def shell_heredoc(value: str, marker: str) -> str:

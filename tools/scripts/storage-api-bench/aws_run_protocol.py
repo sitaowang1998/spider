@@ -64,6 +64,13 @@ def main() -> int:
     )
 
     for workload in parse_workloads(args.workloads):
+        print(
+            (
+                f"=== AWS benchmark workload start: nodes={args.node_count} "
+                f"protocol={args.protocol} workload={workload} ==="
+            ),
+            flush=True,
+        )
         if args.reset_database:
             result = subprocess.run(
                 build_reset_database_command(config, args.database_reset_client_bin),
@@ -98,6 +105,13 @@ def main() -> int:
             stop_server(server_instance_id)
         if result.returncode != 0:
             return result.returncode
+        print(
+            (
+                f"=== AWS benchmark workload complete: nodes={args.node_count} "
+                f"protocol={args.protocol} workload={workload} ==="
+            ),
+            flush=True,
+        )
     return 0
 
 

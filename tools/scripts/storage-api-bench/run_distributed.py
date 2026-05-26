@@ -14,6 +14,10 @@ DEFAULT_BINARY = ROOT / "target/release/spider-storage-api-bench"
 
 def main() -> int:
     args = parse_args()
+    print(
+        f"=== distributed benchmark start: protocol={args.protocol} workload={args.workload} ===",
+        flush=True,
+    )
     cmd = [
         str(args.binary),
         "controller",
@@ -28,7 +32,13 @@ def main() -> int:
     ]
     if args.flat_percent is not None:
         cmd.extend(["--flat-percent", str(args.flat_percent)])
-    return subprocess.run(cmd, cwd=ROOT, check=False).returncode
+    result = subprocess.run(cmd, cwd=ROOT, check=False).returncode
+    if result == 0:
+        print(
+            f"=== distributed benchmark complete: protocol={args.protocol} workload={args.workload} ===",
+            flush=True,
+        )
+    return result
 
 
 def parse_args() -> argparse.Namespace:

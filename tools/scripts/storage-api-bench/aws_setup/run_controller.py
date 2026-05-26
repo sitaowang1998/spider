@@ -41,6 +41,7 @@ def main() -> int:
         remote_workspace=bootstrap_controller.controller_workspace(config),
         remote_data_dir=config.results.remote_data_dir,
     )
+    progress_log_path = f"{bootstrap_controller.controller_workspace(config)}/controller-run.log"
     command_id = controller_common.send_controller_command(
         client,
         controller_instance_id=controller_id,
@@ -53,6 +54,7 @@ def main() -> int:
         client,
         command_id=command_id,
         controller_instance_id=controller_id,
+        progress_log_path=progress_log_path,
     )
     progress("benchmark controller command complete")
     return 0
@@ -78,17 +80,20 @@ def build_controller_run_commands(
     remote_data_dir: str,
 ) -> list[str]:
     workspace = controller_common.quote_path(remote_workspace)
+    progress_log = controller_common.quote_path(f"{remote_workspace}/controller-run.log")
+    run_command = (
+        "tools/scripts/storage-api-bench/aws_setup/run.py "
+        f"--config {workspace}/config.toml "
+        f"--state {workspace}/state.json "
+        f"--data-dir {controller_common.quote_path(remote_data_dir)}"
+    )
     return [
         f"cd {controller_common.quote_path(remote_root)}",
         "set -a",
         f". {workspace}/.secret",
         "set +a",
-        (
-            "tools/scripts/storage-api-bench/aws_setup/run.py "
-            f"--config {workspace}/config.toml "
-            f"--state {workspace}/state.json "
-            f"--data-dir {controller_common.quote_path(remote_data_dir)}"
-        ),
+        f"rm -f {progress_log}",
+        f"bash -lc {controller_common.quote_path(f'{run_command} 2>&1 | tee {progress_log}; exit ${{PIPESTATUS[0]}}')}",
     ]
 
 
