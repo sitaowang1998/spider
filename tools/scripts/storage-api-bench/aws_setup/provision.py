@@ -128,6 +128,7 @@ def ensure_network(
     config: config_module.AwsBenchConfig,
     resources: dict[str, object],
 ) -> None:
+    worker_subnet_ids_configured = bool(non_empty_strings(config.network.worker_subnet_ids))
     hydrate_network_config_from_state(config, resources)
     normalize_network_config(config)
     if not config.network.vpc_id:
@@ -153,12 +154,12 @@ def ensure_network(
         config.network.rds_subnet_ids = [config.network.subnet_id, secondary_subnet_id]
         resources["rds_subnet_ids"] = config.network.rds_subnet_ids
         progress(f"created RDS subnets: {', '.join(config.network.rds_subnet_ids)}")
-    if not config.network.worker_subnet_ids:
-        config.network.worker_subnet_ids = list(config.network.rds_subnet_ids)
-        resources["worker_subnet_ids"] = config.network.worker_subnet_ids
+    ensure_worker_subnets(client, config, resources, worker_subnet_ids_configured)
     if resources.get("vpc_id") and not resources.get("route_table_id"):
         progress("creating public routing for created benchmark subnets")
         setup_public_routing(client, config, resources)
+    elif resources.get("route_table_id"):
+        ensure_worker_subnet_routing(client, config, resources)
     if not config.network.security_group_id:
         progress("creating EC2 security group")
         config.network.security_group_id = create_security_group(
@@ -250,6 +251,114 @@ def secondary_rds_subnet_config(config: config_module.AwsBenchConfig) -> tuple[s
     return config.network.rds_subnet_cidrs[1], secondary_az
 
 
+def ensure_worker_subnets(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
+    worker_subnet_ids_configured: bool,
+) -> None:
+    if worker_subnet_ids_configured:
+        resources["worker_subnet_ids"] = config.network.worker_subnet_ids
+        return
+
+    availability_zones = worker_subnet_availability_zones(config)
+    cidrs = worker_subnet_cidrs(config, len(availability_zones))
+    worker_subnet_ids = list(config.network.worker_subnet_ids)
+    if not worker_subnet_ids:
+        worker_subnet_ids = list(config.network.rds_subnet_ids)
+
+    for index in range(len(worker_subnet_ids), len(availability_zones)):
+        progress(
+            f"creating worker subnet in {availability_zones[index]} with CIDR {cidrs[index]}"
+        )
+        worker_subnet_ids.append(create_subnet(client, config, cidrs[index], availability_zones[index]))
+
+    config.network.worker_subnet_ids = worker_subnet_ids
+    resources["worker_subnet_ids"] = worker_subnet_ids
+    progress(f"worker subnets: {', '.join(worker_subnet_ids)}")
+
+
+def worker_subnet_availability_zones(config: config_module.AwsBenchConfig) -> list[str]:
+    availability_zones = non_empty_strings(config.network.rds_subnet_availability_zones)
+    if availability_zones:
+        return availability_zones
+    return [config.aws.availability_zone]
+
+
+def worker_subnet_cidrs(config: config_module.AwsBenchConfig, count: int) -> list[str]:
+    cidrs = list(non_empty_strings(config.network.rds_subnet_cidrs))
+    while len(cidrs) < count:
+        cidrs.append(derived_worker_subnet_cidr(config, len(cidrs)))
+    return cidrs
+
+
+def derived_worker_subnet_cidr(config: config_module.AwsBenchConfig, index: int) -> str:
+    network_prefix = config.network.vpc_cidr.split(".", maxsplit=2)[:2]
+    if len(network_prefix) != 2:
+        msg = f"cannot derive worker subnet CIDR from VPC CIDR {config.network.vpc_cidr}"
+        raise ValueError(msg)
+    return f"{network_prefix[0]}.{network_prefix[1]}.{index + 1}.0/24"
+
+
+def ensure_worker_subnet_routing(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
+) -> None:
+    route_table_id = resources.get("route_table_id")
+    if not isinstance(route_table_id, str) or not route_table_id:
+        return
+
+    routed_subnet_id_list = routed_subnet_ids_from_resources(resources)
+    routed_subnet_ids = set(routed_subnet_id_list)
+    association_ids = route_table_associations_from_resources(resources)
+    associated_subnet_ids = route_table_associated_subnet_ids_from_resources(resources)
+    if not associated_subnet_ids:
+        associated_subnet_ids = routed_subnet_id_list
+    for subnet_id in non_empty_strings(config.network.worker_subnet_ids):
+        if subnet_id in routed_subnet_ids:
+            continue
+        progress(f"associating worker subnet {subnet_id} with benchmark route table")
+        enable_public_ip_mapping(client, subnet_id)
+        association_id = associate_route_table(client, route_table_id, subnet_id)
+        association_ids.append(association_id)
+        associated_subnet_ids.append(subnet_id)
+        routed_subnet_ids.add(subnet_id)
+    resources["route_table_association_ids"] = association_ids
+    resources["route_table_associated_subnet_ids"] = associated_subnet_ids
+
+
+def routed_subnet_ids_from_resources(resources: dict[str, object]) -> list[str]:
+    associated_subnet_ids = route_table_associated_subnet_ids_from_resources(resources)
+    if associated_subnet_ids:
+        return associated_subnet_ids
+
+    subnet_ids = []
+    subnet_id = resources.get("subnet_id")
+    if isinstance(subnet_id, str) and subnet_id:
+        subnet_ids.append(subnet_id)
+    value = resources.get("rds_subnet_ids")
+    if isinstance(value, list):
+        subnet_ids.extend(
+            item for item in value if isinstance(item, str) and item and item not in subnet_ids
+        )
+    return subnet_ids
+
+
+def route_table_associations_from_resources(resources: dict[str, object]) -> list[str]:
+    associations = resources.get("route_table_association_ids")
+    if not isinstance(associations, list):
+        return []
+    return [association for association in associations if isinstance(association, str)]
+
+
+def route_table_associated_subnet_ids_from_resources(resources: dict[str, object]) -> list[str]:
+    subnet_ids = resources.get("route_table_associated_subnet_ids")
+    if not isinstance(subnet_ids, list):
+        return []
+    return [subnet_id for subnet_id in subnet_ids if isinstance(subnet_id, str) and subnet_id]
+
+
 def create_vpc(client: aws_cli.AwsCli, config: config_module.AwsBenchConfig) -> str:
     data = client.run_json(["ec2", "create-vpc", "--cidr-block", config.network.vpc_cidr])
     return data.get("Vpc", {}).get("VpcId", f"vpc-{config.aws.run_id}")
@@ -299,11 +408,14 @@ def setup_public_routing(
         if subnet_id not in subnet_ids
     )
     route_table_association_ids = []
+    route_table_associated_subnet_ids = []
     for subnet_id in subnet_ids:
         enable_public_ip_mapping(client, subnet_id)
         association_id = associate_route_table(client, route_table_id, subnet_id)
         route_table_association_ids.append(association_id)
+        route_table_associated_subnet_ids.append(subnet_id)
     resources["route_table_association_ids"] = route_table_association_ids
+    resources["route_table_associated_subnet_ids"] = route_table_associated_subnet_ids
 
 
 def create_internet_gateway(

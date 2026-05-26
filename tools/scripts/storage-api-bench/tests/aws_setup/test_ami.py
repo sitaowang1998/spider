@@ -63,6 +63,33 @@ class FakeAwsCli:
         return 1, {}
 
 
+class FakeProvisionAwsCli:
+    def __init__(self):
+        self.commands = []
+        self.dry_run = False
+        self.subnet_count = 0
+        self.association_count = 0
+
+    def run(self, args):
+        self.commands.append(args)
+
+    def run_json(self, args):
+        self.commands.append(args)
+        if args[:2] == ["ec2", "create-vpc"]:
+            return {"Vpc": {"VpcId": "vpc-created"}}
+        if args[:2] == ["ec2", "create-subnet"]:
+            self.subnet_count += 1
+            return {"Subnet": {"SubnetId": f"subnet-{self.subnet_count}"}}
+        if args[:2] == ["ec2", "create-internet-gateway"]:
+            return {"InternetGateway": {"InternetGatewayId": "igw-created"}}
+        if args[:2] == ["ec2", "create-route-table"]:
+            return {"RouteTable": {"RouteTableId": "rtb-created"}}
+        if args[:2] == ["ec2", "associate-route-table"]:
+            self.association_count += 1
+            return {"AssociationId": f"rtbassoc-{self.association_count}"}
+        return {}
+
+
 class AmiTest(unittest.TestCase):
     def test_build_ami_uploads_runtime_archive_and_writes_state(self):
         build_ami = load_module("build_ami")
@@ -213,6 +240,111 @@ class AmiTest(unittest.TestCase):
             ["docker", "tag", "spider-node:local", "localstack-ec2/spider-bench-node:ami-000001"],
             tag_command,
         )
+
+    def test_empty_worker_subnets_expand_to_all_configured_availability_zones(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.aws.availability_zone = "us-east-1a"
+        config.network.rds_subnet_availability_zones = [
+            "us-east-1a",
+            "us-east-1b",
+            "us-east-1c",
+            "us-east-1d",
+            "us-east-1e",
+            "us-east-1f",
+        ]
+
+        resources = {}
+        provision.ensure_network(client, config, resources)
+
+        self.assertEqual(
+            ["subnet-1", "subnet-2", "subnet-3", "subnet-4", "subnet-5", "subnet-6"],
+            config.network.worker_subnet_ids,
+        )
+        self.assertEqual(config.network.worker_subnet_ids, resources["worker_subnet_ids"])
+        self.assertEqual(
+            config.network.worker_subnet_ids,
+            resources["route_table_associated_subnet_ids"],
+        )
+        create_subnet_commands = [
+            command for command in client.commands if command[:2] == ["ec2", "create-subnet"]
+        ]
+        created_cidrs = [
+            command[command.index("--cidr-block") + 1] for command in create_subnet_commands
+        ]
+        self.assertEqual(
+            [
+                "10.42.1.0/24",
+                "10.42.2.0/24",
+                "10.42.3.0/24",
+                "10.42.4.0/24",
+                "10.42.5.0/24",
+                "10.42.6.0/24",
+            ],
+            created_cidrs,
+        )
+
+    def test_worker_subnet_routing_is_idempotent_for_existing_route_table(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.network.worker_subnet_ids = ["subnet-1", "subnet-2", "subnet-3", "subnet-4"]
+        resources = {
+            "subnet_id": "subnet-1",
+            "rds_subnet_ids": ["subnet-1", "subnet-2"],
+            "route_table_id": "rtb-existing",
+            "route_table_association_ids": ["rtbassoc-1", "rtbassoc-2"],
+        }
+
+        provision.ensure_worker_subnet_routing(client, config, resources)
+        associate_commands = [
+            command for command in client.commands if command[:2] == ["ec2", "associate-route-table"]
+        ]
+
+        self.assertEqual(2, len(associate_commands))
+        self.assertEqual(
+            ["subnet-1", "subnet-2", "subnet-3", "subnet-4"],
+            resources["route_table_associated_subnet_ids"],
+        )
+
+        provision.ensure_worker_subnet_routing(client, config, resources)
+        associate_commands = [
+            command for command in client.commands if command[:2] == ["ec2", "associate-route-table"]
+        ]
+
+        self.assertEqual(2, len(associate_commands))
+
+    def test_workers_are_split_across_all_worker_subnets(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.instances.worker_count = 64
+        config.instances.ami_id = "ami-test"
+        config.network.security_group_id = "sg-test"
+        config.network.worker_subnet_ids = [
+            "subnet-1",
+            "subnet-2",
+            "subnet-3",
+            "subnet-4",
+            "subnet-5",
+            "subnet-6",
+        ]
+
+        provision.launch_worker_roles(client, config)
+
+        worker_launches = [
+            command
+            for command in client.commands
+            if command[:2] == ["ec2", "run-instances"] and "benchmark-worker" in " ".join(command)
+        ]
+        counts = [int(command[command.index("--count") + 1]) for command in worker_launches]
+        subnets = [command[command.index("--subnet-id") + 1] for command in worker_launches]
+        self.assertEqual([11, 11, 11, 11, 10, 10], counts)
+        self.assertEqual(config.network.worker_subnet_ids, subnets)
 
 
 def create_runtime_tree(root: pathlib.Path) -> None:

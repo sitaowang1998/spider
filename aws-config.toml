@@ -46,8 +46,6 @@ vpc_id = ""
 vpc_cidr = "10.42.0.0/16"
 subnet_id = ""
 subnet_cidr = "10.42.1.0/24"
-# Leave empty to spread workers across rds_subnet_ids. Set explicitly to use
-# a different worker subnet pool.
 worker_subnet_ids = []
 rds_subnet_ids = ["", ""]
 rds_subnet_cidrs = ["10.42.1.0/24", "10.42.2.0/24"]
