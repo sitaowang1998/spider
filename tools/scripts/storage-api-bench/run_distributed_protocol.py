@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Runs all distributed storage API benchmark workloads for one protocol."""
 
+from __future__ import annotations
+
 import argparse
 import pathlib
 import subprocess
