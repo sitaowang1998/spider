@@ -32,6 +32,12 @@ def run_aws_text(args: list[str]) -> str:
     return result.stdout.strip()
 
 
+def try_run_aws_text(args: list[str]) -> tuple[int, str, str]:
+    command = ["aws", *args, "--output", "text"]
+    result = subprocess.run(command, cwd=ROOT, check=False, capture_output=True, text=True)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
 def discover_instances(run_id: str, role: str) -> list[dict[str, str]]:
     data = run_aws(
         [
@@ -97,10 +103,11 @@ def send_shell_command(
 
 def wait_for_ssm_command(command_id: str, instance_ids: list[str]) -> None:
     pending = set(instance_ids)
+    failed_polls: dict[str, int] = {instance_id: 0 for instance_id in instance_ids}
     while pending:
         time.sleep(2)
         for instance_id in list(pending):
-            status = run_aws_text(
+            returncode, status, stderr = try_run_aws_text(
                 [
                     "ssm",
                     "get-command-invocation",
@@ -112,12 +119,70 @@ def wait_for_ssm_command(command_id: str, instance_ids: list[str]) -> None:
                     "Status",
                 ]
             )
+            if returncode != 0:
+                failed_polls[instance_id] += 1
+                if failed_polls[instance_id] < 30 and is_retryable_ssm_poll_error(stderr):
+                    continue
+                raise RuntimeError(
+                    f"SSM command {command_id} status poll failed on {instance_id}: {stderr}"
+                )
+            failed_polls[instance_id] = 0
             if status in {"Success"}:
                 pending.remove(instance_id)
             elif status in {"Cancelled", "Failed", "TimedOut", "Cancelling"}:
+                stdout, stderr = get_ssm_command_output(command_id, instance_id)
+                details = []
+                if stdout:
+                    details.append(f"stdout:\n{stdout}")
+                if stderr:
+                    details.append(f"stderr:\n{stderr}")
+                suffix = "\n" + "\n".join(details) if details else ""
                 raise RuntimeError(
-                    f"SSM command {command_id} failed on {instance_id} with status {status}"
+                    f"SSM command {command_id} failed on {instance_id} with status {status}{suffix}"
                 )
+
+
+def is_retryable_ssm_poll_error(stderr: str) -> bool:
+    retryable_markers = (
+        "InvocationDoesNotExist",
+        "ThrottlingException",
+        "TooManyUpdates",
+        "InternalServerError",
+        "ServiceUnavailable",
+        "RequestLimitExceeded",
+        "Rate exceeded",
+    )
+    return any(marker in stderr for marker in retryable_markers)
+
+
+def get_ssm_command_output(command_id: str, instance_id: str) -> tuple[str, str]:
+    returncode, stdout, _ = try_run_aws_text(
+        [
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "StandardOutputContent",
+        ]
+    )
+    command_stdout = stdout if returncode == 0 else ""
+    returncode, stderr, _ = try_run_aws_text(
+        [
+            "ssm",
+            "get-command-invocation",
+            "--command-id",
+            command_id,
+            "--instance-id",
+            instance_id,
+            "--query",
+            "StandardErrorContent",
+        ]
+    )
+    command_stderr = stderr if returncode == 0 else ""
+    return command_stdout, command_stderr
 
 
 def wait_for_tcp(host: str, port: int, timeout_s: int) -> None:
