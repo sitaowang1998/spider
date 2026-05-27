@@ -97,6 +97,13 @@ class Run:
     def total_tasks(self) -> int:
         return self.job_count * self.task_count
 
+    @property
+    def optimal_job_latency_s(self) -> float:
+        worker_slots = self.nodes * self.worker_count
+        if worker_slots <= 0:
+            return 0.0
+        return self.task_count * self.task_sleep_ms / 1000 / worker_slots
+
 
 @dataclass(frozen=True)
 class RequestMetric:
@@ -148,6 +155,7 @@ def main() -> int:
         "Flat workload. Average submit-to-completion latency. Lower is better.",
         "Seconds",
         lambda run: run.job_avg_us / 1_000_000,
+        baselines=[("optimal", (0.35, 0.35, 0.35), lambda run: run.optimal_job_latency_s)],
     )
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
 
@@ -306,6 +314,7 @@ def draw_line_chart(
     subtitle: str,
     y_label: str,
     value_fn: object,
+    baselines: list[tuple[str, tuple[float, float, float], object]] | None = None,
 ) -> None:
     width = 1400
     height = 820
@@ -316,7 +325,10 @@ def draw_line_chart(
     plot_width = width - margin_left - margin_right
     plot_height = height - margin_top - margin_bottom
     nodes = sorted({run.nodes for run in runs})
-    y_max = nice_upper_bound(max(float(value_fn(run)) for run in runs))
+    values = [float(value_fn(run)) for run in runs]
+    for _label, _color, baseline_fn in baselines or []:
+        values.extend(float(baseline_fn(run)) for run in runs)
+    y_max = nice_upper_bound(max(values))
 
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
@@ -330,8 +342,29 @@ def draw_line_chart(
             continue
         draw_series(ctx, series, nodes, margin_left, margin_top, plot_width, plot_height, y_max, COLORS[protocol], value_fn)
         legend.append((protocol, COLORS[protocol]))
+    for label, color, baseline_fn in baselines or []:
+        draw_series(
+            ctx,
+            sorted(unique_runs_by_node(runs), key=lambda run: run.nodes),
+            nodes,
+            margin_left,
+            margin_top,
+            plot_width,
+            plot_height,
+            y_max,
+            color,
+            baseline_fn,
+        )
+        legend.append((label, color))
     draw_legend(ctx, legend, width - margin_right + 35, margin_top)
     surface.write_to_png(str(output))
+
+
+def unique_runs_by_node(runs: list[Run]) -> list[Run]:
+    by_node = {}
+    for run in runs:
+        by_node.setdefault(run.nodes, run)
+    return list(by_node.values())
 
 
 def draw_request_latency_chart(
@@ -870,8 +903,10 @@ def setup_paragraph(runs: list[Run]) -> str:
         f"{format_set(task_sleep_ms)} ms simulated sleep per task, and the run size scales from {format_set(job_counts)} jobs "
         f"({format_set(total_tasks)} total tasks). Each run uses one dedicated submitter node "
         f"with {format_set(submitters)} submitter clients and {format_set(workers)} worker "
-        "processes per worker node. Results compare gRPC and REST against the same storage "
-        "server and RDS-backed storage layer."
+        "processes per worker node. The optimal E2E time is the ideal per-job compute lower "
+        "bound `task_count * task_sleep_ms / (worker_nodes * workers_per_node)`, excluding "
+        "storage, scheduling, polling, and transport overhead. Results compare gRPC and REST "
+        "against the same storage server and RDS-backed storage layer."
     )
 
 
@@ -911,17 +946,18 @@ def e2e_table(runs: list[Run]) -> list[str]:
     lines = ["", "## End-To-End Job Latency", ""]
     lines.extend(
         [
-            "| Nodes | Protocol | Avg (s) | P50 (s) | P90 (s) | P99 (s) | Max (s) | Failed jobs |",
+            "| Nodes | Protocol | Optimal (s) | Avg (s) | P50 (s) | P90 (s) | P99 (s) | Max (s) |",
             "|---:|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for run in sorted(runs, key=lambda row: (row.nodes, row.protocol)):
         latency = run.job_latency
         lines.append(
-            f"| {run.nodes} | {run.protocol} | {run.job_avg_us / 1_000_000:.3f} | "
+            f"| {run.nodes} | {run.protocol} | {run.optimal_job_latency_s:.3f} | "
+            f"{run.job_avg_us / 1_000_000:.3f} | "
             f"{latency['p50_us'] / 1_000_000:.3f} | "
             f"{latency['p90_us'] / 1_000_000:.3f} | {latency['p99_us'] / 1_000_000:.3f} | "
-            f"{latency['max_us'] / 1_000_000:.3f} | {latency.get('failed_jobs', 0)} |"
+            f"{latency['max_us'] / 1_000_000:.3f} |"
         )
     return lines
 
