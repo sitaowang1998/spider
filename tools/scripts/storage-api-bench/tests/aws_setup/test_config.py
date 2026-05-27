@@ -57,6 +57,9 @@ class AwsSetupConfigTest(unittest.TestCase):
                     builder_instance_type = "c7i.xlarge"
                     builder_iam_instance_profile = "builder-profile"
                     image_name_prefix = "bench-image"
+
+                    [results]
+                    s3_folder_name = "aws-run-001"
                     """
                 ),
                 encoding="utf-8",
@@ -78,6 +81,7 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual("c7i.xlarge", config.artifact.builder_instance_type)
         self.assertEqual("builder-profile", config.artifact.builder_iam_instance_profile)
         self.assertEqual("bench-image", config.artifact.image_name_prefix)
+        self.assertEqual("aws-run-001", config.results.s3_folder_name)
 
     def test_config_rejects_node_count_larger_than_worker_fleet(self):
         config_module = load_module("config")

@@ -11,7 +11,7 @@ protocols = ["grpc", "rest"]
 workloads = ["flat"]
 jobs_per_worker = 10
 tasks_per_job = 1000
-payload_bytes = 128
+payload_bytes = 1024
 submitter_count = 8
 worker_count = 16
 flat_percent = 50
@@ -35,7 +35,7 @@ name = "spider_db"
 username = "spider_user"
 password = "spider-storage-pwd"
 port = 3306
-instance_class = "db.r7i.2xlarge"
+instance_class = "db.r7i.4xlarge"
 allocated_storage = 200
 storage_type = "gp3"
 max_connections = 256
@@ -68,7 +68,6 @@ image_name_prefix = "spider-storage-bench"
 
 
 [results]
-# Recommended for controller-owned runs. Example:
-# s3_uri = "s3://my-spider-bench-results/spider-bench-128"
 s3_uri = ""
+s3_folder_name = "isize-1024-3ms"
 remote_data_dir = "/var/lib/spider-bench/data"

@@ -76,6 +76,7 @@ class Run:
     submitter_count: int
     worker_count: int
     controller_wall_time_us: int
+    job_avg_us: float
     job_latency: dict[str, int]
     request_count: int
     client_request_avg_us: float
@@ -142,10 +143,10 @@ def main() -> int:
     draw_line_chart(
         runs,
         chart_paths[1],
-        "AWS End-to-End P50 Job Latency",
-        "Flat workload. Lower is better.",
+        "AWS Average End-to-End Job Latency",
+        "Flat workload. Average submit-to-completion latency. Lower is better.",
         "Seconds",
-        lambda run: run.job_latency["p50_us"] / 1_000_000,
+        lambda run: run.job_avg_us / 1_000_000,
     )
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
 
@@ -241,6 +242,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                 submitter_count=int(setup["client_count"]),
                 worker_count=int(setup["worker_count"]),
                 controller_wall_time_us=wall_time_us,
+                job_avg_us=average_job_latency_us(data),
                 job_latency=data["job_latency"],
                 request_count=request_count,
                 client_request_avg_us=client_avg,
@@ -268,6 +270,24 @@ def weighted_average(rows: object) -> tuple[float, int]:
         total += float(row["avg_us"]) * row_count
         count += row_count
     return (total / count if count else 0.0), count
+
+
+def average_job_latency_us(data: dict[str, object]) -> float:
+    samples = data.get("job_latency_samples", [])
+    if isinstance(samples, list):
+        latencies = [
+            float(sample["latency_micros"])
+            for sample in samples
+            if isinstance(sample, dict) and sample.get("succeeded") and "latency_micros" in sample
+        ]
+        if latencies:
+            return sum(latencies) / len(latencies)
+    latency = data.get("job_latency", {})
+    if isinstance(latency, dict) and "avg_us" in latency:
+        return float(latency["avg_us"])
+    if isinstance(latency, dict) and "p50_us" in latency:
+        return float(latency["p50_us"])
+    return 0.0
 
 
 def request_operations(metrics: list[RequestMetric]) -> list[str]:
@@ -888,14 +908,15 @@ def e2e_table(runs: list[Run]) -> list[str]:
     lines = ["", "## End-To-End Job Latency", ""]
     lines.extend(
         [
-            "| Nodes | Protocol | P50 (s) | P90 (s) | P99 (s) | Max (s) | Failed jobs |",
-            "|---:|---|---:|---:|---:|---:|---:|",
+            "| Nodes | Protocol | Avg (s) | P50 (s) | P90 (s) | P99 (s) | Max (s) | Failed jobs |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for run in sorted(runs, key=lambda row: (row.nodes, row.protocol)):
         latency = run.job_latency
         lines.append(
-            f"| {run.nodes} | {run.protocol} | {latency['p50_us'] / 1_000_000:.3f} | "
+            f"| {run.nodes} | {run.protocol} | {run.job_avg_us / 1_000_000:.3f} | "
+            f"{latency['p50_us'] / 1_000_000:.3f} | "
             f"{latency['p90_us'] / 1_000_000:.3f} | {latency['p99_us'] / 1_000_000:.3f} | "
             f"{latency['max_us'] / 1_000_000:.3f} | {latency.get('failed_jobs', 0)} |"
         )
@@ -948,7 +969,53 @@ def per_request_table(
                 f"{float(row['server_avg_ms']):.3f} | {float(row['client_avg_ms']):.3f} | "
                 f"{dominant} ({value:.3f} ms) |"
             )
+    lines.extend(per_request_breakdown_tables(request_metrics, phase_metrics))
     return lines
+
+
+def per_request_breakdown_tables(
+    request_metrics: list[RequestMetric],
+    phase_metrics: list[PhaseMetric],
+) -> list[str]:
+    lines = ["", "## Per-Request Detailed Breakdown", ""]
+    lines.append(
+        "All values are average milliseconds per request. Phase columns are server-side "
+        "measurements; `server other` is the unclassified server-side remainder; "
+        "`client overhead` is client average minus server average."
+    )
+    for operation in request_operations(request_metrics):
+        rows = request_component_rows(operation, request_metrics, phase_metrics)
+        components = component_order(rows)
+        lines.extend(["", f"### `{operation}`", ""])
+        header = [
+            "Nodes",
+            "Protocol",
+            "Count",
+            "Server avg",
+            *components,
+            "Client avg",
+        ]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|---:|---|---:|" + "---:|" * (len(header) - 3))
+        for row in sorted(rows, key=lambda item: (int(item["nodes"]), str(item["protocol"]))):
+            component_values = [
+                format_ms(float(row["components"].get(component, 0.0)))
+                for component in components
+            ]
+            values = [
+                str(row["nodes"]),
+                str(row["protocol"]),
+                str(row["count"]),
+                format_ms(float(row["server_avg_ms"])),
+                *component_values,
+                format_ms(float(row["client_avg_ms"])),
+            ]
+            lines.append("| " + " | ".join(values) + " |")
+    return lines
+
+
+def format_ms(value: float) -> str:
+    return f"{value:.3f}"
 
 
 def dominant_component(components: dict[str, float]) -> tuple[str, float]:

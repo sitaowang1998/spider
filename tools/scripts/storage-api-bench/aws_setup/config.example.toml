@@ -73,5 +73,8 @@ image_name_prefix = "spider-storage-api-bench"
 [results]
 # Recommended for controller-owned runs. Example:
 # s3_uri = "s3://my-spider-bench-results/spider-bench-128"
+# If s3_uri is empty, provision.py creates/reuses the default results bucket and
+# uploads under this folder. Leave empty to use aws.run_id.
 s3_uri = ""
+s3_folder_name = ""
 remote_data_dir = "/var/lib/spider-bench/data"

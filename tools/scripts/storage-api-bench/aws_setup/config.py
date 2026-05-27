@@ -90,6 +90,7 @@ class ArtifactConfig:
 @dataclasses.dataclass
 class ResultsConfig:
     s3_uri: str | None = None
+    s3_folder_name: str | None = None
     remote_data_dir: str = "/var/lib/spider-bench/data"
 
 

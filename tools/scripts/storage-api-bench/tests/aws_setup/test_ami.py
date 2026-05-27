@@ -222,6 +222,53 @@ class AmiTest(unittest.TestCase):
         self.assertIn("--create-bucket-configuration", command)
         self.assertIn("LocationConstraint=us-east-2", command)
 
+    def test_results_bucket_uses_configured_folder_when_s3_uri_is_empty(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.aws.run_id = "bench-run"
+        config.aws.region = "us-east-2"
+        config.results.s3_folder_name = "aws-results/run-001"
+        resources = {}
+
+        provision.ensure_results_bucket(client, config, resources)
+
+        self.assertEqual(
+            "s3://spider-bench-results-bench-run-us-east-2/aws-results/run-001",
+            resources["results_s3_uri"],
+        )
+
+    def test_results_bucket_defaults_to_run_id_when_folder_is_empty(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.aws.run_id = "bench-run"
+        config.aws.region = "us-east-2"
+        resources = {}
+
+        provision.ensure_results_bucket(client, config, resources)
+
+        self.assertEqual(
+            "s3://spider-bench-results-bench-run-us-east-2/bench-run",
+            resources["results_s3_uri"],
+        )
+
+    def test_explicit_results_s3_uri_overrides_configured_folder(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        config = config_module.AwsBenchConfig()
+        config.results.s3_uri = "s3://explicit-bucket/exact-prefix"
+        config.results.s3_folder_name = "ignored-prefix"
+        resources = {}
+
+        provision.ensure_results_bucket(client, config, resources)
+
+        self.assertEqual("s3://explicit-bucket/exact-prefix", resources["results_s3_uri"])
+        self.assertFalse(any(command[:2] == ["s3api", "create-bucket"] for command in client.commands))
+
     def test_local_image_commands_build_smoke_and_tag_for_localstack(self):
         local_image = load_module("build_local_image")
 

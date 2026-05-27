@@ -889,7 +889,16 @@ def ensure_results_bucket(
     bucket = result_bucket_name(config)
     client.run(create_bucket_command(bucket, config.aws.region))
     resources["result_bucket"] = bucket
-    resources["results_s3_uri"] = f"s3://{bucket}/{config.aws.run_id}"
+    resources["results_s3_uri"] = f"s3://{bucket}/{result_s3_folder_name(config)}"
+
+
+def result_s3_folder_name(config: config_module.AwsBenchConfig) -> str:
+    folder_name = config.results.s3_folder_name or config.aws.run_id
+    folder_name = folder_name.strip("/")
+    if not folder_name:
+        msg = "results.s3_folder_name must not be empty after trimming slashes"
+        raise ValueError(msg)
+    return folder_name
 
 
 def create_bucket_command(bucket: str, region: str) -> list[str]:
