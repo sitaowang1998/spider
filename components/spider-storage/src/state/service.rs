@@ -223,6 +223,7 @@ impl<
             self.inner.ready_queue_sender.clone(),
             self.inner.db.clone(),
             self.inner.task_instance_pool_connector.clone(),
+            self.phase_timing_sink.clone(),
         )
         .await?;
         self.record_phase("register_job.create_jcb", started_at, true);
@@ -257,9 +258,7 @@ impl<
             .ok_or(StorageServerError::JobNotFound(job_id))?;
         self.record_phase("start_job.cache_get", started_at, true);
 
-        let started_at = Instant::now();
         jcb.start().await?;
-        self.record_phase("start_job.jcb_start", started_at, true);
         tracing::info!(
             job_id = ? job_id,
             "Job started.",
@@ -999,6 +998,7 @@ mod tests {
             MockReadyQueueSender,
             MockDbConnector::default(),
             MockTaskInstancePoolConnector,
+            None,
         )
         .await
         .expect("JCB creation should succeed")
@@ -1117,6 +1117,14 @@ mod tests {
     #[tokio::test]
     async fn start_job_starts_cached_job() -> anyhow::Result<()> {
         let service = create_test_service();
+        let phases = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_phases = phases.clone();
+        let service = service.with_phase_timing_sink(Arc::new(move |operation, _, succeeded| {
+            recorded_phases
+                .lock()
+                .expect("phase collection mutex should not be poisoned")
+                .push((operation, succeeded));
+        }));
         let (
             serialized_task_graph,
             serialized_inputs,
@@ -1137,6 +1145,13 @@ mod tests {
 
         let state = service.get_job_state(job_id).await?;
         assert_eq!(state, JobState::Running);
+        assert!(
+            phases
+                .lock()
+                .expect("phase collection mutex should not be poisoned")
+                .contains(&("start_job.db_start", true)),
+            "start_job should record the database start phase"
+        );
         Ok(())
     }
 

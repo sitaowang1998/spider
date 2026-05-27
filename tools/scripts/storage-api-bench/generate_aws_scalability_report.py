@@ -30,6 +30,7 @@ REQUEST_ORDER = (
 PHASE_ORDER = (
     "db_add",
     "db_register",
+    "db_start",
     "decompress",
     "parse_graph",
     "unframe_inputs",
@@ -55,6 +56,7 @@ COLORS = {
 PHASE_COLORS = {
     "db_add": (0.09, 0.44, 0.70),
     "db_register": (0.07, 0.50, 0.46),
+    "db_start": (0.08, 0.38, 0.74),
     "decompress": (0.50, 0.33, 0.72),
     "parse_graph": (0.58, 0.40, 0.18),
     "unframe_inputs": (0.60, 0.58, 0.15),

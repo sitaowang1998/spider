@@ -3,7 +3,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use spider_core::{
@@ -27,6 +27,9 @@ use crate::{
     ready_queue::ReadyQueueSender,
     task_instance_pool::{TaskInstanceMetadata, TaskInstancePoolConnector},
 };
+
+/// Callback used to record phase-level job control block timings.
+pub type PhaseTimingSink = Arc<dyn Fn(&'static str, Duration, bool) + Send + Sync>;
 
 /// A shareable control block for a job.
 ///
@@ -72,6 +75,7 @@ impl<
         ready_queue_sender: ReadyQueueSenderType,
         db_connector: DbConnectorType,
         task_instance_pool_connector: TaskInstancePoolConnectorType,
+        phase_timing_sink: Option<PhaseTimingSink>,
     ) -> Result<Self, CacheError> {
         let num_tasks = job_submission.task_graph().get_num_tasks();
         let task_graph = TaskGraph::create(job_submission).await?;
@@ -90,6 +94,7 @@ impl<
                 job_execution_state: JobExecutionStateHandle {
                     inner: tokio::sync::RwLock::new(job_execution_state),
                 },
+                phase_timing_sink,
             }),
         })
     }
@@ -150,7 +155,9 @@ impl<
     pub async fn start(&self) -> Result<(), CacheError> {
         let jcb = &self.inner;
         let mut job = jcb.job_execution_state.write_ready().await?;
+        let started_at = Instant::now();
         job.db_connector.start(jcb.id).await?;
+        jcb.record_phase("start_job.db_start", started_at, true);
         job.state = JobState::Running;
         let ready_task_indices = job.task_graph.get_all_ready_task_indices().await;
         if ready_task_indices.is_empty() {
@@ -708,6 +715,19 @@ impl<
     }
 }
 
+impl<
+    ReadyQueueSenderType: ReadyQueueSender,
+    DbConnectorType: InternalJobOrchestration,
+    TaskInstancePoolConnectorType: TaskInstancePoolConnector,
+> JobControlBlock<ReadyQueueSenderType, DbConnectorType, TaskInstancePoolConnectorType>
+{
+    fn record_phase(&self, operation: &'static str, started_at: Instant, succeeded: bool) {
+        if let Some(sink) = &self.phase_timing_sink {
+            sink(operation, started_at.elapsed(), succeeded);
+        }
+    }
+}
+
 /// The control block for a job.
 ///
 /// This struct holds the immutable identity of a job and a handle to its execution state. All
@@ -731,6 +751,7 @@ struct JobControlBlock<
         DbConnectorType,
         TaskInstancePoolConnectorType,
     >,
+    phase_timing_sink: Option<PhaseTimingSink>,
 }
 
 /// A concurrency-safe handle to a job's execution state.

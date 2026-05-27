@@ -33,6 +33,7 @@ REQUEST_ORDER = (
 PHASE_ORDER = (
     "db_add",
     "db_register",
+    "db_start",
     "parse_graph",
     "unframe_inputs",
     "validate",
@@ -54,6 +55,7 @@ COLORS = {
 PHASE_COLORS = {
     "db_add": (0.09, 0.44, 0.70),
     "db_register": (0.07, 0.50, 0.46),
+    "db_start": (0.08, 0.38, 0.74),
     "parse_graph": (0.50, 0.33, 0.72),
     "unframe_inputs": (0.58, 0.40, 0.18),
     "validate": (0.60, 0.58, 0.15),
@@ -443,6 +445,7 @@ def draw_legend(ctx: cairo.Context, x: float, y: float) -> None:
         [
             ("DB add", PHASE_COLORS["db_add"]),
             ("DB register", PHASE_COLORS["db_register"]),
+            ("DB start", PHASE_COLORS["db_start"]),
             ("Parse graph", PHASE_COLORS["parse_graph"]),
             ("Create JCB", PHASE_COLORS["create_jcb"]),
         ],
@@ -511,7 +514,7 @@ def write_report(
         "",
         "## Request Latency Charts",
         "",
-        "The chart makeup is useful for diagnosing whether a protocol difference is really transport overhead or time spent inside a storage phase. For example, `register_job.db_register` is the database insert phase, while `start_job.jcb_start` is cache/JCB scheduling work rather than a database request.",
+        "The chart makeup is useful for diagnosing whether a protocol difference is really transport overhead or time spent inside a storage phase. For example, `register_job.db_register` is the database insert phase, while `start_job.db_start` is the database state transition inside job start.",
         "",
     ]
     if "_distributed" in setup:
@@ -687,18 +690,31 @@ def diagnostic_conclusions(
             "This points at database insert/pool behavior rather than graph parsing, validation, or cache insertion."
         )
     for workload in WORKLOADS:
+        grpc_db_start = phase_by_key.get((workload, "Grpc", "start_job.db_start"))
+        rest_db_start = phase_by_key.get((workload, "Rest", "start_job.db_start"))
         grpc_start = phase_by_key.get((workload, "Grpc", "start_job.jcb_start"))
         rest_start = phase_by_key.get((workload, "Rest", "start_job.jcb_start"))
+        if grpc_db_start is not None and rest_db_start is not None:
+            lines.append(
+                f"- `{workload}` `start_job.db_start` isolates the database state transition "
+                f"({fmt_ms(grpc_db_start.server_avg_us)} ms gRPC, "
+                f"{fmt_ms(rest_db_start.server_avg_us)} ms REST)."
+            )
         if grpc_start is not None and rest_start is not None:
             lines.append(
-                f"- `{workload}` `start_job` is almost entirely `start_job.jcb_start`; `start_job.cache_get` is near zero. "
-                f"The JCB start phase is {fmt_ms(grpc_start.server_avg_us)} ms for gRPC and {fmt_ms(rest_start.server_avg_us)} ms for REST."
+                f"- `{workload}` `start_job.jcb_start` is present in older runs as the full JCB "
+                f"start call; newer runs split out `start_job.db_start` and leave remaining JCB "
+                f"work in `server other` "
+                f"({fmt_ms(grpc_start.server_avg_us)} ms gRPC, "
+                f"{fmt_ms(rest_start.server_avg_us)} ms REST)."
             )
     lines.append(
         "- `register_job.cache_insert`, `register_job.validate`, and `start_job.cache_get` are consistently tiny. They are unlikely to explain the protocol differences."
     )
     lines.append(
-        "- The main remaining suspects are database insert/pool behavior for DB-backed operations and JCB start scheduling for `start_job`. The charts now separate those paths so the next benchmark run can confirm whether the gRPC/REST gap is coming from DB registration or non-DB scheduling."
+        "- The main remaining suspects are database insert/pool behavior for DB-backed operations, "
+        "`start_job.db_start`, and non-DB JCB scheduling work for `start_job`. The charts separate "
+        "those paths when the benchmark run includes the newer phase probes."
     )
     return lines
 

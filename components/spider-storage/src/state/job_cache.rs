@@ -189,6 +189,7 @@ mod tests {
             MockReadyQueueSender,
             MockDbConnector::default(),
             MockTaskInstancePoolConnector,
+            None,
         )
         .await
         .expect("JCB creation should succeed")
@@ -370,6 +371,7 @@ mod tests {
             sender,
             MockDbConnector::default(),
             MockTaskInstancePoolConnector,
+            None,
         )
         .await
         .expect("JCB creation should succeed");

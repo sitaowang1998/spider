@@ -346,6 +346,7 @@ pub async fn run_workload<DbConnectorType: InternalJobOrchestration + 'static>(
         ready_queue_sender,
         db_connector,
         task_instance_pool,
+        None,
     )
     .await
     .expect("failed to create JCB");
