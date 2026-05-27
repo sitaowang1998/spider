@@ -30,6 +30,8 @@ class BenchmarkConfig:
     task_sleep_ms: int = 3
     submitter_count: int = 8
     worker_count: int = 16
+    poll_batch: int = 64
+    poll_wait_ms: int = 10
     flat_percent: int = 50
 
 
@@ -135,6 +137,12 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if config.benchmark.task_sleep_ms < 0:
         msg = "task_sleep_ms must be greater than or equal to 0"
+        raise ValueError(msg)
+    if config.benchmark.poll_batch <= 0:
+        msg = "poll_batch must be greater than 0"
+        raise ValueError(msg)
+    if config.benchmark.poll_wait_ms < 0:
+        msg = "poll_wait_ms must be greater than or equal to 0"
         raise ValueError(msg)
     if not config.instances.remote_root.startswith("/"):
         msg = "instances.remote_root must be an absolute path, for example /opt/spider"

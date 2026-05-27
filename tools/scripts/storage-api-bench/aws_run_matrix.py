@@ -46,6 +46,10 @@ def main() -> int:
                 str(args.submitter_count),
                 "--worker-count",
                 str(args.worker_count),
+                "--poll-batch",
+                str(args.poll_batch),
+                "--poll-wait-ms",
+                str(args.poll_wait_ms),
                 "--flat-percent",
                 str(args.flat_percent),
                 "--workloads",
@@ -97,6 +101,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-sleep-ms", type=int, default=3)
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
+    parser.add_argument("--poll-batch", type=int, default=64)
+    parser.add_argument("--poll-wait-ms", type=int, default=10)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--workloads", type=parse_csv_strings, default=["flat", "deep", "mixed"])
     parser.add_argument("--rest-port", type=int, default=8091)

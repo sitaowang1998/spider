@@ -33,6 +33,8 @@ class AwsRunPlanTest(unittest.TestCase):
         config.benchmark.task_sleep_ms = 7
         config.benchmark.submitter_count = 12
         config.benchmark.worker_count = 24
+        config.benchmark.poll_batch = 32
+        config.benchmark.poll_wait_ms = 25
         config.benchmark.flat_percent = 60
         config.database.name = "spider_db"
         config.database.username = "spider_user"
@@ -58,6 +60,10 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("2000", command)
         self.assertIn("--task-sleep-ms", command)
         self.assertIn("7", command)
+        self.assertIn("--poll-batch", command)
+        self.assertIn("32", command)
+        self.assertIn("--poll-wait-ms", command)
+        self.assertIn("25", command)
         self.assertIn("--database-host", command)
         self.assertIn("bench-db.example.com", command)
 

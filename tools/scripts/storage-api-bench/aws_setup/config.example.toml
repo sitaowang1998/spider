@@ -15,6 +15,8 @@ payload_bytes = 128
 task_sleep_ms = 3
 submitter_count = 8
 worker_count = 16
+poll_batch = 64
+poll_wait_ms = 10
 flat_percent = 50
 
 [instances]
