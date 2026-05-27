@@ -68,6 +68,7 @@ class Run:
     workload: str
     job_count: int
     task_count: int
+    task_sleep_ms: int
     client_count: int
     worker_count: int
     flat_percent: int
@@ -242,6 +243,7 @@ def load_results(
                     workload=setup["workload"],
                     job_count=int(setup["job_count"]),
                     task_count=int(setup["task_count"]),
+                    task_sleep_ms=int(setup.get("task_sleep_ms", 0)),
                     client_count=int(setup["client_count"]),
                     worker_count=int(setup["worker_count"]),
                     flat_percent=int(setup["flat_percent"]),
@@ -914,6 +916,7 @@ def setup_paragraph(runs: list[Run]) -> str:
     node_counts = ", ".join(str(node) for node in sorted({run.nodes for run in runs}))
     job_counts = sorted({run.job_count for run in runs})
     task_counts = sorted({run.task_count for run in runs})
+    task_sleep_ms = sorted({run.task_sleep_ms for run in runs})
     per_agent_jobs = sorted(
         {
             run.job_count // run.nodes
@@ -928,7 +931,8 @@ def setup_paragraph(runs: list[Run]) -> str:
         f"The scalability data compares {node_counts} client-node runs. Each run uses the same "
         f"storage server and scales client agents while keeping {format_set(per_agent_jobs)} jobs "
         f"per agent ({format_set(job_counts)} total jobs), a `task_count` setting of "
-        f"{format_set(task_counts)}, {format_set(clients)} submitter clients per agent, and "
+        f"{format_set(task_counts)}, {format_set(task_sleep_ms)} ms simulated sleep per task, "
+        f"{format_set(clients)} submitter clients per agent, and "
         f"{format_set(workers)} workers per agent. The workloads are flat, deep, and mixed task "
         f"graphs; mixed uses {format_set(flat_percent)}% flat jobs and the remaining jobs are "
         "deep."

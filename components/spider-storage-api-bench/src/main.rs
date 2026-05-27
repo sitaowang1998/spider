@@ -152,6 +152,7 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) task_count: usize,
     pub(crate) job_count: usize,
     pub(crate) payload_bytes: usize,
+    pub(crate) task_sleep_ms: u64,
     pub(crate) client_count: usize,
     pub(crate) worker_count: usize,
     pub(crate) channel_count: usize,
@@ -245,8 +246,8 @@ pub(crate) async fn run_client_report(
 ) -> anyhow::Result<BenchmarkReport> {
     let config = options.config;
     println!(
-        "protocol={:?} workload={:?} flat/deep={}/{} tasks={} jobs={} payload_bytes={} clients={} \
-         workers={} channels={}",
+        "protocol={:?} workload={:?} flat/deep={}/{} tasks={} jobs={} payload_bytes={} \
+         task_sleep_ms={} clients={} workers={} channels={}",
         options.protocol,
         options.workload,
         config.benchmark.flat_percent,
@@ -254,6 +255,7 @@ pub(crate) async fn run_client_report(
         config.benchmark.task_count,
         config.benchmark.job_count,
         config.benchmark.payload_bytes,
+        config.benchmark.task_sleep_ms,
         config.benchmark.client_count,
         config.benchmark.worker_count,
         total_connection_count(&config)
@@ -325,6 +327,7 @@ impl BenchmarkSetup {
             task_count: config.benchmark.task_count,
             job_count: config.benchmark.job_count,
             payload_bytes: config.benchmark.payload_bytes,
+            task_sleep_ms: config.benchmark.task_sleep_ms,
             client_count: config.benchmark.client_count,
             worker_count: config.benchmark.worker_count,
             channel_count: total_connection_count(config),
@@ -532,6 +535,7 @@ struct ClientWorker<ClientType: StorageApiClient> {
     job_count: usize,
     poll_batch: usize,
     poll_wait_ms: u64,
+    task_sleep_ms: u64,
     session_id: u64,
     stop_requested: Option<Arc<AtomicBool>>,
 }
@@ -561,6 +565,7 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
             job_count,
             poll_batch: config.benchmark.poll_batch,
             poll_wait_ms: config.benchmark.poll_wait_ms,
+            task_sleep_ms: config.benchmark.task_sleep_ms,
             session_id,
             stop_requested: stop_requested.cloned(),
         }));
@@ -699,6 +704,7 @@ async fn run_client_worker<ClientType: StorageApiClient>(
                     }),
             )
             .await?;
+            tokio::time::sleep(Duration::from_millis(worker.task_sleep_ms)).await;
             record_request(
                 &mut request_latency_samples,
                 "succeed_task_instance",
@@ -873,6 +879,7 @@ mod tests {
         let value = serde_json::to_value(setup)?;
         assert_eq!(value["client_count"], config.benchmark.client_count);
         assert_eq!(value["worker_count"], config.benchmark.worker_count);
+        assert_eq!(value["task_sleep_ms"], config.benchmark.task_sleep_ms);
         assert!(value.get("database_password").is_none());
         Ok(())
     }

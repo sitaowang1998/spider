@@ -89,6 +89,8 @@ def build_matrix_command(
         str(config.benchmark.tasks_per_job),
         "--payload-bytes",
         str(config.benchmark.payload_bytes),
+        "--task-sleep-ms",
+        str(config.benchmark.task_sleep_ms),
         "--submitter-count",
         str(config.benchmark.submitter_count),
         "--worker-count",

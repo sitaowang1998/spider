@@ -17,6 +17,7 @@ ssl_mode = "preferred"
 task_count = 1000
 job_count = 10
 payload_bytes = 128
+task_sleep_ms = 3
 client_count = 8
 worker_count = 16
 poll_batch = 64

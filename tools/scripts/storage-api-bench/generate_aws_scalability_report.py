@@ -73,6 +73,7 @@ class Run:
     workload: str
     job_count: int
     task_count: int
+    task_sleep_ms: int
     submitter_count: int
     worker_count: int
     controller_wall_time_us: int
@@ -239,6 +240,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                 workload=workload,
                 job_count=int(setup["job_count"]),
                 task_count=int(setup["task_count"]),
+                task_sleep_ms=int(setup.get("task_sleep_ms", 0)),
                 submitter_count=int(setup["client_count"]),
                 worker_count=int(setup["worker_count"]),
                 controller_wall_time_us=wall_time_us,
@@ -858,13 +860,14 @@ def setup_paragraph(runs: list[Run]) -> str:
     job_counts = sorted({run.job_count for run in runs})
     total_tasks = sorted({run.total_tasks for run in runs})
     task_count = sorted({run.task_count for run in runs})
+    task_sleep_ms = sorted({run.task_sleep_ms for run in runs})
     submitters = sorted({run.submitter_count for run in runs})
     workers = sorted({run.worker_count for run in runs})
     workloads = sorted({run.workload for run in runs})
     return (
         f"The AWS benchmark data covers {format_set(node_counts)} worker-node runs for "
-        f"{format_set(workloads)} workload. Each job has {format_set(task_count)} tasks, and "
-        f"the run size scales from {format_set(job_counts)} jobs "
+        f"{format_set(workloads)} workload. Each job has {format_set(task_count)} tasks with "
+        f"{format_set(task_sleep_ms)} ms simulated sleep per task, and the run size scales from {format_set(job_counts)} jobs "
         f"({format_set(total_tasks)} total tasks). Each run uses one dedicated submitter node "
         f"with {format_set(submitters)} submitter clients and {format_set(workers)} worker "
         "processes per worker node. Results compare gRPC and REST against the same storage "

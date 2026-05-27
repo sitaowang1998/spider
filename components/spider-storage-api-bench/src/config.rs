@@ -142,6 +142,8 @@ pub struct BenchmarkConfig {
     pub task_count: usize,
     pub job_count: usize,
     pub payload_bytes: usize,
+    #[serde(default = "default_task_sleep_ms")]
+    pub task_sleep_ms: u64,
     pub client_count: usize,
     pub worker_count: usize,
     pub poll_batch: usize,
@@ -150,6 +152,10 @@ pub struct BenchmarkConfig {
     pub duration_sec: u64,
     pub flat_percent: u8,
     pub output_dir: String,
+}
+
+const fn default_task_sleep_ms() -> u64 {
+    3
 }
 
 impl BenchmarkConfig {
@@ -193,6 +199,7 @@ mod tests {
         let config = BenchConfig::load("config/default.toml".as_ref())?;
         config.benchmark.validate()?;
         assert_eq!(80, config.benchmark.flat_percent);
+        assert_eq!(3, config.benchmark.task_sleep_ms);
         assert_eq!(8, config.benchmark.client_count);
         assert_eq!(16, config.benchmark.worker_count);
         assert_eq!("spider-db", config.database.name);

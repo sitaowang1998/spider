@@ -12,6 +12,7 @@ workloads = ["flat", "deep", "mixed"]
 jobs_per_worker = 10
 tasks_per_job = 1000
 payload_bytes = 128
+task_sleep_ms = 3
 submitter_count = 8
 worker_count = 16
 flat_percent = 50

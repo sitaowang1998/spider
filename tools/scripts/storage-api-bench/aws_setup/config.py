@@ -27,6 +27,7 @@ class BenchmarkConfig:
     jobs_per_worker: int = 10
     tasks_per_job: int = 1000
     payload_bytes: int = 128
+    task_sleep_ms: int = 3
     submitter_count: int = 8
     worker_count: int = 16
     flat_percent: int = 50
@@ -131,6 +132,9 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if set(config.benchmark.workloads) - {"flat", "deep", "mixed"}:
         msg = "workloads must contain only flat, deep, and mixed"
+        raise ValueError(msg)
+    if config.benchmark.task_sleep_ms < 0:
+        msg = "task_sleep_ms must be greater than or equal to 0"
         raise ValueError(msg)
     if not config.instances.remote_root.startswith("/"):
         msg = "instances.remote_root must be an absolute path, for example /opt/spider"

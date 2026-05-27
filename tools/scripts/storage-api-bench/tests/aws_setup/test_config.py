@@ -40,6 +40,7 @@ class AwsSetupConfigTest(unittest.TestCase):
                     jobs_per_worker = 20
                     tasks_per_job = 2000
                     payload_bytes = 256
+                    task_sleep_ms = 7
                     submitter_count = 12
                     worker_count = 24
                     flat_percent = 60
@@ -73,6 +74,7 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(["flat", "deep", "mixed"], config.benchmark.workloads)
         self.assertEqual(20, config.benchmark.jobs_per_worker)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
+        self.assertEqual(7, config.benchmark.task_sleep_ms)
         self.assertEqual("preferred", config.database.ssl_mode)
         self.assertEqual(128, config.instances.worker_count)
         self.assertEqual("", config.network.placement_group)
