@@ -96,10 +96,11 @@ impl JobLatencySample {
 }
 
 /// End-to-end latency summary printed to the console.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Tabled)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Tabled)]
 pub struct JobLatencySummary {
     pub count: usize,
     pub failed_jobs: usize,
+    pub avg_us: u128,
     pub p50_us: u128,
     pub p90_us: u128,
     pub p99_us: u128,
@@ -149,6 +150,8 @@ pub struct ServerMetricsSessionReport {
     pub low_count_request_latency: Vec<RequestLatencySample>,
     #[serde(default)]
     pub request_sizes: Vec<RequestSizeSummary>,
+    #[serde(default)]
+    pub job_execution_latency: JobLatencySummary,
 }
 
 /// In-memory server-side metrics sessions for benchmark runs.
@@ -168,6 +171,8 @@ struct ServerMetricsSession {
     started_at: Instant,
     samples: Vec<RequestLatencySample>,
     size_samples: Vec<RequestSizeSample>,
+    job_started_at: HashMap<String, Instant>,
+    job_latency_samples: Vec<JobLatencySample>,
 }
 
 impl ServerMetricsRegistry {
@@ -188,6 +193,8 @@ impl ServerMetricsRegistry {
             started_at: Instant::now(),
             samples: Vec::new(),
             size_samples: Vec::new(),
+            job_started_at: HashMap::new(),
+            job_latency_samples: Vec::new(),
         };
         self.inner
             .sessions
@@ -223,6 +230,7 @@ impl ServerMetricsRegistry {
             request_latency: summarize_requests(&session.samples),
             low_count_request_latency: low_count_samples(&session.samples),
             request_sizes: summarize_sizes(&session.size_samples),
+            job_execution_latency: summarize(&session.job_latency_samples),
         })
     }
 
@@ -280,6 +288,55 @@ impl ServerMetricsRegistry {
             session.size_samples.push(sample.clone());
         }
     }
+
+    /// Records that a job started executing in storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metrics session lock is poisoned.
+    pub fn record_job_start(&self, job_id: &str) {
+        if self.inner.active_count.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let started_at = Instant::now();
+        for session in self
+            .inner
+            .sessions
+            .lock()
+            .expect("server metrics sessions lock should not be poisoned")
+            .values_mut()
+        {
+            session.job_started_at.insert(job_id.to_owned(), started_at);
+        }
+    }
+
+    /// Records that a job reached a terminal success/failure state in storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the metrics session lock is poisoned.
+    pub fn record_job_terminal(&self, job_id: &str, succeeded: bool) {
+        if self.inner.active_count.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        for session in self
+            .inner
+            .sessions
+            .lock()
+            .expect("server metrics sessions lock should not be poisoned")
+            .values_mut()
+        {
+            let Some(started_at) = session.job_started_at.remove(job_id) else {
+                continue;
+            };
+            let latency = started_at.elapsed();
+            session.job_latency_samples.push(if succeeded {
+                JobLatencySample::success(latency)
+            } else {
+                JobLatencySample::failure(latency)
+            });
+        }
+    }
 }
 
 fn low_count_samples(samples: &[RequestLatencySample]) -> Vec<RequestLatencySample> {
@@ -310,6 +367,7 @@ pub fn summarize(samples: &[JobLatencySample]) -> JobLatencySummary {
     JobLatencySummary {
         count: latencies.len(),
         failed_jobs: samples.iter().filter(|sample| !sample.succeeded).count(),
+        avg_us: average(&latencies),
         p50_us: percentile(&latencies, 50),
         p90_us: percentile(&latencies, 90),
         p99_us: percentile(&latencies, 99),
@@ -448,6 +506,7 @@ mod tests {
         let summary = summarize(&samples);
         assert_eq!(3, summary.count);
         assert_eq!(1, summary.failed_jobs);
+        assert_eq!(43, summary.avg_us);
         assert_eq!(20, summary.p50_us);
         assert_eq!(100, summary.p90_us);
         assert_eq!(100, summary.p99_us);
@@ -529,6 +588,26 @@ mod tests {
         assert_eq!("register_job", report.request_latency[1].operation);
         assert_eq!(2, report.request_latency[1].count);
         assert_eq!(1, report.request_latency[1].errors);
+    }
+
+    #[test]
+    fn server_metrics_session_reports_job_execution_latency() {
+        let registry = ServerMetricsRegistry::default();
+        registry.record_job_start("ignored-before-session");
+
+        let session_id = registry.start_session(Some("flat".to_owned()));
+        registry.record_job_start("job-1");
+        registry.record_job_start("job-2");
+        registry.record_job_terminal("job-1", true);
+        registry.record_job_terminal("job-2", false);
+        registry.record_job_terminal("unknown-job", true);
+
+        let report = registry
+            .end_session(&session_id)
+            .expect("started session should end");
+        assert_eq!(2, report.job_execution_latency.count);
+        assert_eq!(1, report.job_execution_latency.failed_jobs);
+        assert!(report.job_execution_latency.max_us <= report.elapsed_micros);
     }
 
     #[test]

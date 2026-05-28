@@ -185,6 +185,7 @@ fn merge_job_summaries<'a>(
     JobLatencySummary {
         count,
         failed_jobs,
+        avg_us: 0,
         p50_us: 0,
         p90_us: 0,
         p99_us: 0,

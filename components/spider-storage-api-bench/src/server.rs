@@ -1,5 +1,6 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Instant};
 
+use spider_core::{job::JobState, types::id::JobId};
 use spider_storage::{
     db::MariaDbStorageConnector,
     ready_queue::ReadyQueueSenderHandle,
@@ -174,6 +175,7 @@ impl StorageApiService {
         self.record_async("start_job", RequestCategory::NonBlocking, || async {
             let job_id = parse_job_id(&request.job_id)?;
             self.state.start_job(job_id).await?;
+            self.metrics.record_job_start(&format_id(&job_id));
             Ok(EmptyResponse {})
         })
         .await
@@ -322,6 +324,7 @@ impl StorageApiService {
                         request.serialized_outputs,
                     )
                     .await?;
+                self.record_job_terminal(job_id, state);
                 Ok(job_state_response(state))
             },
         )
@@ -345,6 +348,7 @@ impl StorageApiService {
                         request.task_instance_id,
                     )
                     .await?;
+                self.record_job_terminal(job_id, state);
                 Ok(job_state_response(state))
             },
         )
@@ -368,6 +372,7 @@ impl StorageApiService {
                         request.task_instance_id,
                     )
                     .await?;
+                self.record_job_terminal(job_id, state);
                 Ok(job_state_response(state))
             },
         )
@@ -393,6 +398,7 @@ impl StorageApiService {
                         request.error,
                     )
                     .await?;
+                self.record_job_terminal(job_id, state);
                 Ok(job_state_response(state))
             },
         )
@@ -452,6 +458,14 @@ impl StorageApiService {
         self.metrics
             .record_request(operation, category, started_at.elapsed(), result.is_ok());
         result
+    }
+
+    fn record_job_terminal(&self, job_id: JobId, state: JobState) {
+        match state {
+            JobState::Succeeded => self.metrics.record_job_terminal(&format_id(&job_id), true),
+            JobState::Failed => self.metrics.record_job_terminal(&format_id(&job_id), false),
+            _ => {}
+        }
     }
 }
 

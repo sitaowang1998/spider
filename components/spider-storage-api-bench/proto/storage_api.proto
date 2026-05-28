@@ -65,6 +65,17 @@ message ServerMetricsSessionReport {
   repeated RequestLatencySummary request_latency = 4;
   repeated RequestLatencySample low_count_request_latency = 5;
   repeated RequestSizeSummary request_sizes = 6;
+  JobLatencySummary job_execution_latency = 7;
+}
+
+message JobLatencySummary {
+  uint64 count = 1;
+  uint64 failed_jobs = 2;
+  uint64 avg_us = 3;
+  uint64 p50_us = 4;
+  uint64 p90_us = 5;
+  uint64 p99_us = 6;
+  uint64 max_us = 7;
 }
 
 message RequestLatencySample {

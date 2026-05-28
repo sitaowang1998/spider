@@ -39,6 +39,7 @@ use crate::{
     },
     client::StorageApiClient,
     metrics::{
+        JobLatencySummary,
         RequestLatencySample,
         RequestLatencySummary,
         RequestSizeSummary,
@@ -679,6 +680,9 @@ impl TryFrom<ServerMetricsSessionReport> for proto::ServerMetricsSessionReport {
                 .into_iter()
                 .map(proto::RequestSizeSummary::from)
                 .collect(),
+            job_execution_latency: Some(proto::JobLatencySummary::try_from(
+                report.job_execution_latency,
+            )?),
         })
     }
 }
@@ -708,6 +712,47 @@ impl From<proto::ServerMetricsSessionReport> for ServerMetricsSessionReport {
                 .into_iter()
                 .map(RequestSizeSummary::from)
                 .collect(),
+            job_execution_latency: report
+                .job_execution_latency
+                .map(JobLatencySummary::from)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl TryFrom<JobLatencySummary> for proto::JobLatencySummary {
+    type Error = Status;
+
+    fn try_from(summary: JobLatencySummary) -> Result<Self, Self::Error> {
+        Ok(Self {
+            count: u64::try_from(summary.count)
+                .map_err(|_| Status::internal("job latency count overflows u64"))?,
+            failed_jobs: u64::try_from(summary.failed_jobs)
+                .map_err(|_| Status::internal("job latency failed_jobs overflows u64"))?,
+            avg_us: u64::try_from(summary.avg_us)
+                .map_err(|_| Status::internal("job latency avg_us overflows u64"))?,
+            p50_us: u64::try_from(summary.p50_us)
+                .map_err(|_| Status::internal("job latency p50_us overflows u64"))?,
+            p90_us: u64::try_from(summary.p90_us)
+                .map_err(|_| Status::internal("job latency p90_us overflows u64"))?,
+            p99_us: u64::try_from(summary.p99_us)
+                .map_err(|_| Status::internal("job latency p99_us overflows u64"))?,
+            max_us: u64::try_from(summary.max_us)
+                .map_err(|_| Status::internal("job latency max_us overflows u64"))?,
+        })
+    }
+}
+
+impl From<proto::JobLatencySummary> for JobLatencySummary {
+    fn from(summary: proto::JobLatencySummary) -> Self {
+        Self {
+            count: usize::try_from(summary.count).unwrap_or(usize::MAX),
+            failed_jobs: usize::try_from(summary.failed_jobs).unwrap_or(usize::MAX),
+            avg_us: u128::from(summary.avg_us),
+            p50_us: u128::from(summary.p50_us),
+            p90_us: u128::from(summary.p90_us),
+            p99_us: u128::from(summary.p99_us),
+            max_us: u128::from(summary.max_us),
         }
     }
 }

@@ -340,6 +340,11 @@ fn print_report(report: &BenchmarkReport) {
         "{}",
         render_request_summary(&report.server_metrics.request_latency)
     );
+    println!("server_job_execution_latency");
+    println!(
+        "{}",
+        render_summary(&report.server_metrics.job_execution_latency)
+    );
 }
 
 impl BenchmarkSetup {
@@ -425,6 +430,15 @@ pub(crate) const fn empty_server_metrics_report() -> ServerMetricsSessionReport 
         request_latency: Vec::new(),
         low_count_request_latency: Vec::new(),
         request_sizes: Vec::new(),
+        job_execution_latency: JobLatencySummary {
+            count: 0,
+            failed_jobs: 0,
+            avg_us: 0,
+            p50_us: 0,
+            p90_us: 0,
+            p99_us: 0,
+            max_us: 0,
+        },
     }
 }
 
@@ -770,6 +784,7 @@ async fn run_submit_client<ClientType: StorageApiClient>(
         worker_activity: Vec::new(),
     };
     while let Some(job) = pop_job(&client.job_queue).await {
+        let start_time = Instant::now();
         let job_id = record_request(
             &mut measurements.request_latency,
             "register_job",
@@ -793,7 +808,6 @@ async fn run_submit_client<ClientType: StorageApiClient>(
             }),
         )
         .await?;
-        let start_time = Instant::now();
         let succeeded = monitor_job(
             &client.client,
             &mut measurements.request_latency,
@@ -1182,6 +1196,7 @@ mod tests {
             job_latency: JobLatencySummary {
                 count: 1,
                 failed_jobs: 0,
+                avg_us: 100,
                 p50_us: 100,
                 p90_us: 100,
                 p99_us: 100,
@@ -1195,6 +1210,15 @@ mod tests {
                 request_latency: vec![server_row],
                 low_count_request_latency: Vec::new(),
                 request_sizes: Vec::new(),
+                job_execution_latency: JobLatencySummary {
+                    count: 1,
+                    failed_jobs: 0,
+                    avg_us: 200,
+                    p50_us: 200,
+                    p90_us: 200,
+                    p99_us: 200,
+                    max_us: 200,
+                },
             },
             job_latency_samples: Vec::new(),
             request_latency_samples: Vec::new(),
@@ -1212,6 +1236,10 @@ mod tests {
             value["server_metrics"]["request_latency"][0]["operation"]
         );
         assert_eq!(7, value["server_metrics"]["request_latency"][0]["count"]);
+        assert_eq!(
+            200,
+            value["server_metrics"]["job_execution_latency"]["avg_us"]
+        );
         Ok(())
     }
 
