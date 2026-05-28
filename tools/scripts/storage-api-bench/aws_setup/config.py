@@ -34,7 +34,6 @@ class BenchmarkConfig:
     worker_poll_wait_ms: int = 10
     job_poll_wait_ms: int = 10
     scheduler_poll_batch: int = 1024
-    scheduler_refill_threshold: int = 256
     scheduler_refill_interval_ms: int = 10
     scheduler_poll_wait_ms: int = 20
     flat_percent: int = 50

@@ -21,7 +21,7 @@ use spider_storage_api_bench::{
     client::StorageApiClient,
     metrics::{RequestCategory, RequestLatencySample},
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 
 use crate::{
     AgentArgs,
@@ -53,7 +53,6 @@ struct AgentRunRecord {
 struct SchedulerQueue {
     sender: async_channel::Sender<ReadyTaskEntryDto>,
     receiver: async_channel::Receiver<ReadyTaskEntryDto>,
-    refill: Notify,
 }
 
 #[derive(Serialize)]
@@ -125,11 +124,7 @@ async fn start_run(
     };
     let scheduler = if request.role == AgentRole::Scheduler {
         let (sender, receiver) = async_channel::unbounded();
-        Some(Arc::new(SchedulerQueue {
-            sender,
-            receiver,
-            refill: Notify::new(),
-        }))
+        Some(Arc::new(SchedulerQueue { sender, receiver }))
     } else {
         None
     };
@@ -257,13 +252,6 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
     let mut request_latency = Vec::new();
     let refill_interval = Duration::from_millis(config.benchmark.scheduler_refill_interval_ms);
     while !stop_requested.load(Ordering::Relaxed) {
-        if scheduler_queue_len(&scheduler) >= config.benchmark.scheduler_refill_threshold {
-            tokio::select! {
-                () = scheduler.refill.notified() => {}
-                () = tokio::time::sleep(refill_interval) => {}
-            }
-            continue;
-        }
         let (ready, _) = record_timed_request(
             &mut request_latency,
             "scheduler_poll_ready_tasks",
@@ -277,12 +265,9 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
         if !ready.tasks.is_empty() {
             scheduler_push_tasks(&scheduler, ready.tasks).await?;
         }
+        tokio::time::sleep(refill_interval).await;
     }
     Ok(request_latency)
-}
-
-fn scheduler_queue_len(scheduler: &SchedulerQueue) -> usize {
-    scheduler.receiver.len()
 }
 
 async fn scheduler_push_tasks(
@@ -471,23 +456,21 @@ async fn scheduler_poll_ready_tasks(
     wait: Duration,
 ) -> ReadyTasksResponse {
     if max_tasks == 0 {
-        scheduler.refill.notify_one();
         return ReadyTasksResponse { tasks: Vec::new() };
     }
 
     let mut tasks = scheduler_drain_available_tasks(scheduler, max_tasks);
-    if tasks.is_empty() && !wait.is_zero() {
-        scheduler.refill.notify_one();
-        if let Ok(Ok(task)) = tokio::time::timeout(wait, scheduler.receiver.recv()).await {
-            tasks.push(task);
-            tasks.extend(scheduler_drain_available_tasks(
-                scheduler,
-                max_tasks - tasks.len(),
-            ));
-        }
+    if tasks.is_empty()
+        && !wait.is_zero()
+        && let Ok(Ok(task)) = tokio::time::timeout(wait, scheduler.receiver.recv()).await
+    {
+        tasks.push(task);
+        tasks.extend(scheduler_drain_available_tasks(
+            scheduler,
+            max_tasks - tasks.len(),
+        ));
     }
 
-    scheduler.refill.notify_one();
     ReadyTasksResponse { tasks }
 }
 

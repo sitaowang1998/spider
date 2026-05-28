@@ -145,7 +145,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
     parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
-    parser.add_argument("--scheduler-refill-threshold", type=int, default=256)
     parser.add_argument("--scheduler-refill-interval-ms", type=int, default=10)
     parser.add_argument("--scheduler-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
@@ -290,8 +289,6 @@ def make_config(
             str(args.job_poll_wait_ms),
             "--scheduler-poll-batch",
             str(args.scheduler_poll_batch),
-            "--scheduler-refill-threshold",
-            str(args.scheduler_refill_threshold),
             "--scheduler-refill-interval-ms",
             str(args.scheduler_refill_interval_ms),
             "--scheduler-poll-wait-ms",

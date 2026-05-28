@@ -158,8 +158,6 @@ pub struct BenchmarkConfig {
     pub job_poll_wait_ms: u64,
     #[serde(default = "default_scheduler_poll_batch")]
     pub scheduler_poll_batch: usize,
-    #[serde(default = "default_scheduler_refill_threshold")]
-    pub scheduler_refill_threshold: usize,
     #[serde(default = "default_scheduler_refill_interval_ms")]
     pub scheduler_refill_interval_ms: u64,
     #[serde(default = "default_scheduler_poll_wait_ms")]
@@ -176,10 +174,6 @@ const fn default_task_sleep_ms() -> u64 {
 
 const fn default_scheduler_poll_batch() -> usize {
     1024
-}
-
-const fn default_scheduler_refill_threshold() -> usize {
-    256
 }
 
 const fn default_scheduler_refill_interval_ms() -> u64 {

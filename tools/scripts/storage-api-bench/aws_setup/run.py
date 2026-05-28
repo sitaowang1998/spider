@@ -103,8 +103,6 @@ def build_matrix_command(
         str(config.benchmark.job_poll_wait_ms),
         "--scheduler-poll-batch",
         str(config.benchmark.scheduler_poll_batch),
-        "--scheduler-refill-threshold",
-        str(config.benchmark.scheduler_refill_threshold),
         "--scheduler-refill-interval-ms",
         str(config.benchmark.scheduler_refill_interval_ms),
         "--scheduler-poll-wait-ms",

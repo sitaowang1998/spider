@@ -19,7 +19,6 @@ worker_poll_batch = 64
 worker_poll_wait_ms = 10
 job_poll_wait_ms = 10
 scheduler_poll_batch = 1024
-scheduler_refill_threshold = 256
 scheduler_refill_interval_ms = 10
 scheduler_poll_wait_ms = 20
 flat_percent = 50
