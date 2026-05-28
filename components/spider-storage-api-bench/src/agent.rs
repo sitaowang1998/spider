@@ -1,9 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -15,12 +16,19 @@ use axum::{
     routing::{get, post},
 };
 use serde::Serialize;
-use tokio::sync::Mutex;
+use spider_storage_api_bench::{
+    api::{PollReadyTasksRequest, ReadyTaskEntryDto, ReadyTasksResponse},
+    client::StorageApiClient,
+    metrics::{RequestCategory, RequestLatencySample},
+};
+use tokio::sync::{Mutex, Notify};
 
 use crate::{
     AgentArgs,
     BenchmarkReport,
+    SchedulerReadyTasksClient,
     distributed::{AgentRole, AgentRunAccepted, AgentRunRequest, AgentRunState, AgentRunStatus},
+    record_timed_request,
     run_submitter_workload,
     run_worker_workload,
 };
@@ -39,6 +47,13 @@ struct AgentRunRecord {
     report: Option<BenchmarkReport>,
     error: Option<String>,
     stop_requested: Option<Arc<AtomicBool>>,
+    scheduler: Option<Arc<SchedulerQueue>>,
+}
+
+struct SchedulerQueue {
+    tasks: Mutex<VecDeque<ReadyTaskEntryDto>>,
+    ready: Notify,
+    refill: Notify,
 }
 
 #[derive(Serialize)]
@@ -59,6 +74,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         .route("/runs", post(start_run))
         .route("/runs/:run_id", get(get_run))
         .route("/runs/:run_id/stop", post(stop_run))
+        .route(
+            "/scheduler/runs/:run_id/ready-tasks",
+            post(poll_scheduler_ready_tasks),
+        )
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
@@ -99,8 +118,17 @@ async fn start_run(
             state.agent_id, state.role, request.role
         )));
     }
-    let stop_requested = if request.role == AgentRole::Worker {
+    let stop_requested = if matches!(request.role, AgentRole::Worker | AgentRole::Scheduler) {
         Some(Arc::new(AtomicBool::new(false)))
+    } else {
+        None
+    };
+    let scheduler = if request.role == AgentRole::Scheduler {
+        Some(Arc::new(SchedulerQueue {
+            tasks: Mutex::new(VecDeque::new()),
+            ready: Notify::new(),
+            refill: Notify::new(),
+        }))
     } else {
         None
     };
@@ -111,6 +139,7 @@ async fn start_run(
             report: None,
             error: None,
             stop_requested,
+            scheduler,
         },
     );
     drop(runs);
@@ -159,9 +188,105 @@ async fn execute_run(
     config.benchmark.flat_percent = request.flat_percent;
     config.benchmark.validate()?;
     match request.role {
+        AgentRole::Scheduler => run_scheduler_report(state, request, config).await,
         AgentRole::Submitter => run_submitter_report(state, request, config).await,
         AgentRole::Worker => run_worker_report(state, request, config).await,
     }
+}
+
+async fn run_scheduler_report(
+    state: &AgentState,
+    request: AgentRunRequest,
+    config: spider_storage_api_bench::config::BenchConfig,
+) -> anyhow::Result<BenchmarkReport> {
+    let (stop_requested, scheduler) = {
+        let runs = state.runs.lock().await;
+        let record = runs
+            .get(&request.run_id)
+            .ok_or_else(|| anyhow::anyhow!("scheduler run missing record"))?;
+        let stop_requested = record
+            .stop_requested
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("scheduler run missing stop flag"))?;
+        let scheduler = record
+            .scheduler
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("scheduler run missing queue"))?;
+        drop(runs);
+        (stop_requested, scheduler)
+    };
+    let request_latency = match request.protocol {
+        spider_storage_api_bench::server::ServerProtocol::Rest => {
+            let client =
+                spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
+            run_scheduler_loop(client, &config, scheduler, stop_requested).await?
+        }
+        spider_storage_api_bench::server::ServerProtocol::Grpc => {
+            let client = crate::connect_grpc_clients(&request.target, 1)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing scheduler gRPC client"))?;
+            run_scheduler_loop(client, &config, scheduler, stop_requested).await?
+        }
+    };
+    Ok(BenchmarkReport {
+        setup: crate::BenchmarkSetup::new(
+            request.protocol,
+            request.target,
+            request.workload,
+            &config,
+        ),
+        job_latency: spider_storage_api_bench::metrics::summarize(&[]),
+        request_latency: spider_storage_api_bench::metrics::summarize_requests(&request_latency),
+        server_metrics: crate::empty_server_metrics_report(),
+        job_latency_samples: Vec::new(),
+        request_latency_samples: request_latency,
+        worker_activity_samples: Vec::new(),
+        distributed: None,
+    })
+}
+
+async fn run_scheduler_loop<ClientType: StorageApiClient>(
+    client: ClientType,
+    config: &spider_storage_api_bench::config::BenchConfig,
+    scheduler: Arc<SchedulerQueue>,
+    stop_requested: Arc<AtomicBool>,
+) -> anyhow::Result<Vec<RequestLatencySample>> {
+    let mut request_latency = Vec::new();
+    let refill_interval = Duration::from_millis(config.benchmark.scheduler_refill_interval_ms);
+    while !stop_requested.load(Ordering::Relaxed) {
+        if scheduler_queue_len(&scheduler).await >= config.benchmark.scheduler_refill_threshold {
+            tokio::select! {
+                () = scheduler.refill.notified() => {}
+                () = tokio::time::sleep(refill_interval) => {}
+            }
+            continue;
+        }
+        let (ready, _) = record_timed_request(
+            &mut request_latency,
+            "scheduler_poll_ready_tasks",
+            RequestCategory::Blocking,
+            client.poll_ready_tasks(PollReadyTasksRequest {
+                max_tasks: config.benchmark.scheduler_poll_batch,
+                wait_ms: config.benchmark.scheduler_poll_wait_ms,
+            }),
+        )
+        .await?;
+        if !ready.tasks.is_empty() {
+            scheduler_push_tasks(&scheduler, ready.tasks).await;
+        }
+    }
+    Ok(request_latency)
+}
+
+async fn scheduler_queue_len(scheduler: &SchedulerQueue) -> usize {
+    scheduler.tasks.lock().await.len()
+}
+
+async fn scheduler_push_tasks(scheduler: &SchedulerQueue, tasks: Vec<ReadyTaskEntryDto>) {
+    scheduler.tasks.lock().await.extend(tasks);
+    scheduler.ready.notify_waiters();
 }
 
 async fn run_submitter_report(
@@ -223,6 +348,11 @@ async fn run_worker_report(
             .and_then(|run| run.stop_requested.clone())
             .ok_or_else(|| anyhow::anyhow!("worker run missing stop flag"))?
     };
+    let scheduler = match (&request.scheduler_url, &request.scheduler_run_id) {
+        (Some(url), Some(run_id)) => Some(SchedulerReadyTasksClient::new(url, run_id)),
+        (None, None) => None,
+        _ => anyhow::bail!("worker scheduler_url and scheduler_run_id must be set together"),
+    };
     let measurements = match request.protocol {
         spider_storage_api_bench::server::ServerProtocol::Rest => {
             let client =
@@ -233,6 +363,7 @@ async fn run_worker_report(
                 session_id,
                 &config,
                 stop_requested,
+                scheduler,
             )
             .await?
         }
@@ -245,6 +376,7 @@ async fn run_worker_report(
                 session_id,
                 &config,
                 stop_requested,
+                scheduler,
             )
             .await?
         }
@@ -285,6 +417,69 @@ async fn get_run(
         report: record.report.clone(),
         error: record.error,
     }))
+}
+
+async fn poll_scheduler_ready_tasks(
+    State(state): State<AgentState>,
+    Path(run_id): Path<String>,
+    Json(request): Json<PollReadyTasksRequest>,
+) -> Result<Json<ReadyTasksResponse>, AgentError> {
+    let scheduler = {
+        let runs = state.runs.lock().await;
+        let record = runs
+            .get(&run_id)
+            .ok_or_else(|| AgentError::not_found(format!("run `{run_id}` not found")))?;
+        if !matches!(
+            record.status,
+            AgentRunState::Running | AgentRunState::Stopping
+        ) {
+            return Err(AgentError::bad_request(format!(
+                "scheduler run `{run_id}` is {:?}",
+                record.status
+            )));
+        }
+        let scheduler = record
+            .scheduler
+            .clone()
+            .ok_or_else(|| AgentError::bad_request(format!("run `{run_id}` is not a scheduler")))?;
+        drop(runs);
+        scheduler
+    };
+    Ok(Json(
+        scheduler_poll_ready_tasks(
+            &scheduler,
+            request.max_tasks,
+            Duration::from_millis(request.wait_ms),
+        )
+        .await,
+    ))
+}
+
+async fn scheduler_poll_ready_tasks(
+    scheduler: &SchedulerQueue,
+    max_tasks: usize,
+    wait: Duration,
+) -> ReadyTasksResponse {
+    let deadline = Instant::now() + wait;
+    loop {
+        let tasks = scheduler_take_tasks(scheduler, max_tasks).await;
+        if !tasks.is_empty() || wait.is_zero() || Instant::now() >= deadline {
+            scheduler.refill.notify_one();
+            return ReadyTasksResponse { tasks };
+        }
+        scheduler.refill.notify_one();
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let _ = tokio::time::timeout(remaining, scheduler.ready.notified()).await;
+    }
+}
+
+async fn scheduler_take_tasks(
+    scheduler: &SchedulerQueue,
+    max_tasks: usize,
+) -> Vec<ReadyTaskEntryDto> {
+    let mut queue = scheduler.tasks.lock().await;
+    let count = max_tasks.min(queue.len());
+    queue.drain(..count).collect()
 }
 
 async fn stop_run(
@@ -366,6 +561,7 @@ mod tests {
                 report: None,
                 error: None,
                 stop_requested: None,
+                scheduler: None,
             },
         );
 
@@ -382,6 +578,7 @@ mod tests {
                 report: None,
                 error: None,
                 stop_requested: None,
+                scheduler: None,
             },
         );
 

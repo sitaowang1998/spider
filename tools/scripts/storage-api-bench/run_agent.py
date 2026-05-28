@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=pathlib.Path, default=DEFAULT_CONFIG)
     parser.add_argument("--binary", type=pathlib.Path, default=DEFAULT_BINARY)
     parser.add_argument("--agent-id", required=True)
-    parser.add_argument("--role", choices=["submitter", "worker"], required=True)
+    parser.add_argument("--role", choices=["scheduler", "submitter", "worker"], required=True)
     return parser.parse_args()
 
 

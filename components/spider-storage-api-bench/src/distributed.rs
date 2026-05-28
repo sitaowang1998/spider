@@ -29,6 +29,10 @@ pub struct AgentRunRequest {
     pub(crate) session_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) resource_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scheduler_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scheduler_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +65,7 @@ pub enum AgentRunState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRole {
+    Scheduler,
     Submitter,
     Worker,
 }
@@ -70,9 +75,10 @@ impl FromStr for AgentRole {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "scheduler" => Ok(Self::Scheduler),
             "submitter" => Ok(Self::Submitter),
             "worker" => Ok(Self::Worker),
-            _ => anyhow::bail!("agent role must be submitter or worker"),
+            _ => anyhow::bail!("agent role must be scheduler, submitter, or worker"),
         }
     }
 }

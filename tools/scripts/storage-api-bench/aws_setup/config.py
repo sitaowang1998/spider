@@ -30,8 +30,13 @@ class BenchmarkConfig:
     task_sleep_ms: int = 3
     submitter_count: int = 8
     worker_count: int = 16
-    poll_batch: int = 64
-    poll_wait_ms: int = 10
+    worker_poll_batch: int = 64
+    worker_poll_wait_ms: int = 10
+    job_poll_wait_ms: int = 10
+    scheduler_poll_batch: int = 1024
+    scheduler_refill_threshold: int = 256
+    scheduler_refill_interval_ms: int = 10
+    scheduler_poll_wait_ms: int = 20
     flat_percent: int = 50
 
 
@@ -39,6 +44,7 @@ class BenchmarkConfig:
 class InstanceConfig:
     worker_count: int = 128
     worker_type: str = "c7i.large"
+    scheduler_type: str = "c7i.xlarge"
     submitter_type: str = "c7i.xlarge"
     server_type: str = "c7i.16xlarge"
     controller_type: str = "c7i.large"
@@ -138,11 +144,14 @@ def validate_config(config: AwsBenchConfig) -> None:
     if config.benchmark.task_sleep_ms < 0:
         msg = "task_sleep_ms must be greater than or equal to 0"
         raise ValueError(msg)
-    if config.benchmark.poll_batch <= 0:
-        msg = "poll_batch must be greater than 0"
+    if config.benchmark.worker_poll_batch <= 0:
+        msg = "worker_poll_batch must be greater than 0"
         raise ValueError(msg)
-    if config.benchmark.poll_wait_ms < 0:
-        msg = "poll_wait_ms must be greater than or equal to 0"
+    if config.benchmark.worker_poll_wait_ms < 0:
+        msg = "worker_poll_wait_ms must be greater than or equal to 0"
+        raise ValueError(msg)
+    if config.benchmark.job_poll_wait_ms < 0:
+        msg = "job_poll_wait_ms must be greater than or equal to 0"
         raise ValueError(msg)
     if not config.instances.remote_root.startswith("/"):
         msg = "instances.remote_root must be an absolute path, for example /opt/spider"

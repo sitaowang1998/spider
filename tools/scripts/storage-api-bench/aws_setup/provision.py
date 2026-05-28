@@ -731,6 +731,18 @@ def launch_instances(
             config.aws.availability_zone,
         )
     )
+    progress("launching dedicated benchmark scheduler instance")
+    instance_ids.extend(
+        launch_role(
+            client,
+            config,
+            "benchmark-scheduler",
+            config.instances.scheduler_type,
+            1,
+            config.network.subnet_id,
+            config.aws.availability_zone,
+        )
+    )
     progress(f"launching {config.instances.worker_count} benchmark worker instances")
     instance_ids.extend(launch_worker_roles(client, config))
     progress(f"launched {len(instance_ids)} benchmark instance(s)")

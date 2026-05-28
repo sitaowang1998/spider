@@ -17,6 +17,7 @@ DEFAULT_OUTPUT = ROOT / "components/spider-storage-api-bench/config/aws.toml"
 def main() -> int:
     args = parse_args()
     server_ip = parse_ip(args.server_private_ip)
+    scheduler_ip = parse_ip(args.scheduler_ip)
     submitter_ip = parse_ip(args.submitter_ip)
     worker_ips = read_agent_ips(args.worker_ips)
     if not worker_ips:
@@ -24,7 +25,10 @@ def main() -> int:
         return 1
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(render_config(args, server_ip, submitter_ip, worker_ips), encoding="utf-8")
+    args.output.write_text(
+        render_config(args, server_ip, scheduler_ip, submitter_ip, worker_ips),
+        encoding="utf-8",
+    )
     print(args.output)
     print(f"submitter={submitter_ip} workers={len(worker_ips)} jobs={len(worker_ips) * args.jobs_per_worker}")
     return 0
@@ -33,6 +37,11 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-private-ip", required=True)
+    parser.add_argument(
+        "--scheduler-ip",
+        required=True,
+        help="Private IP for the dedicated scheduler agent.",
+    )
     parser.add_argument(
         "--submitter-ip",
         required=True,
@@ -51,8 +60,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-sleep-ms", type=int, default=3)
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
-    parser.add_argument("--poll-batch", type=int, default=64)
-    parser.add_argument("--poll-wait-ms", type=int, default=10)
+    parser.add_argument("--worker-poll-batch", type=int, default=64)
+    parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
+    parser.add_argument("--job-poll-wait-ms", type=int, default=10)
+    parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
+    parser.add_argument("--scheduler-refill-threshold", type=int, default=256)
+    parser.add_argument("--scheduler-refill-interval-ms", type=int, default=10)
+    parser.add_argument("--scheduler-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--agent-timeout-sec", type=int, default=7200)
     parser.add_argument("--poll-interval-ms", type=int, default=1000)
@@ -98,6 +112,7 @@ def parse_ip(value: str) -> str:
 def render_config(
     args: argparse.Namespace,
     server_ip: str,
+    scheduler_ip: str,
     submitter_ip: str,
     worker_ips: list[str],
 ) -> str:
@@ -125,8 +140,13 @@ def render_config(
         f"task_sleep_ms = {args.task_sleep_ms}",
         f"client_count = {args.submitter_count}",
         f"worker_count = {args.worker_count}",
-        f"poll_batch = {args.poll_batch}",
-        f"poll_wait_ms = {args.poll_wait_ms}",
+        f"worker_poll_batch = {args.worker_poll_batch}",
+        f"worker_poll_wait_ms = {args.worker_poll_wait_ms}",
+        f"job_poll_wait_ms = {args.job_poll_wait_ms}",
+        f"scheduler_poll_batch = {args.scheduler_poll_batch}",
+        f"scheduler_refill_threshold = {args.scheduler_refill_threshold}",
+        f"scheduler_refill_interval_ms = {args.scheduler_refill_interval_ms}",
+        f"scheduler_poll_wait_ms = {args.scheduler_poll_wait_ms}",
         "warmup_sec = 5",
         "duration_sec = 30",
         f"flat_percent = {args.flat_percent}",
@@ -137,6 +157,14 @@ def render_config(
         f"poll_interval_ms = {args.poll_interval_ms}",
         "",
     ]
+    lines.extend(
+        [
+            "[distributed.scheduler]",
+            f'id = "{scheduler_id(scheduler_ip)}"',
+            f'url = "http://{scheduler_ip}:{args.agent_port}"',
+            "",
+        ]
+    )
     lines.extend(
         [
             "[distributed.submitter]",
@@ -159,6 +187,10 @@ def render_config(
 
 def submitter_id(ip: str) -> str:
     return "submitter-" + re.sub(r"[^0-9A-Za-z]+", "-", ip).strip("-")
+
+
+def scheduler_id(ip: str) -> str:
+    return "scheduler-" + re.sub(r"[^0-9A-Za-z]+", "-", ip).strip("-")
 
 
 def worker_id(ip: str) -> str:

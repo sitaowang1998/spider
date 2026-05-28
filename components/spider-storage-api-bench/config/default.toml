@@ -20,8 +20,13 @@ payload_bytes = 128
 task_sleep_ms = 3
 client_count = 8
 worker_count = 16
-poll_batch = 64
-poll_wait_ms = 10
+worker_poll_batch = 64
+worker_poll_wait_ms = 10
+job_poll_wait_ms = 10
+scheduler_poll_batch = 1024
+scheduler_refill_threshold = 256
+scheduler_refill_interval_ms = 10
+scheduler_poll_wait_ms = 20
 warmup_sec = 5
 duration_sec = 30
 flat_percent = 80
@@ -30,6 +35,10 @@ output_dir = "data/"
 [distributed]
 agent_timeout_sec = 1800
 poll_interval_ms = 1000
+
+[distributed.scheduler]
+id = "scheduler-10-1-0-6"
+url = "http://10.1.0.6:19091"
 
 [distributed.submitter]
 id = "submitter-10-1-0-7"

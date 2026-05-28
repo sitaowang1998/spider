@@ -17,7 +17,9 @@ def main() -> int:
     args = parse_args()
     workspace = args.workspace or aws_common.default_workspace(args.run_id, args.node_count)
     workspace.mkdir(parents=True, exist_ok=True)
-    server, submitter, workers = aws_discover.discover(args.run_id, args.node_count)
+    server, scheduler, submitter, workers = aws_discover.discover(args.run_id, args.node_count)
+    scheduler_ip = scheduler["private_ip"]
+    scheduler_instance_id = scheduler["instance_id"]
     submitter_ip = submitter["private_ip"]
     submitter_instance_id = submitter["instance_id"]
     worker_ips = [worker["private_ip"] for worker in workers]
@@ -25,19 +27,28 @@ def main() -> int:
     server_instance_id = server["instance_id"]
     server_ip = server["private_ip"]
 
-    write_discovery_files(workspace, server, submitter, workers)
+    write_discovery_files(workspace, server, scheduler, submitter, workers)
     config = workspace / "config.toml"
-    make_config(args, server_ip, submitter_ip, workspace / "worker_ips.txt", config)
+    make_config(args, server_ip, scheduler_ip, submitter_ip, workspace / "worker_ips.txt", config)
 
     remote_config = pathlib.PurePosixPath(args.remote_workspace) / "config.toml"
     remote_log_dir = pathlib.PurePosixPath(args.remote_workspace) / "logs"
     config_text = config.read_text(encoding="utf-8")
 
     sync_config(
-        [server_instance_id, submitter_instance_id, *worker_instance_ids],
+        [server_instance_id, scheduler_instance_id, submitter_instance_id, *worker_instance_ids],
         args.remote_root,
         remote_config,
         config_text,
+    )
+    start_agents(
+        [scheduler_instance_id],
+        args.remote_root,
+        remote_config,
+        remote_log_dir,
+        args.agent_port,
+        "scheduler",
+        args.agent_start_timeout,
     )
     start_agents(
         [submitter_instance_id],
@@ -58,7 +69,7 @@ def main() -> int:
         args.agent_start_timeout,
     )
     aws_common.wait_for_agent_health(
-        [submitter_ip, *worker_ips],
+        [scheduler_ip, submitter_ip, *worker_ips],
         args.agent_port,
         args.agent_start_timeout,
     )
@@ -130,8 +141,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-sleep-ms", type=int, default=3)
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
-    parser.add_argument("--poll-batch", type=int, default=64)
-    parser.add_argument("--poll-wait-ms", type=int, default=10)
+    parser.add_argument("--worker-poll-batch", type=int, default=64)
+    parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
+    parser.add_argument("--job-poll-wait-ms", type=int, default=10)
+    parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
+    parser.add_argument("--scheduler-refill-threshold", type=int, default=256)
+    parser.add_argument("--scheduler-refill-interval-ms", type=int, default=10)
+    parser.add_argument("--scheduler-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--workloads", default="flat,deep,mixed")
     parser.add_argument("--rest-port", type=int, default=8091)
@@ -215,11 +231,14 @@ def parse_workloads(value: str) -> list[str]:
 def write_discovery_files(
     workspace: pathlib.Path,
     server: dict[str, str],
+    scheduler: dict[str, str],
     submitter: dict[str, str],
     workers: list[dict[str, str]],
 ) -> None:
     aws_common.write_lines(workspace / "server_ip.txt", [server["private_ip"]])
     aws_common.write_lines(workspace / "server_instance_id.txt", [server["instance_id"]])
+    aws_common.write_lines(workspace / "scheduler_ip.txt", [scheduler["private_ip"]])
+    aws_common.write_lines(workspace / "scheduler_instance_id.txt", [scheduler["instance_id"]])
     aws_common.write_lines(workspace / "submitter_ip.txt", [submitter["private_ip"]])
     aws_common.write_lines(workspace / "submitter_instance_id.txt", [submitter["instance_id"]])
     aws_common.write_lines(workspace / "worker_ips.txt", [worker["private_ip"] for worker in workers])
@@ -232,6 +251,7 @@ def write_discovery_files(
 def make_config(
     args: argparse.Namespace,
     server_ip: str,
+    scheduler_ip: str,
     submitter_ip: str,
     worker_ips_path: pathlib.Path,
     output: pathlib.Path,
@@ -244,6 +264,8 @@ def make_config(
             server_ip,
             "--submitter-ip",
             submitter_ip,
+            "--scheduler-ip",
+            scheduler_ip,
             "--worker-ips",
             str(worker_ips_path),
             "--output",
@@ -260,10 +282,20 @@ def make_config(
             str(args.submitter_count),
             "--worker-count",
             str(args.worker_count),
-            "--poll-batch",
-            str(args.poll_batch),
-            "--poll-wait-ms",
-            str(args.poll_wait_ms),
+            "--worker-poll-batch",
+            str(args.worker_poll_batch),
+            "--worker-poll-wait-ms",
+            str(args.worker_poll_wait_ms),
+            "--job-poll-wait-ms",
+            str(args.job_poll_wait_ms),
+            "--scheduler-poll-batch",
+            str(args.scheduler_poll_batch),
+            "--scheduler-refill-threshold",
+            str(args.scheduler_refill_threshold),
+            "--scheduler-refill-interval-ms",
+            str(args.scheduler_refill_interval_ms),
+            "--scheduler-poll-wait-ms",
+            str(args.scheduler_poll_wait_ms),
             "--flat-percent",
             str(args.flat_percent),
             "--rest-port",

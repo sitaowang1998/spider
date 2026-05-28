@@ -41,6 +41,7 @@ pub async fn run_controller(args: ControllerArgs) -> anyhow::Result<()> {
 
     run_controller_workload(
         &config,
+        distributed.scheduler.as_ref(),
         &distributed.submitter,
         &distributed.workers,
         args.protocol,
@@ -53,6 +54,7 @@ pub async fn run_controller(args: ControllerArgs) -> anyhow::Result<()> {
 
 async fn run_controller_workload(
     config: &BenchConfig,
+    scheduler: Option<&DistributedAgentConfig>,
     submitter: &DistributedAgentConfig,
     workers: &[DistributedAgentConfig],
     protocol: ServerProtocol,
@@ -63,15 +65,21 @@ async fn run_controller_workload(
         ServerProtocol::Rest => config.server.rest_target.clone(),
         ServerProtocol::Grpc => config.server.grpc_target.clone(),
     };
-    let allocations = std::iter::once(AgentJobAllocation {
-        agent_id: submitter.id.clone(),
-        job_count: config.benchmark.job_count,
-    })
-    .chain(workers.iter().map(|worker| AgentJobAllocation {
-        agent_id: worker.id.clone(),
-        job_count: 0,
-    }))
-    .collect::<Vec<_>>();
+    let allocations = scheduler
+        .into_iter()
+        .map(|agent| AgentJobAllocation {
+            agent_id: agent.id.clone(),
+            job_count: 0,
+        })
+        .chain(std::iter::once(AgentJobAllocation {
+            agent_id: submitter.id.clone(),
+            job_count: config.benchmark.job_count,
+        }))
+        .chain(workers.iter().map(|worker| AgentJobAllocation {
+            agent_id: worker.id.clone(),
+            job_count: 0,
+        }))
+        .collect::<Vec<_>>();
     let run_name = format!("{}_{}", protocol_name(protocol), workload_name(workload));
     println!(
         "=== controller benchmark start: protocol={} workload={} jobs={} workers={} ===",
@@ -90,6 +98,7 @@ async fn run_controller_workload(
     let agent_result = async {
         let prepared = prepared?;
         run_agents(AgentDispatch {
+            scheduler,
             submitter,
             workers,
             protocol,
@@ -131,6 +140,7 @@ async fn run_controller_workload(
 }
 
 struct AgentDispatch<'a> {
+    scheduler: Option<&'a DistributedAgentConfig>,
     submitter: &'a DistributedAgentConfig,
     workers: &'a [DistributedAgentConfig],
     protocol: ServerProtocol,
@@ -147,45 +157,11 @@ struct AgentDispatch<'a> {
 
 async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, BenchmarkReport)>> {
     let http = reqwest::Client::new();
+    let scheduler_run_id = start_scheduler_agent(&http, &dispatch).await?;
     for worker in dispatch.workers {
-        let request = AgentRunRequest {
-            run_id: format!("{}_{}", dispatch.run_name, worker.id),
-            role: AgentRole::Worker,
-            protocol: dispatch.protocol,
-            workload: dispatch.workload,
-            target: dispatch.target.to_owned(),
-            job_count: dispatch.job_count,
-            flat_percent: dispatch.flat_percent,
-            session_id: Some(dispatch.session_id),
-            resource_group_id: None,
-        };
-        http.post(format!("{}/runs", agent_url(worker)))
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<AgentRunAccepted>()
-            .await?;
+        start_worker_agent(&http, &dispatch, worker, scheduler_run_id.clone()).await?;
     }
-    let submitter_run_id = format!("{}_{}", dispatch.run_name, dispatch.submitter.id);
-    let submitter_request = AgentRunRequest {
-        run_id: submitter_run_id.clone(),
-        role: AgentRole::Submitter,
-        protocol: dispatch.protocol,
-        workload: dispatch.workload,
-        target: dispatch.target.to_owned(),
-        job_count: dispatch.job_count,
-        flat_percent: dispatch.flat_percent,
-        session_id: None,
-        resource_group_id: Some(dispatch.resource_group_id.to_owned()),
-    };
-    http.post(format!("{}/runs", agent_url(dispatch.submitter)))
-        .json(&submitter_request)
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<AgentRunAccepted>()
-        .await?;
+    let submitter_run_id = start_submitter_agent(&http, &dispatch).await?;
 
     let deadline = Instant::now() + dispatch.timeout;
     let submitter_report = match wait_for_agent(
@@ -200,6 +176,7 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
         Ok(report) => report,
         Err(err) => {
             stop_workers(&http, dispatch.workers, dispatch.run_name).await;
+            stop_scheduler(&http, dispatch.scheduler, dispatch.run_name).await;
             return Err(err);
         }
     };
@@ -218,7 +195,104 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
         .await?;
         reports.push((worker.id.clone(), report));
     }
+    if let Some(scheduler) = dispatch.scheduler {
+        stop_scheduler(&http, dispatch.scheduler, dispatch.run_name).await;
+        let scheduler_run_id = format!("{}_{}", dispatch.run_name, scheduler.id);
+        let report = wait_for_agent(
+            &http,
+            scheduler,
+            &scheduler_run_id,
+            deadline,
+            dispatch.poll_interval,
+        )
+        .await?;
+        reports.push((scheduler.id.clone(), report));
+    }
     Ok(reports)
+}
+
+async fn start_scheduler_agent(
+    http: &reqwest::Client,
+    dispatch: &AgentDispatch<'_>,
+) -> anyhow::Result<Option<String>> {
+    let Some(scheduler) = dispatch.scheduler else {
+        return Ok(None);
+    };
+    let run_id = format!("{}_{}", dispatch.run_name, scheduler.id);
+    let request = AgentRunRequest {
+        run_id: run_id.clone(),
+        role: AgentRole::Scheduler,
+        protocol: dispatch.protocol,
+        workload: dispatch.workload,
+        target: dispatch.target.to_owned(),
+        job_count: dispatch.job_count,
+        flat_percent: dispatch.flat_percent,
+        session_id: Some(dispatch.session_id),
+        resource_group_id: None,
+        scheduler_url: None,
+        scheduler_run_id: None,
+    };
+    post_agent_run(http, scheduler, &request).await?;
+    Ok(Some(run_id))
+}
+
+async fn start_worker_agent(
+    http: &reqwest::Client,
+    dispatch: &AgentDispatch<'_>,
+    worker: &DistributedAgentConfig,
+    scheduler_run_id: Option<String>,
+) -> anyhow::Result<()> {
+    let request = AgentRunRequest {
+        run_id: format!("{}_{}", dispatch.run_name, worker.id),
+        role: AgentRole::Worker,
+        protocol: dispatch.protocol,
+        workload: dispatch.workload,
+        target: dispatch.target.to_owned(),
+        job_count: dispatch.job_count,
+        flat_percent: dispatch.flat_percent,
+        session_id: Some(dispatch.session_id),
+        resource_group_id: None,
+        scheduler_url: dispatch.scheduler.map(agent_url),
+        scheduler_run_id,
+    };
+    post_agent_run(http, worker, &request).await
+}
+
+async fn start_submitter_agent(
+    http: &reqwest::Client,
+    dispatch: &AgentDispatch<'_>,
+) -> anyhow::Result<String> {
+    let run_id = format!("{}_{}", dispatch.run_name, dispatch.submitter.id);
+    let request = AgentRunRequest {
+        run_id: run_id.clone(),
+        role: AgentRole::Submitter,
+        protocol: dispatch.protocol,
+        workload: dispatch.workload,
+        target: dispatch.target.to_owned(),
+        job_count: dispatch.job_count,
+        flat_percent: dispatch.flat_percent,
+        session_id: None,
+        resource_group_id: Some(dispatch.resource_group_id.to_owned()),
+        scheduler_url: None,
+        scheduler_run_id: None,
+    };
+    post_agent_run(http, dispatch.submitter, &request).await?;
+    Ok(run_id)
+}
+
+async fn post_agent_run(
+    http: &reqwest::Client,
+    agent: &DistributedAgentConfig,
+    request: &AgentRunRequest,
+) -> anyhow::Result<()> {
+    http.post(format!("{}/runs", agent_url(agent)))
+        .json(request)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<AgentRunAccepted>()
+        .await?;
+    Ok(())
 }
 
 async fn wait_for_agent(
@@ -284,6 +358,19 @@ async fn stop_workers(http: &reqwest::Client, workers: &[DistributedAgentConfig]
         if let Err(err) = stop_agent(http, worker, run_name).await {
             tracing::warn!("failed to stop worker agent `{}`: {err}", worker.id);
         }
+    }
+}
+
+async fn stop_scheduler(
+    http: &reqwest::Client,
+    scheduler: Option<&DistributedAgentConfig>,
+    run_name: &str,
+) {
+    let Some(scheduler) = scheduler else {
+        return;
+    };
+    if let Err(err) = stop_agent(http, scheduler, run_name).await {
+        tracing::warn!("failed to stop scheduler agent `{}`: {err}", scheduler.id);
     }
 }
 

@@ -15,13 +15,19 @@ payload_bytes = 128
 task_sleep_ms = 3
 submitter_count = 8
 worker_count = 16
-poll_batch = 64
-poll_wait_ms = 10
+worker_poll_batch = 64
+worker_poll_wait_ms = 10
+job_poll_wait_ms = 10
+scheduler_poll_batch = 1024
+scheduler_refill_threshold = 256
+scheduler_refill_interval_ms = 10
+scheduler_poll_wait_ms = 20
 flat_percent = 50
 
 [instances]
 worker_count = 128
 worker_type = "c7i.large"
+scheduler_type = "c7i.xlarge"
 submitter_type = "c7i.xlarge"
 server_type = "c7i.16xlarge"
 controller_type = "c7i.large"

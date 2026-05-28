@@ -92,6 +92,8 @@ impl From<&DatabaseConfig> for BenchDatabaseConfig {
 pub struct DistributedConfig {
     pub agent_timeout_sec: u64,
     pub poll_interval_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler: Option<DistributedAgentConfig>,
     pub submitter: DistributedAgentConfig,
     pub workers: Vec<DistributedAgentConfig>,
 }
@@ -114,7 +116,12 @@ impl DistributedConfig {
         }
 
         let mut ids = std::collections::HashSet::new();
-        for agent in std::iter::once(&self.submitter).chain(self.workers.iter()) {
+        for agent in self
+            .scheduler
+            .iter()
+            .chain(std::iter::once(&self.submitter))
+            .chain(self.workers.iter())
+        {
             if agent.id.trim().is_empty() {
                 anyhow::bail!("distributed agent id must not be empty");
             }
@@ -146,8 +153,17 @@ pub struct BenchmarkConfig {
     pub task_sleep_ms: u64,
     pub client_count: usize,
     pub worker_count: usize,
-    pub poll_batch: usize,
-    pub poll_wait_ms: u64,
+    pub worker_poll_batch: usize,
+    pub worker_poll_wait_ms: u64,
+    pub job_poll_wait_ms: u64,
+    #[serde(default = "default_scheduler_poll_batch")]
+    pub scheduler_poll_batch: usize,
+    #[serde(default = "default_scheduler_refill_threshold")]
+    pub scheduler_refill_threshold: usize,
+    #[serde(default = "default_scheduler_refill_interval_ms")]
+    pub scheduler_refill_interval_ms: u64,
+    #[serde(default = "default_scheduler_poll_wait_ms")]
+    pub scheduler_poll_wait_ms: u64,
     pub warmup_sec: u64,
     pub duration_sec: u64,
     pub flat_percent: u8,
@@ -156,6 +172,22 @@ pub struct BenchmarkConfig {
 
 const fn default_task_sleep_ms() -> u64 {
     3
+}
+
+const fn default_scheduler_poll_batch() -> usize {
+    1024
+}
+
+const fn default_scheduler_refill_threshold() -> usize {
+    256
+}
+
+const fn default_scheduler_refill_interval_ms() -> u64 {
+    10
+}
+
+const fn default_scheduler_poll_wait_ms() -> u64 {
+    20
 }
 
 impl BenchmarkConfig {
@@ -183,8 +215,11 @@ impl BenchmarkConfig {
         if self.worker_count == 0 {
             anyhow::bail!("worker_count must be greater than 0");
         }
-        if self.poll_batch == 0 {
-            anyhow::bail!("poll_batch must be greater than 0");
+        if self.worker_poll_batch == 0 {
+            anyhow::bail!("worker_poll_batch must be greater than 0");
+        }
+        if self.scheduler_poll_batch == 0 {
+            anyhow::bail!("scheduler_poll_batch must be greater than 0");
         }
         Ok(())
     }
@@ -263,8 +298,9 @@ job_count = 4
 payload_bytes = 16
 client_count = 2
 worker_count = 2
-poll_batch = 8
-poll_wait_ms = 10
+worker_poll_batch = 8
+worker_poll_wait_ms = 10
+job_poll_wait_ms = 10
 warmup_sec = 0
 duration_sec = 0
 flat_percent = 80

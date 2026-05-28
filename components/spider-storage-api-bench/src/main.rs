@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use spider_storage_api_bench::{
     api::{
         AddResourceGroupRequest,
+        ApiError,
         CreateTaskInstanceRequest,
         EndMetricsSessionRequest,
         GetSessionRequest,
@@ -178,8 +179,13 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) client_count: usize,
     pub(crate) worker_count: usize,
     pub(crate) channel_count: usize,
-    pub(crate) poll_batch: usize,
-    pub(crate) poll_wait_ms: u64,
+    pub(crate) worker_poll_batch: usize,
+    pub(crate) worker_poll_wait_ms: u64,
+    pub(crate) job_poll_wait_ms: u64,
+    pub(crate) scheduler_poll_batch: usize,
+    pub(crate) scheduler_refill_threshold: usize,
+    pub(crate) scheduler_refill_interval_ms: u64,
+    pub(crate) scheduler_poll_wait_ms: u64,
     pub(crate) database_host: String,
     pub(crate) database_port: u16,
     pub(crate) database_name: String,
@@ -356,8 +362,13 @@ impl BenchmarkSetup {
             client_count: config.benchmark.client_count,
             worker_count: config.benchmark.worker_count,
             channel_count: total_connection_count(config),
-            poll_batch: config.benchmark.poll_batch,
-            poll_wait_ms: config.benchmark.poll_wait_ms,
+            worker_poll_batch: config.benchmark.worker_poll_batch,
+            worker_poll_wait_ms: config.benchmark.worker_poll_wait_ms,
+            job_poll_wait_ms: config.benchmark.job_poll_wait_ms,
+            scheduler_poll_batch: config.benchmark.scheduler_poll_batch,
+            scheduler_refill_threshold: config.benchmark.scheduler_refill_threshold,
+            scheduler_refill_interval_ms: config.benchmark.scheduler_refill_interval_ms,
+            scheduler_poll_wait_ms: config.benchmark.scheduler_poll_wait_ms,
             database_host: config.database.host.clone(),
             database_port: config.database.port,
             database_name: config.database.name.clone(),
@@ -442,19 +453,22 @@ async fn run_workload<ClientType: StorageApiClient>(
     let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
     let mut worker_tasks = spawn_worker_tasks(
         worker_clients,
-        "local",
-        &completed,
-        config.benchmark.job_count,
-        prepared.session_id,
-        config,
-        None,
+        WorkerSpawnOptions {
+            agent_id: "local",
+            completed: &completed,
+            job_count: config.benchmark.job_count,
+            session_id: prepared.session_id,
+            config,
+            stop_requested: None,
+            scheduler: None,
+        },
     );
     let mut measurements = match run_submit_clients(
         submit_clients,
         job_queue,
         &completed,
         prepared.resource_group_id,
-        config.benchmark.poll_wait_ms,
+        config.benchmark.job_poll_wait_ms,
     )
     .await
     {
@@ -528,7 +542,7 @@ pub(crate) async fn run_submitter_workload<ClientType: StorageApiClient>(
         job_queue,
         &completed,
         resource_group_id,
-        config.benchmark.poll_wait_ms,
+        config.benchmark.job_poll_wait_ms,
     )
     .await
 }
@@ -539,16 +553,20 @@ pub(crate) async fn run_worker_workload<ClientType: StorageApiClient>(
     session_id: u64,
     config: &BenchConfig,
     stop_requested: Arc<AtomicBool>,
+    scheduler: Option<SchedulerReadyTasksClient>,
 ) -> anyhow::Result<ClientWorkloadMeasurements> {
     let completed = Arc::new(Mutex::new(HashSet::new()));
     let mut worker_tasks = spawn_worker_tasks(
         clients,
-        &agent_id,
-        &completed,
-        usize::MAX,
-        session_id,
-        config,
-        Some(&stop_requested),
+        WorkerSpawnOptions {
+            agent_id: &agent_id,
+            completed: &completed,
+            job_count: usize::MAX,
+            session_id,
+            config,
+            stop_requested: Some(&stop_requested),
+            scheduler: scheduler.as_ref(),
+        },
     );
     let mut request_latency = Vec::new();
     let mut worker_activity = Vec::new();
@@ -571,11 +589,49 @@ struct ClientWorker<ClientType: StorageApiClient> {
     completed: Arc<Mutex<HashSet<String>>>,
     execution_manager_id: String,
     job_count: usize,
-    poll_batch: usize,
-    poll_wait_ms: u64,
+    worker_poll_batch: usize,
+    worker_poll_wait_ms: u64,
+    scheduler: Option<SchedulerReadyTasksClient>,
     task_sleep_ms: u64,
     session_id: u64,
     stop_requested: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SchedulerReadyTasksClient {
+    http: reqwest::Client,
+    base_url: String,
+    run_id: String,
+}
+
+impl SchedulerReadyTasksClient {
+    pub(crate) fn new(base_url: impl Into<String>, run_id: impl Into<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            run_id: run_id.into(),
+        }
+    }
+
+    async fn poll_ready_tasks(
+        &self,
+        request: PollReadyTasksRequest,
+    ) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
+        self.http
+            .post(format!(
+                "{}/scheduler/runs/{}/ready-tasks",
+                self.base_url, self.run_id
+            ))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| ApiError::internal(format!("scheduler request failed: {err}")))?
+            .error_for_status()
+            .map_err(|err| ApiError::internal(format!("scheduler request failed: {err}")))?
+            .json::<ReadyTasksResponse>()
+            .await
+            .map_err(|err| ApiError::internal(format!("scheduler response decode failed: {err}")))
+    }
 }
 
 struct WorkerRunResult {
@@ -634,33 +690,40 @@ struct SubmitClient<ClientType: StorageApiClient> {
     client: ClientType,
     completed: Arc<Mutex<HashSet<String>>>,
     job_queue: Arc<Mutex<VecDeque<JobPayload>>>,
-    poll_wait_ms: u64,
+    job_poll_wait_ms: u64,
     resource_group_id: String,
+}
+
+#[derive(Clone, Copy)]
+struct WorkerSpawnOptions<'a> {
+    agent_id: &'a str,
+    completed: &'a Arc<Mutex<HashSet<String>>>,
+    job_count: usize,
+    session_id: u64,
+    config: &'a BenchConfig,
+    stop_requested: Option<&'a Arc<AtomicBool>>,
+    scheduler: Option<&'a SchedulerReadyTasksClient>,
 }
 
 fn spawn_worker_tasks<ClientType: StorageApiClient>(
     clients: Vec<ClientType>,
-    agent_id: &str,
-    completed: &Arc<Mutex<HashSet<String>>>,
-    job_count: usize,
-    session_id: u64,
-    config: &BenchConfig,
-    stop_requested: Option<&Arc<AtomicBool>>,
+    options: WorkerSpawnOptions<'_>,
 ) -> JoinSet<anyhow::Result<WorkerRunResult>> {
     let mut workers = JoinSet::new();
     for (worker_index, client) in clients.into_iter().enumerate() {
         workers.spawn(run_client_worker(ClientWorker {
             client,
-            agent_id: agent_id.to_owned(),
+            agent_id: options.agent_id.to_owned(),
             worker_index,
-            completed: Arc::clone(completed),
+            completed: Arc::clone(options.completed),
             execution_manager_id: String::new(),
-            job_count,
-            poll_batch: config.benchmark.poll_batch,
-            poll_wait_ms: config.benchmark.poll_wait_ms,
-            task_sleep_ms: config.benchmark.task_sleep_ms,
-            session_id,
-            stop_requested: stop_requested.cloned(),
+            job_count: options.job_count,
+            worker_poll_batch: options.config.benchmark.worker_poll_batch,
+            worker_poll_wait_ms: options.config.benchmark.worker_poll_wait_ms,
+            scheduler: options.scheduler.cloned(),
+            task_sleep_ms: options.config.benchmark.task_sleep_ms,
+            session_id: options.session_id,
+            stop_requested: options.stop_requested.cloned(),
         }));
     }
     workers
@@ -671,7 +734,7 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
     job_queue: Arc<Mutex<VecDeque<JobPayload>>>,
     completed: &Arc<Mutex<HashSet<String>>>,
     resource_group_id: String,
-    poll_wait_ms: u64,
+    job_poll_wait_ms: u64,
 ) -> anyhow::Result<ClientWorkloadMeasurements> {
     let mut submit_tasks = JoinSet::new();
     for client in clients {
@@ -679,7 +742,7 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
             client,
             completed: Arc::clone(completed),
             job_queue: Arc::clone(&job_queue),
-            poll_wait_ms,
+            job_poll_wait_ms,
             resource_group_id: resource_group_id.clone(),
         }));
     }
@@ -737,7 +800,7 @@ async fn run_submit_client<ClientType: StorageApiClient>(
             &client.client,
             &mut measurements.request_latency,
             &job_id,
-            client.poll_wait_ms,
+            client.job_poll_wait_ms,
         )
         .await?;
         client.completed.lock().await.insert(job_id);
@@ -825,14 +888,15 @@ async fn poll_ready_tasks_for_worker<ClientType: StorageApiClient>(
     activity: &mut WorkerActivityTracker,
 ) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
     let poll_started_at = Instant::now();
+    let request = PollReadyTasksRequest {
+        max_tasks: worker.worker_poll_batch,
+        wait_ms: worker.worker_poll_wait_ms,
+    };
     let (ready, poll_latency) = record_timed_request(
         request_latency_samples,
         "poll_ready_tasks",
         RequestCategory::Blocking,
-        worker.client.poll_ready_tasks(PollReadyTasksRequest {
-            max_tasks: worker.poll_batch,
-            wait_ms: worker.poll_wait_ms,
-        }),
+        poll_ready_tasks(worker, request),
     )
     .await?;
     if ready.tasks.is_empty() {
@@ -841,6 +905,17 @@ async fn poll_ready_tasks_for_worker<ClientType: StorageApiClient>(
         activity.record_valid_request(loop_started_at, poll_started_at, poll_latency);
     }
     Ok(ready)
+}
+
+async fn poll_ready_tasks<ClientType: StorageApiClient>(
+    worker: &ClientWorker<ClientType>,
+    request: PollReadyTasksRequest,
+) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
+    if let Some(scheduler) = &worker.scheduler {
+        scheduler.poll_ready_tasks(request).await
+    } else {
+        worker.client.poll_ready_tasks(request).await
+    }
 }
 
 async fn execute_ready_task<ClientType: StorageApiClient>(
@@ -925,7 +1000,7 @@ async fn monitor_job<ClientType: StorageApiClient>(
     client: &ClientType,
     request_latency_samples: &mut Vec<RequestLatencySample>,
     job_id: &str,
-    poll_wait_ms: u64,
+    job_poll_wait_ms: u64,
 ) -> anyhow::Result<bool> {
     loop {
         let state = record_request(
@@ -940,7 +1015,7 @@ async fn monitor_job<ClientType: StorageApiClient>(
         if is_terminal(&state.state) {
             return Ok(state.state == "Succeeded");
         }
-        tokio::time::sleep(Duration::from_millis(poll_wait_ms)).await;
+        tokio::time::sleep(Duration::from_millis(job_poll_wait_ms)).await;
     }
 }
 
@@ -958,7 +1033,7 @@ where
         .map(|(response, _)| response)
 }
 
-async fn record_timed_request<ResponseType, FutureType>(
+pub(crate) async fn record_timed_request<ResponseType, FutureType>(
     samples: &mut Vec<RequestLatencySample>,
     operation: &'static str,
     category: RequestCategory,
