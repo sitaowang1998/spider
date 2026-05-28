@@ -21,12 +21,15 @@ REQUEST_ORDER = (
     "create_task_instance",
     "get_job_state",
     "get_session",
-    "poll_ready_tasks",
+    "worker_poll_ready_tasks",
+    "scheduler_poll_ready_tasks",
     "register_execution_manager",
     "register_job",
     "start_job",
     "succeed_task_instance",
 )
+WORKER_POLL_OPERATION = "worker_poll_ready_tasks"
+SCHEDULER_STORAGE_POLL_OPERATION = "scheduler_poll_ready_tasks"
 PHASE_ORDER = (
     "db_add",
     "db_register",
@@ -52,6 +55,7 @@ COLORS = {
     "server_total": (0.45, 0.50, 0.56),
     "server_other": (0.52, 0.56, 0.61),
     "client_overhead": (0.91, 0.52, 0.14),
+    "scheduler_response": (0.28, 0.58, 0.76),
 }
 PHASE_COLORS = {
     "db_add": (0.09, 0.44, 0.70),
@@ -208,20 +212,28 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
         for client_row in data["request_latency"]:
             if client_row.get("category") == "phase":
                 continue
-            key = (client_row["category"], client_row["operation"])
-            server_row = server_by_key.get(key)
-            if server_row is None:
-                continue
+            operation = client_row["operation"]
+            server_row = None
+            if operation == "poll_ready_tasks":
+                operation = WORKER_POLL_OPERATION
+            elif operation == "scheduler_poll_ready_tasks":
+                operation = SCHEDULER_STORAGE_POLL_OPERATION
+                server_row = server_by_key.get(("blocking", "poll_ready_tasks"))
+            else:
+                key = (client_row["category"], operation)
+                server_row = server_by_key.get(key)
+                if server_row is None:
+                    continue
             request_metrics.append(
                 RequestMetric(
                     nodes=nodes,
                     protocol=protocol,
                     workload=workload,
                     category=client_row["category"],
-                    operation=client_row["operation"],
+                    operation=operation,
                     count=int(client_row["count"]),
                     client_avg_us=float(client_row["avg_us"]),
-                    server_avg_us=float(server_row["avg_us"]),
+                    server_avg_us=float(server_row["avg_us"]) if server_row is not None else 0.0,
                 )
             )
         for row in data["server_metrics"].get("request_latency", []):
@@ -558,8 +570,8 @@ def draw_request_component_chart(
     paint_background(ctx)
     draw_axes(
         ctx,
-        f"AWS {operation} Latency Components",
-        "Stacked bars show server work and client overhead. Lower is better.",
+        f"AWS {operation_label(operation)} Latency Components",
+        request_chart_subtitle(operation),
         "Milliseconds",
         margin_left,
         margin_top,
@@ -598,11 +610,33 @@ def draw_request_component_chart(
     draw_component_legend(ctx, components, width - margin_right + 30, margin_top)
     draw_note(
         ctx,
-        ["g = gRPC, r = REST", "client overhead = client avg - server avg", "server other = server avg - measured phases"],
+        request_chart_notes(operation),
         width - margin_right + 30,
         height - 118,
     )
     surface.write_to_png(str(output))
+
+
+def operation_label(operation: str) -> str:
+    labels = {
+        WORKER_POLL_OPERATION: "Worker To Scheduler Poll",
+        SCHEDULER_STORAGE_POLL_OPERATION: "Scheduler To Storage Poll",
+    }
+    return labels.get(operation, operation)
+
+
+def request_chart_subtitle(operation: str) -> str:
+    if operation == WORKER_POLL_OPERATION:
+        return "Worker calls to the scheduler cache. No storage-server time is included."
+    if operation == SCHEDULER_STORAGE_POLL_OPERATION:
+        return "Scheduler batch polling against the storage server. Lower is better."
+    return "Stacked bars show server work and client overhead. Lower is better."
+
+
+def request_chart_notes(operation: str) -> list[str]:
+    if operation == WORKER_POLL_OPERATION:
+        return ["g = gRPC, r = REST", "scheduler response = worker-observed scheduler latency"]
+    return ["g = gRPC, r = REST", "client overhead = client avg - server avg", "server other = server avg - measured phases"]
 
 
 def request_component_rows(
@@ -636,11 +670,14 @@ def request_component_rows(
             }
             server_avg_ms = server_avg_us / 1000
             phase_sum = sum(components.values())
-            if components:
+            if operation == WORKER_POLL_OPERATION and server_avg_us == 0:
+                components["scheduler response"] = client_avg_us / 1000
+            elif components:
                 components["server other"] = max(server_avg_ms - phase_sum, 0.0)
             else:
                 components["server total"] = server_avg_ms
-            components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
+            if operation != WORKER_POLL_OPERATION:
+                components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             rows.append(
                 {
                     "nodes": nodes,
@@ -671,7 +708,7 @@ def component_order(rows: list[dict[str, object]]) -> list[str]:
         if float(value) > 0
     }
     ordered = [name for name in PHASE_ORDER if name in names]
-    for name in ("server total", "server other", "client overhead"):
+    for name in ("server total", "server other", "scheduler response", "client overhead"):
         if name in names:
             ordered.append(name)
     return ordered
@@ -836,6 +873,8 @@ def component_color(component: str) -> tuple[float, float, float]:
         return COLORS["server_total"]
     if component == "server other":
         return COLORS["server_other"]
+    if component == "scheduler response":
+        return COLORS["scheduler_response"]
     if component == "client overhead":
         return COLORS["client_overhead"]
     return PHASE_COLORS.get(component, COLORS["server_other"])
@@ -1052,7 +1091,7 @@ def per_request_table(
                 continue
             dominant, value = dominant_component(row["components"])
             lines.append(
-                f"| {protocol} | {operation} | {row['count']} | "
+                f"| {protocol} | {operation_label(operation)} | {row['count']} | "
                 f"{float(row['server_avg_ms']):.3f} | {float(row['client_avg_ms']):.3f} | "
                 f"{dominant} ({value:.3f} ms) |"
             )
@@ -1073,7 +1112,7 @@ def per_request_breakdown_tables(
     for operation in request_operations(request_metrics):
         rows = request_component_rows(operation, request_metrics, phase_metrics)
         components = component_order(rows)
-        lines.extend(["", f"### `{operation}`", ""])
+        lines.extend(["", f"### {operation_label(operation)}", ""])
         header = [
             "Nodes",
             "Protocol",

@@ -105,6 +105,7 @@ async fn run_controller_workload(
             workload,
             target: &target,
             job_count: config.benchmark.job_count,
+            task_count: config.benchmark.task_count,
             flat_percent: config.benchmark.flat_percent,
             run_name: &run_name,
             timeout: Duration::from_secs(distributed.agent_timeout_sec),
@@ -147,6 +148,7 @@ struct AgentDispatch<'a> {
     workload: WorkloadKind,
     target: &'a str,
     job_count: usize,
+    task_count: usize,
     flat_percent: u8,
     run_name: &'a str,
     timeout: Duration,
@@ -173,7 +175,14 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
     )
     .await
     {
-        Ok(report) => report,
+        Ok(report) => {
+            validate_submitter_report(&report, dispatch.job_count)?;
+            println!(
+                "=== submitter complete: jobs={} failed_jobs={} ===",
+                report.job_latency.count, report.job_latency.failed_jobs,
+            );
+            report
+        }
         Err(err) => {
             stop_workers(&http, dispatch.workers, dispatch.run_name).await;
             stop_scheduler(&http, dispatch.scheduler, dispatch.run_name).await;
@@ -195,6 +204,15 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
         .await?;
         reports.push((worker.id.clone(), report));
     }
+    let worker_task_count = worker_task_count(&reports);
+    let expected_task_count = dispatch.job_count * dispatch.task_count;
+    if worker_task_count != expected_task_count {
+        anyhow::bail!(
+            "worker task execution count mismatch: expected {expected_task_count}, got \
+             {worker_task_count}"
+        );
+    }
+    println!("=== workers complete: tasks_executed={worker_task_count} ===");
     if let Some(scheduler) = dispatch.scheduler {
         stop_scheduler(&http, dispatch.scheduler, dispatch.run_name).await;
         let scheduler_run_id = format!("{}_{}", dispatch.run_name, scheduler.id);
@@ -209,6 +227,34 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
         reports.push((scheduler.id.clone(), report));
     }
     Ok(reports)
+}
+
+fn validate_submitter_report(
+    report: &BenchmarkReport,
+    expected_job_count: usize,
+) -> anyhow::Result<()> {
+    if report.job_latency.count != expected_job_count {
+        anyhow::bail!(
+            "submitter job count mismatch: expected {}, got {}",
+            expected_job_count,
+            report.job_latency.count
+        );
+    }
+    if report.job_latency.failed_jobs != 0 {
+        anyhow::bail!(
+            "submitter reported {} failed jobs",
+            report.job_latency.failed_jobs
+        );
+    }
+    Ok(())
+}
+
+fn worker_task_count(reports: &[(String, BenchmarkReport)]) -> usize {
+    reports
+        .iter()
+        .flat_map(|(_, report)| &report.worker_activity_samples)
+        .map(|sample| sample.task_count)
+        .sum()
 }
 
 async fn start_scheduler_agent(

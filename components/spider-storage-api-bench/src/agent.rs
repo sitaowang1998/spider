@@ -1,10 +1,10 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use axum::{
@@ -51,8 +51,8 @@ struct AgentRunRecord {
 }
 
 struct SchedulerQueue {
-    tasks: Mutex<VecDeque<ReadyTaskEntryDto>>,
-    ready: Notify,
+    sender: async_channel::Sender<ReadyTaskEntryDto>,
+    receiver: async_channel::Receiver<ReadyTaskEntryDto>,
     refill: Notify,
 }
 
@@ -124,9 +124,10 @@ async fn start_run(
         None
     };
     let scheduler = if request.role == AgentRole::Scheduler {
+        let (sender, receiver) = async_channel::unbounded();
         Some(Arc::new(SchedulerQueue {
-            tasks: Mutex::new(VecDeque::new()),
-            ready: Notify::new(),
+            sender,
+            receiver,
             refill: Notify::new(),
         }))
     } else {
@@ -256,7 +257,7 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
     let mut request_latency = Vec::new();
     let refill_interval = Duration::from_millis(config.benchmark.scheduler_refill_interval_ms);
     while !stop_requested.load(Ordering::Relaxed) {
-        if scheduler_queue_len(&scheduler).await >= config.benchmark.scheduler_refill_threshold {
+        if scheduler_queue_len(&scheduler) >= config.benchmark.scheduler_refill_threshold {
             tokio::select! {
                 () = scheduler.refill.notified() => {}
                 () = tokio::time::sleep(refill_interval) => {}
@@ -274,19 +275,28 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
         )
         .await?;
         if !ready.tasks.is_empty() {
-            scheduler_push_tasks(&scheduler, ready.tasks).await;
+            scheduler_push_tasks(&scheduler, ready.tasks).await?;
         }
     }
     Ok(request_latency)
 }
 
-async fn scheduler_queue_len(scheduler: &SchedulerQueue) -> usize {
-    scheduler.tasks.lock().await.len()
+fn scheduler_queue_len(scheduler: &SchedulerQueue) -> usize {
+    scheduler.receiver.len()
 }
 
-async fn scheduler_push_tasks(scheduler: &SchedulerQueue, tasks: Vec<ReadyTaskEntryDto>) {
-    scheduler.tasks.lock().await.extend(tasks);
-    scheduler.ready.notify_waiters();
+async fn scheduler_push_tasks(
+    scheduler: &SchedulerQueue,
+    tasks: Vec<ReadyTaskEntryDto>,
+) -> anyhow::Result<()> {
+    for task in tasks {
+        scheduler
+            .sender
+            .send(task)
+            .await
+            .map_err(|_| anyhow::anyhow!("scheduler ready-task queue is closed"))?;
+    }
+    Ok(())
 }
 
 async fn run_submitter_report(
@@ -460,26 +470,39 @@ async fn scheduler_poll_ready_tasks(
     max_tasks: usize,
     wait: Duration,
 ) -> ReadyTasksResponse {
-    let deadline = Instant::now() + wait;
-    loop {
-        let tasks = scheduler_take_tasks(scheduler, max_tasks).await;
-        if !tasks.is_empty() || wait.is_zero() || Instant::now() >= deadline {
-            scheduler.refill.notify_one();
-            return ReadyTasksResponse { tasks };
-        }
+    if max_tasks == 0 {
         scheduler.refill.notify_one();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let _ = tokio::time::timeout(remaining, scheduler.ready.notified()).await;
+        return ReadyTasksResponse { tasks: Vec::new() };
     }
+
+    let mut tasks = scheduler_drain_available_tasks(scheduler, max_tasks);
+    if tasks.is_empty() && !wait.is_zero() {
+        scheduler.refill.notify_one();
+        if let Ok(Ok(task)) = tokio::time::timeout(wait, scheduler.receiver.recv()).await {
+            tasks.push(task);
+            tasks.extend(scheduler_drain_available_tasks(
+                scheduler,
+                max_tasks - tasks.len(),
+            ));
+        }
+    }
+
+    scheduler.refill.notify_one();
+    ReadyTasksResponse { tasks }
 }
 
-async fn scheduler_take_tasks(
+fn scheduler_drain_available_tasks(
     scheduler: &SchedulerQueue,
     max_tasks: usize,
 ) -> Vec<ReadyTaskEntryDto> {
-    let mut queue = scheduler.tasks.lock().await;
-    let count = max_tasks.min(queue.len());
-    queue.drain(..count).collect()
+    let mut tasks = Vec::with_capacity(max_tasks);
+    while tasks.len() < max_tasks {
+        match scheduler.receiver.try_recv() {
+            Ok(task) => tasks.push(task),
+            Err(async_channel::TryRecvError::Empty | async_channel::TryRecvError::Closed) => break,
+        }
+    }
+    tasks
 }
 
 async fn stop_run(

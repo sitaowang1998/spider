@@ -2321,6 +2321,7 @@ name = "spider-storage-api-bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-trait",
  "axum",
  "base64",

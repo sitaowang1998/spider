@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.98"
+async-channel = "2.3.1"
 async-trait = "0.1.89"
 axum = "0.7.9"
 base64 = "0.22.1"
