@@ -19,6 +19,8 @@ use spider_storage_api_bench::{
         GetSessionRequest,
         JobIdRequest,
         PollReadyTasksRequest,
+        ReadyTaskEntryDto,
+        ReadyTasksResponse,
         RegisterExecutionManagerRequest,
         RegisterJobRequest,
         StartMetricsSessionRequest,
@@ -139,8 +141,28 @@ pub(crate) struct BenchmarkReport {
     pub(crate) job_latency_samples: Vec<JobLatencySample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) request_latency_samples: Vec<RequestLatencySample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) worker_activity_samples: Vec<WorkerActivitySample>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) distributed: Option<distributed::DistributedReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct WorkerActivitySample {
+    pub(crate) agent_id: String,
+    pub(crate) worker_index: usize,
+    pub(crate) execution_manager_id: String,
+    pub(crate) task_count: usize,
+    pub(crate) first_valid_request_start_us: Option<u128>,
+    pub(crate) last_valid_request_end_us: Option<u128>,
+    pub(crate) first_task_execution_start_us: Option<u128>,
+    pub(crate) last_task_execution_end_us: Option<u128>,
+    pub(crate) active_window_us: u128,
+    pub(crate) task_execution_us: u128,
+    pub(crate) request_us: u128,
+    pub(crate) idle_us: u128,
+    pub(crate) empty_poll_us: u128,
+    pub(crate) empty_poll_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,12 +190,14 @@ pub(crate) struct BenchmarkSetup {
 struct WorkloadMeasurements {
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
+    worker_activity: Vec<WorkerActivitySample>,
     server_metrics: ServerMetricsSessionReport,
 }
 
 pub(crate) struct ClientWorkloadMeasurements {
     job_latency: Vec<JobLatencySample>,
     request_latency: Vec<RequestLatencySample>,
+    worker_activity: Vec<WorkerActivitySample>,
 }
 
 pub(crate) struct PreparedWorkload {
@@ -296,6 +320,7 @@ pub(crate) async fn run_client_report(
         server_metrics: measurements.server_metrics,
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
+        worker_activity_samples: measurements.worker_activity,
         distributed: None,
     })
 }
@@ -378,6 +403,7 @@ async fn run_measured_workload<ClientType: StorageApiClient>(
     Ok(WorkloadMeasurements {
         job_latency: client_measurements.job_latency,
         request_latency: client_measurements.request_latency,
+        worker_activity: client_measurements.worker_activity,
         server_metrics,
     })
 }
@@ -416,6 +442,7 @@ async fn run_workload<ClientType: StorageApiClient>(
     let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
     let mut worker_tasks = spawn_worker_tasks(
         worker_clients,
+        "local",
         &completed,
         config.benchmark.job_count,
         prepared.session_id,
@@ -438,7 +465,9 @@ async fn run_workload<ClientType: StorageApiClient>(
         }
     };
     while let Some(result) = worker_tasks.join_next().await {
-        prepared.request_latency.extend(result??);
+        let result = result??;
+        prepared.request_latency.extend(result.request_latency);
+        measurements.worker_activity.push(result.worker_activity);
     }
     prepared
         .request_latency
@@ -446,6 +475,7 @@ async fn run_workload<ClientType: StorageApiClient>(
     Ok(ClientWorkloadMeasurements {
         job_latency: measurements.job_latency,
         request_latency: prepared.request_latency,
+        worker_activity: measurements.worker_activity,
     })
 }
 
@@ -505,6 +535,7 @@ pub(crate) async fn run_submitter_workload<ClientType: StorageApiClient>(
 
 pub(crate) async fn run_worker_workload<ClientType: StorageApiClient>(
     clients: Vec<ClientType>,
+    agent_id: String,
     session_id: u64,
     config: &BenchConfig,
     stop_requested: Arc<AtomicBool>,
@@ -512,6 +543,7 @@ pub(crate) async fn run_worker_workload<ClientType: StorageApiClient>(
     let completed = Arc::new(Mutex::new(HashSet::new()));
     let mut worker_tasks = spawn_worker_tasks(
         clients,
+        &agent_id,
         &completed,
         usize::MAX,
         session_id,
@@ -519,17 +551,23 @@ pub(crate) async fn run_worker_workload<ClientType: StorageApiClient>(
         Some(&stop_requested),
     );
     let mut request_latency = Vec::new();
+    let mut worker_activity = Vec::new();
     while let Some(result) = worker_tasks.join_next().await {
-        request_latency.extend(result??);
+        let result = result??;
+        request_latency.extend(result.request_latency);
+        worker_activity.push(result.worker_activity);
     }
     Ok(ClientWorkloadMeasurements {
         job_latency: Vec::new(),
         request_latency,
+        worker_activity,
     })
 }
 
 struct ClientWorker<ClientType: StorageApiClient> {
     client: ClientType,
+    agent_id: String,
+    worker_index: usize,
     completed: Arc<Mutex<HashSet<String>>>,
     execution_manager_id: String,
     job_count: usize,
@@ -538,6 +576,58 @@ struct ClientWorker<ClientType: StorageApiClient> {
     task_sleep_ms: u64,
     session_id: u64,
     stop_requested: Option<Arc<AtomicBool>>,
+}
+
+struct WorkerRunResult {
+    request_latency: Vec<RequestLatencySample>,
+    worker_activity: WorkerActivitySample,
+}
+
+#[derive(Default)]
+struct WorkerActivityTracker {
+    first_valid_request_start_us: Option<u128>,
+    last_valid_request_end_us: Option<u128>,
+    first_task_execution_start_us: Option<u128>,
+    last_task_execution_end_us: Option<u128>,
+    task_count: usize,
+    task_execution_us: u128,
+    request_us: u128,
+    empty_poll_us: u128,
+    empty_poll_count: usize,
+    pending_empty_poll_us: u128,
+    pending_empty_poll_count: usize,
+}
+
+impl WorkerActivityTracker {
+    fn record_valid_request(
+        &mut self,
+        loop_started_at: Instant,
+        request_started_at: Instant,
+        latency: Duration,
+    ) {
+        let request_start_us = duration_micros(request_started_at.duration_since(loop_started_at));
+        self.first_valid_request_start_us
+            .get_or_insert(request_start_us);
+        self.empty_poll_us += self.pending_empty_poll_us;
+        self.empty_poll_count += self.pending_empty_poll_count;
+        self.pending_empty_poll_us = 0;
+        self.pending_empty_poll_count = 0;
+        self.request_us += duration_micros(latency);
+        self.last_valid_request_end_us = Some(duration_micros(loop_started_at.elapsed()));
+    }
+
+    const fn record_empty_poll(&mut self, latency: Duration) {
+        if self.first_valid_request_start_us.is_some() {
+            self.pending_empty_poll_count += 1;
+            self.pending_empty_poll_us += duration_micros(latency);
+        }
+    }
+
+    fn active_window_us(&self) -> u128 {
+        self.first_valid_request_start_us
+            .zip(self.last_valid_request_end_us)
+            .map_or(0, |(start_us, end_us)| end_us.saturating_sub(start_us))
+    }
 }
 
 struct SubmitClient<ClientType: StorageApiClient> {
@@ -550,16 +640,19 @@ struct SubmitClient<ClientType: StorageApiClient> {
 
 fn spawn_worker_tasks<ClientType: StorageApiClient>(
     clients: Vec<ClientType>,
+    agent_id: &str,
     completed: &Arc<Mutex<HashSet<String>>>,
     job_count: usize,
     session_id: u64,
     config: &BenchConfig,
     stop_requested: Option<&Arc<AtomicBool>>,
-) -> JoinSet<anyhow::Result<Vec<RequestLatencySample>>> {
+) -> JoinSet<anyhow::Result<WorkerRunResult>> {
     let mut workers = JoinSet::new();
-    for client in clients {
+    for (worker_index, client) in clients.into_iter().enumerate() {
         workers.spawn(run_client_worker(ClientWorker {
             client,
+            agent_id: agent_id.to_owned(),
+            worker_index,
             completed: Arc::clone(completed),
             execution_manager_id: String::new(),
             job_count,
@@ -593,6 +686,7 @@ async fn run_submit_clients<ClientType: StorageApiClient>(
     let mut measurements = ClientWorkloadMeasurements {
         job_latency: Vec::new(),
         request_latency: Vec::new(),
+        worker_activity: Vec::new(),
     };
     while let Some(result) = submit_tasks.join_next().await {
         let mut task_measurements = result??;
@@ -612,6 +706,7 @@ async fn run_submit_client<ClientType: StorageApiClient>(
     let mut measurements = ClientWorkloadMeasurements {
         job_latency: Vec::new(),
         request_latency: Vec::new(),
+        worker_activity: Vec::new(),
     };
     while let Some(job) = pop_job(&client.job_queue).await {
         let job_id = record_request(
@@ -658,9 +753,12 @@ async fn run_submit_client<ClientType: StorageApiClient>(
 
 async fn run_client_worker<ClientType: StorageApiClient>(
     mut worker: ClientWorker<ClientType>,
-) -> anyhow::Result<Vec<RequestLatencySample>> {
+) -> anyhow::Result<WorkerRunResult> {
     let mut request_latency_samples = Vec::new();
-    worker.execution_manager_id = record_request(
+    let loop_started_at = Instant::now();
+    let mut activity = WorkerActivityTracker::default();
+    let register_started_at = Instant::now();
+    let (execution_manager, register_latency) = record_timed_request(
         &mut request_latency_samples,
         "register_execution_manager",
         RequestCategory::NonBlocking,
@@ -670,59 +768,144 @@ async fn run_client_worker<ClientType: StorageApiClient>(
                 ip_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             }),
     )
-    .await?
-    .execution_manager_id;
+    .await?;
+    activity.record_valid_request(loop_started_at, register_started_at, register_latency);
+    worker.execution_manager_id = execution_manager.execution_manager_id;
     let outputs = TaskOutputsSerializer::from_tuple(&(Vec::<u8>::new(),))?;
     while should_worker_continue(&worker).await {
-        let ready = record_request(
+        let ready = poll_ready_tasks_for_worker(
+            &worker,
+            loop_started_at,
             &mut request_latency_samples,
-            "poll_ready_tasks",
-            RequestCategory::Blocking,
-            worker.client.poll_ready_tasks(PollReadyTasksRequest {
-                max_tasks: worker.poll_batch,
-                wait_ms: worker.poll_wait_ms,
-            }),
+            &mut activity,
         )
         .await?;
         if ready.tasks.is_empty() {
             continue;
         }
         for task in ready.tasks {
-            let context = record_request(
+            execute_ready_task(
+                &worker,
+                task,
+                &outputs,
+                loop_started_at,
                 &mut request_latency_samples,
-                "create_task_instance",
-                RequestCategory::NonBlocking,
-                worker
-                    .client
-                    .create_task_instance(CreateTaskInstanceRequest {
-                        session_id: worker.session_id,
-                        job_id: task.job_id.clone(),
-                        task_id: spider_storage_api_bench::api::TaskIdDto::Index {
-                            task_index: task.task_index,
-                        },
-                        execution_manager_id: worker.execution_manager_id.clone(),
-                    }),
-            )
-            .await?;
-            tokio::time::sleep(Duration::from_millis(worker.task_sleep_ms)).await;
-            record_request(
-                &mut request_latency_samples,
-                "succeed_task_instance",
-                RequestCategory::NonBlocking,
-                worker
-                    .client
-                    .succeed_task_instance(SucceedTaskInstanceRequest {
-                        session_id: worker.session_id,
-                        job_id: task.job_id,
-                        task_instance_id: context.task_instance_id,
-                        task_index: task.task_index,
-                        serialized_outputs: outputs.clone(),
-                    }),
+                &mut activity,
             )
             .await?;
         }
     }
-    Ok(request_latency_samples)
+    let active_window_us = activity.active_window_us();
+    let idle_us = active_window_us.saturating_sub(activity.request_us + activity.task_execution_us);
+    Ok(WorkerRunResult {
+        request_latency: request_latency_samples,
+        worker_activity: WorkerActivitySample {
+            agent_id: worker.agent_id,
+            worker_index: worker.worker_index,
+            execution_manager_id: worker.execution_manager_id,
+            task_count: activity.task_count,
+            first_valid_request_start_us: activity.first_valid_request_start_us,
+            last_valid_request_end_us: activity.last_valid_request_end_us,
+            first_task_execution_start_us: activity.first_task_execution_start_us,
+            last_task_execution_end_us: activity.last_task_execution_end_us,
+            active_window_us,
+            task_execution_us: activity.task_execution_us,
+            request_us: activity.request_us,
+            idle_us,
+            empty_poll_us: activity.empty_poll_us,
+            empty_poll_count: activity.empty_poll_count,
+        },
+    })
+}
+
+async fn poll_ready_tasks_for_worker<ClientType: StorageApiClient>(
+    worker: &ClientWorker<ClientType>,
+    loop_started_at: Instant,
+    request_latency_samples: &mut Vec<RequestLatencySample>,
+    activity: &mut WorkerActivityTracker,
+) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
+    let poll_started_at = Instant::now();
+    let (ready, poll_latency) = record_timed_request(
+        request_latency_samples,
+        "poll_ready_tasks",
+        RequestCategory::Blocking,
+        worker.client.poll_ready_tasks(PollReadyTasksRequest {
+            max_tasks: worker.poll_batch,
+            wait_ms: worker.poll_wait_ms,
+        }),
+    )
+    .await?;
+    if ready.tasks.is_empty() {
+        activity.record_empty_poll(poll_latency);
+    } else {
+        activity.record_valid_request(loop_started_at, poll_started_at, poll_latency);
+    }
+    Ok(ready)
+}
+
+async fn execute_ready_task<ClientType: StorageApiClient>(
+    worker: &ClientWorker<ClientType>,
+    task: ReadyTaskEntryDto,
+    outputs: &[u8],
+    loop_started_at: Instant,
+    request_latency_samples: &mut Vec<RequestLatencySample>,
+    activity: &mut WorkerActivityTracker,
+) -> spider_storage_api_bench::api::ApiResult<()> {
+    let create_started_at = Instant::now();
+    let (context, create_latency) = record_timed_request(
+        request_latency_samples,
+        "create_task_instance",
+        RequestCategory::NonBlocking,
+        worker
+            .client
+            .create_task_instance(CreateTaskInstanceRequest {
+                session_id: worker.session_id,
+                job_id: task.job_id.clone(),
+                task_id: spider_storage_api_bench::api::TaskIdDto::Index {
+                    task_index: task.task_index,
+                },
+                execution_manager_id: worker.execution_manager_id.clone(),
+            }),
+    )
+    .await?;
+    activity.record_valid_request(loop_started_at, create_started_at, create_latency);
+    record_task_execution(worker.task_sleep_ms, loop_started_at, activity).await;
+    let succeed_started_at = Instant::now();
+    let (_state, succeed_latency) = record_timed_request(
+        request_latency_samples,
+        "succeed_task_instance",
+        RequestCategory::NonBlocking,
+        worker
+            .client
+            .succeed_task_instance(SucceedTaskInstanceRequest {
+                session_id: worker.session_id,
+                job_id: task.job_id,
+                task_instance_id: context.task_instance_id,
+                task_index: task.task_index,
+                serialized_outputs: outputs.to_vec(),
+            }),
+    )
+    .await?;
+    activity.record_valid_request(loop_started_at, succeed_started_at, succeed_latency);
+    Ok(())
+}
+
+async fn record_task_execution(
+    task_sleep_ms: u64,
+    loop_started_at: Instant,
+    activity: &mut WorkerActivityTracker,
+) {
+    let task_execution_started_at = Instant::now();
+    let task_execution_start_us =
+        duration_micros(task_execution_started_at.duration_since(loop_started_at));
+    activity
+        .first_task_execution_start_us
+        .get_or_insert(task_execution_start_us);
+    tokio::time::sleep(Duration::from_millis(task_sleep_ms)).await;
+    let task_execution_latency = task_execution_started_at.elapsed();
+    activity.task_count += 1;
+    activity.task_execution_us += duration_micros(task_execution_latency);
+    activity.last_task_execution_end_us = Some(duration_micros(loop_started_at.elapsed()));
 }
 
 async fn should_worker_continue<ClientType: StorageApiClient>(
@@ -770,6 +953,20 @@ async fn record_request<ResponseType, FutureType>(
 where
     FutureType:
         std::future::Future<Output = spider_storage_api_bench::api::ApiResult<ResponseType>>, {
+    record_timed_request(samples, operation, category, future)
+        .await
+        .map(|(response, _)| response)
+}
+
+async fn record_timed_request<ResponseType, FutureType>(
+    samples: &mut Vec<RequestLatencySample>,
+    operation: &'static str,
+    category: RequestCategory,
+    future: FutureType,
+) -> spider_storage_api_bench::api::ApiResult<(ResponseType, Duration)>
+where
+    FutureType:
+        std::future::Future<Output = spider_storage_api_bench::api::ApiResult<ResponseType>>, {
     let start_time = Instant::now();
     let result = future.await;
     let latency = start_time.elapsed();
@@ -778,7 +975,11 @@ where
     } else {
         RequestLatencySample::failure(operation, category, latency)
     });
-    result
+    result.map(|response| (response, latency))
+}
+
+const fn duration_micros(duration: Duration) -> u128 {
+    duration.as_micros()
 }
 
 async fn pop_job(job_queue: &Arc<Mutex<VecDeque<JobPayload>>>) -> Option<JobPayload> {
@@ -924,6 +1125,7 @@ mod tests {
             },
             job_latency_samples: Vec::new(),
             request_latency_samples: Vec::new(),
+            worker_activity_samples: Vec::new(),
             distributed: None,
         };
 

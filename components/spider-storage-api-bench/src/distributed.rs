@@ -121,10 +121,12 @@ pub fn merge_agent_reports(
 ) -> BenchmarkReport {
     let mut job_samples = Vec::new();
     let mut request_samples = controller_request_samples;
+    let mut worker_activity_samples = Vec::new();
 
     for (_, report) in &agent_reports {
         job_samples.extend(report.job_latency_samples.iter().cloned());
         request_samples.extend(report.request_latency_samples.iter().cloned());
+        worker_activity_samples.extend(report.worker_activity_samples.iter().cloned());
     }
 
     let job_latency = if job_samples.is_empty() {
@@ -153,6 +155,7 @@ pub fn merge_agent_reports(
         server_metrics,
         job_latency_samples: job_samples,
         request_latency_samples: request_samples,
+        worker_activity_samples,
         distributed: Some(DistributedReport {
             agent_count: agents.len(),
             agents,

@@ -204,6 +204,7 @@ async fn run_submitter_report(
         server_metrics: crate::empty_server_metrics_report(),
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
+        worker_activity_samples: measurements.worker_activity,
         distributed: None,
     })
 }
@@ -228,6 +229,7 @@ async fn run_worker_report(
                 spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
             run_worker_workload(
                 vec![client; config.benchmark.worker_count],
+                state.agent_id.clone(),
                 session_id,
                 &config,
                 stop_requested,
@@ -237,7 +239,14 @@ async fn run_worker_report(
         spider_storage_api_bench::server::ServerProtocol::Grpc => {
             let clients =
                 crate::connect_grpc_clients(&request.target, config.benchmark.worker_count).await?;
-            run_worker_workload(clients, session_id, &config, stop_requested).await?
+            run_worker_workload(
+                clients,
+                state.agent_id.clone(),
+                session_id,
+                &config,
+                stop_requested,
+            )
+            .await?
         }
     };
     Ok(BenchmarkReport {
@@ -254,6 +263,7 @@ async fn run_worker_report(
         server_metrics: crate::empty_server_metrics_report(),
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
+        worker_activity_samples: measurements.worker_activity,
         distributed: None,
     })
 }
