@@ -84,6 +84,8 @@ class Run:
     request_count: int
     client_request_avg_us: float
     server_request_avg_us: float
+    worker_activity_count: int
+    worker_idle_avg_pct: float
 
     @property
     def runtime_s(self) -> float:
@@ -243,6 +245,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             for row in data["server_metrics"].get("request_latency", [])
             if row.get("category") != "phase"
         )
+        worker_activity_count, worker_idle_avg_pct = average_worker_idle_pct(data)
         runs.append(
             Run(
                 nodes=nodes,
@@ -259,6 +262,8 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                 request_count=request_count,
                 client_request_avg_us=client_avg,
                 server_request_avg_us=server_avg,
+                worker_activity_count=worker_activity_count,
+                worker_idle_avg_pct=worker_idle_avg_pct,
             )
         )
     return (
@@ -300,6 +305,24 @@ def average_job_latency_us(data: dict[str, object]) -> float:
     if isinstance(latency, dict) and "p50_us" in latency:
         return float(latency["p50_us"])
     return 0.0
+
+
+def average_worker_idle_pct(data: dict[str, object]) -> tuple[int, float]:
+    samples = data.get("worker_activity_samples", [])
+    if not isinstance(samples, list):
+        return 0, 0.0
+    idle_percentages = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        active_window_us = int(sample.get("active_window_us", 0))
+        if active_window_us <= 0:
+            continue
+        idle_us = int(sample.get("idle_us", 0))
+        idle_percentages.append(100 * idle_us / active_window_us)
+    if not idle_percentages:
+        return 0, 0.0
+    return len(idle_percentages), sum(idle_percentages) / len(idle_percentages)
 
 
 def request_operations(metrics: list[RequestMetric]) -> list[str]:
@@ -885,6 +908,7 @@ def write_report(
     lines.extend(throughput_table(runs))
     lines.extend(speedup_table(runs))
     lines.extend(e2e_table(runs))
+    lines.extend(worker_idle_table(runs))
     lines.extend(request_latency_table(runs))
     lines.extend(per_request_table(request_metrics, phase_metrics))
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -960,6 +984,28 @@ def e2e_table(runs: list[Run]) -> list[str]:
             f"{latency['p50_us'] / 1_000_000:.3f} | "
             f"{latency['p90_us'] / 1_000_000:.3f} | {latency['p99_us'] / 1_000_000:.3f} | "
             f"{latency['max_us'] / 1_000_000:.3f} |"
+        )
+    return lines
+
+
+def worker_idle_table(runs: list[Run]) -> list[str]:
+    lines = ["", "## Worker Idle Time", ""]
+    lines.append(
+        "Idle percentage is the average across workers with at least one valid request window. "
+        "The window starts at the first valid request and ends at the last valid request; "
+        "empty polls inside that window count as idle."
+    )
+    lines.extend(
+        [
+            "",
+            "| Nodes | Protocol | Workers sampled | Avg worker idle |",
+            "|---:|---|---:|---:|",
+        ]
+    )
+    for run in sorted(runs, key=lambda row: (row.nodes, row.protocol)):
+        lines.append(
+            f"| {run.nodes} | {run.protocol} | {run.worker_activity_count} | "
+            f"{run.worker_idle_avg_pct:.1f}% |"
         )
     return lines
 

@@ -23,7 +23,7 @@ poll_wait_ms = 1
 worker_count = 64
 worker_type = "c7i.xlarge"
 submitter_type = "c7i.xlarge"
-server_type = "r7i.4xlarge"
+server_type = "r7i.48xlarge"
 controller_type = "c7i.large"
 # Optional override for the benchmark-node AMI. Leave as ami-xxxxxxxx to use
 # .aws-bench/ami/latest.json written by build_ami.py.
@@ -38,8 +38,8 @@ name = "spider_db"
 username = "spider_user"
 password = "spider-storage-pwd"
 port = 3306
-instance_class = "db.r7i.4xlarge"
-allocated_storage = 200
+instance_class = "db.r7i.48xlarge"
+allocated_storage = 400
 storage_type = "gp3"
 max_connections = 256
 ssl_mode = "preferred"
@@ -72,5 +72,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "server-48x"
+s3_folder_name = "poll-gp3-400"
 remote_data_dir = "/var/lib/spider-bench/data"
