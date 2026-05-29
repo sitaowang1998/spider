@@ -76,5 +76,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "mpmc"
+s3_folder_name = "http2"
 remote_data_dir = "/var/lib/spider-bench/data"

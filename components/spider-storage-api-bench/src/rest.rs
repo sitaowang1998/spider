@@ -296,7 +296,12 @@ impl RestStorageApiClient {
         Ok(Self {
             base_url: Url::parse(base_url)
                 .map_err(|e| ApiError::bad_request(format!("invalid REST target: {e}")))?,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .http2_prior_knowledge()
+                .build()
+                .map_err(|e| {
+                    ApiError::internal(format!("failed to build REST HTTP/2 client: {e}"))
+                })?,
         })
     }
 
@@ -507,8 +512,16 @@ impl StorageApiClient for RestStorageApiClient {
 
 #[cfg(test)]
 mod tests {
-    use axum::{http::StatusCode, response::IntoResponse};
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode, Version},
+        response::IntoResponse,
+        routing::get,
+    };
+    use tokio::net::TcpListener;
 
+    use super::RestStorageApiClient;
     use crate::api::{ApiError, ErrorCode};
 
     #[test]
@@ -520,5 +533,41 @@ mod tests {
         }
         .into_response();
         assert_eq!(StatusCode::BAD_REQUEST, response.status());
+    }
+
+    #[tokio::test]
+    async fn rest_client_uses_http2_prior_knowledge() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test listener should have local address");
+        let app = Router::new().route("/version", get(version));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test axum server should run");
+        });
+
+        let client = RestStorageApiClient::new(&format!("http://{addr}"))
+            .expect("REST client should be created");
+        let url = client
+            .base_url
+            .join("version")
+            .expect("test URL path should be valid");
+        let response = client
+            .client
+            .get(url)
+            .send()
+            .await
+            .expect("HTTP/2 request should succeed");
+        assert_eq!(Version::HTTP_2, response.version());
+
+        server.abort();
+    }
+
+    async fn version(_request: Request<Body>) -> StatusCode {
+        StatusCode::NO_CONTENT
     }
 }

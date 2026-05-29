@@ -773,11 +773,8 @@ def request_component_rows(
             server_avg_ms = server_avg_us / 1000
             phase_sum = sum(components.values())
             if operation == WORKER_POLL_OPERATION:
-                if server_avg_us > 0:
-                    components["scheduler response"] = server_avg_ms
-                    components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
-                else:
-                    components["scheduler response"] = client_avg_us / 1000
+                components["scheduler response"] = server_avg_ms
+                components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             elif components:
                 components["server other"] = max(server_avg_ms - phase_sum, 0.0)
             else:
