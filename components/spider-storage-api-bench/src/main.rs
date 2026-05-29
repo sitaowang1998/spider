@@ -913,16 +913,24 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
     activity: &mut WorkerActivityTracker,
 ) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
     let poll_started_at = Instant::now();
-    let (task, poll_latency) = record_timed_request(
-        request_latency_samples,
-        "poll_ready_tasks",
-        RequestCategory::Blocking,
-        poll_ready_task(worker),
-    )
-    .await?;
+    let result = poll_ready_task(worker).await;
+    let poll_latency = poll_started_at.elapsed();
+    if result.is_err() {
+        request_latency_samples.push(RequestLatencySample::failure(
+            "poll_ready_tasks",
+            RequestCategory::Blocking,
+            poll_latency,
+        ));
+    }
+    let task = result?;
     if task.is_none() {
         activity.record_empty_poll(poll_latency);
     } else {
+        request_latency_samples.push(RequestLatencySample::success(
+            "poll_ready_tasks",
+            RequestCategory::Blocking,
+            poll_latency,
+        ));
         activity.record_valid_request(loop_started_at, poll_started_at, poll_latency);
     }
     Ok(task)

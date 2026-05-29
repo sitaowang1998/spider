@@ -452,15 +452,17 @@ async fn poll_scheduler_ready_tasks(
     };
     let start_time = Instant::now();
     let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
-    scheduler
-        .worker_poll_latency
-        .lock()
-        .await
-        .push(RequestLatencySample::success(
-            "worker_poll_ready_tasks",
-            RequestCategory::Blocking,
-            start_time.elapsed(),
-        ));
+    if task.is_some() {
+        scheduler
+            .worker_poll_latency
+            .lock()
+            .await
+            .push(RequestLatencySample::success(
+                "worker_poll_ready_tasks",
+                RequestCategory::Blocking,
+                start_time.elapsed(),
+            ));
+    }
     Ok(Json(SchedulerReadyTaskResponse { task }))
 }
 
