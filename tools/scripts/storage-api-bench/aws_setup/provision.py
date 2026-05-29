@@ -784,6 +784,9 @@ def launch_role(
     if config.instances.key_name is not None:
         command.extend(["--key-name", config.instances.key_name])
     data = client.run_json(command)
+    if client.dry_run:
+        subnet_suffix = subnet_id.replace("_", "-")
+        return [f"i-dryrun-{role}-{subnet_suffix}-{index}" for index in range(count)]
     return instance_ids_from_run_instances(data)
 
 

@@ -393,6 +393,32 @@ class AmiTest(unittest.TestCase):
         self.assertEqual([11, 11, 11, 11, 10, 10], counts)
         self.assertEqual(config.network.worker_subnet_ids, subnets)
 
+    def test_dry_run_launch_instances_records_synthetic_instance_ids(self):
+        provision = load_module("provision")
+        config_module = load_module("config")
+        client = FakeProvisionAwsCli()
+        client.dry_run = True
+        config = config_module.AwsBenchConfig()
+        config.instances.worker_count = 2
+        config.instances.ami_id = "ami-test"
+        config.network.security_group_id = "sg-test"
+        config.network.subnet_id = "subnet-1"
+        config.network.rds_subnet_ids = ["subnet-1", "subnet-2"]
+
+        instance_ids = provision.launch_instances(client, config)
+
+        self.assertEqual(
+            [
+                "i-dryrun-storage-server-subnet-1-0",
+                "i-dryrun-controller-subnet-1-0",
+                "i-dryrun-benchmark-submitter-subnet-1-0",
+                "i-dryrun-benchmark-scheduler-subnet-1-0",
+                "i-dryrun-benchmark-worker-subnet-1-0",
+                "i-dryrun-benchmark-worker-subnet-2-0",
+            ],
+            instance_ids,
+        )
+
 
 def create_runtime_tree(root: pathlib.Path) -> None:
     build_ami = load_module("build_ami")
