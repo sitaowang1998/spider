@@ -46,8 +46,6 @@ def main() -> int:
                 str(args.submitter_count),
                 "--worker-count",
                 str(args.worker_count),
-                "--worker-poll-batch",
-                str(args.worker_poll_batch),
                 "--worker-poll-wait-ms",
                 str(args.worker_poll_wait_ms),
                 "--job-poll-wait-ms",
@@ -109,7 +107,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-sleep-ms", type=int, default=3)
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
-    parser.add_argument("--worker-poll-batch", type=int, default=64)
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
     parser.add_argument("--scheduler-poll-batch", type=int, default=1024)

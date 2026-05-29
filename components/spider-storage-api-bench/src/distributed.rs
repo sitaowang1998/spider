@@ -328,7 +328,6 @@ mod tests {
             client_count: 1,
             worker_count: 1,
             channel_count: 1,
-            worker_poll_batch: 1,
             worker_poll_wait_ms: 1,
             job_poll_wait_ms: 1,
             scheduler_poll_batch: 1,

@@ -95,8 +95,6 @@ def build_matrix_command(
         str(config.benchmark.submitter_count),
         "--worker-count",
         str(config.benchmark.worker_count),
-        "--worker-poll-batch",
-        str(config.benchmark.worker_poll_batch),
         "--worker-poll-wait-ms",
         str(config.benchmark.worker_poll_wait_ms),
         "--job-poll-wait-ms",

@@ -21,7 +21,6 @@ use spider_storage_api_bench::{
         JobIdRequest,
         PollReadyTasksRequest,
         ReadyTaskEntryDto,
-        ReadyTasksResponse,
         RegisterExecutionManagerRequest,
         RegisterJobRequest,
         StartMetricsSessionRequest,
@@ -181,7 +180,6 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) client_count: usize,
     pub(crate) worker_count: usize,
     pub(crate) channel_count: usize,
-    pub(crate) worker_poll_batch: usize,
     pub(crate) worker_poll_wait_ms: u64,
     pub(crate) job_poll_wait_ms: u64,
     pub(crate) scheduler_poll_batch: usize,
@@ -373,7 +371,6 @@ impl BenchmarkSetup {
             client_count: config.benchmark.client_count,
             worker_count: config.benchmark.worker_count,
             channel_count: total_connection_count(config),
-            worker_poll_batch: config.benchmark.worker_poll_batch,
             worker_poll_wait_ms: config.benchmark.worker_poll_wait_ms,
             job_poll_wait_ms: config.benchmark.job_poll_wait_ms,
             scheduler_poll_batch: config.benchmark.scheduler_poll_batch,
@@ -608,7 +605,6 @@ struct ClientWorker<ClientType: StorageApiClient> {
     completed: Arc<Mutex<HashSet<String>>>,
     execution_manager_id: String,
     job_count: usize,
-    worker_poll_batch: usize,
     worker_poll_wait_ms: u64,
     scheduler: Option<SchedulerReadyTasksClient>,
     task_sleep_ms: u64,
@@ -632,25 +628,39 @@ impl SchedulerReadyTasksClient {
         }
     }
 
-    async fn poll_ready_tasks(
+    async fn poll_ready_task(
         &self,
-        request: PollReadyTasksRequest,
-    ) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
-        self.http
+        wait_ms: u64,
+    ) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
+        let response = self
+            .http
             .post(format!(
                 "{}/scheduler/runs/{}/ready-tasks",
                 self.base_url, self.run_id
             ))
-            .json(&request)
+            .json(&SchedulerPollReadyTaskRequest { wait_ms })
             .send()
             .await
             .map_err(|err| ApiError::internal(format!("scheduler request failed: {err}")))?
             .error_for_status()
             .map_err(|err| ApiError::internal(format!("scheduler request failed: {err}")))?
-            .json::<ReadyTasksResponse>()
+            .json::<SchedulerReadyTaskResponse>()
             .await
-            .map_err(|err| ApiError::internal(format!("scheduler response decode failed: {err}")))
+            .map_err(|err| {
+                ApiError::internal(format!("scheduler response decode failed: {err}"))
+            })?;
+        Ok(response.task)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SchedulerPollReadyTaskRequest {
+    pub(crate) wait_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SchedulerReadyTaskResponse {
+    pub(crate) task: Option<ReadyTaskEntryDto>,
 }
 
 struct WorkerRunResult {
@@ -737,7 +747,6 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
             completed: Arc::clone(options.completed),
             execution_manager_id: String::new(),
             job_count: options.job_count,
-            worker_poll_batch: options.config.benchmark.worker_poll_batch,
             worker_poll_wait_ms: options.config.benchmark.worker_poll_wait_ms,
             scheduler: options.scheduler.cloned(),
             task_sleep_ms: options.config.benchmark.task_sleep_ms,
@@ -855,17 +864,14 @@ async fn run_client_worker<ClientType: StorageApiClient>(
     worker.execution_manager_id = execution_manager.execution_manager_id;
     let outputs = TaskOutputsSerializer::from_tuple(&(Vec::<u8>::new(),))?;
     while should_worker_continue(&worker).await {
-        let ready = poll_ready_tasks_for_worker(
+        let task = poll_ready_task_for_worker(
             &worker,
             loop_started_at,
             &mut request_latency_samples,
             &mut activity,
         )
         .await?;
-        if ready.tasks.is_empty() {
-            continue;
-        }
-        for task in ready.tasks {
+        if let Some(task) = task {
             execute_ready_task(
                 &worker,
                 task,
@@ -900,40 +906,42 @@ async fn run_client_worker<ClientType: StorageApiClient>(
     })
 }
 
-async fn poll_ready_tasks_for_worker<ClientType: StorageApiClient>(
+async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
     worker: &ClientWorker<ClientType>,
     loop_started_at: Instant,
     request_latency_samples: &mut Vec<RequestLatencySample>,
     activity: &mut WorkerActivityTracker,
-) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
+) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
     let poll_started_at = Instant::now();
-    let request = PollReadyTasksRequest {
-        max_tasks: worker.worker_poll_batch,
-        wait_ms: worker.worker_poll_wait_ms,
-    };
-    let (ready, poll_latency) = record_timed_request(
+    let (task, poll_latency) = record_timed_request(
         request_latency_samples,
         "poll_ready_tasks",
         RequestCategory::Blocking,
-        poll_ready_tasks(worker, request),
+        poll_ready_task(worker),
     )
     .await?;
-    if ready.tasks.is_empty() {
+    if task.is_none() {
         activity.record_empty_poll(poll_latency);
     } else {
         activity.record_valid_request(loop_started_at, poll_started_at, poll_latency);
     }
-    Ok(ready)
+    Ok(task)
 }
 
-async fn poll_ready_tasks<ClientType: StorageApiClient>(
+async fn poll_ready_task<ClientType: StorageApiClient>(
     worker: &ClientWorker<ClientType>,
-    request: PollReadyTasksRequest,
-) -> spider_storage_api_bench::api::ApiResult<ReadyTasksResponse> {
+) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
     if let Some(scheduler) = &worker.scheduler {
-        scheduler.poll_ready_tasks(request).await
+        scheduler.poll_ready_task(worker.worker_poll_wait_ms).await
     } else {
-        worker.client.poll_ready_tasks(request).await
+        worker
+            .client
+            .poll_ready_tasks(PollReadyTasksRequest {
+                max_tasks: 1,
+                wait_ms: worker.worker_poll_wait_ms,
+            })
+            .await
+            .map(|mut ready| ready.tasks.pop())
     }
 }
 

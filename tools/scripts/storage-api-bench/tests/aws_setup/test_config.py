@@ -43,7 +43,6 @@ class AwsSetupConfigTest(unittest.TestCase):
                     task_sleep_ms = 7
                     submitter_count = 12
                     worker_count = 24
-                    worker_poll_batch = 32
                     worker_poll_wait_ms = 25
                     job_poll_wait_ms = 50
                     flat_percent = 60
@@ -78,7 +77,6 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(20, config.benchmark.jobs_per_worker)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
         self.assertEqual(7, config.benchmark.task_sleep_ms)
-        self.assertEqual(32, config.benchmark.worker_poll_batch)
         self.assertEqual(25, config.benchmark.worker_poll_wait_ms)
         self.assertEqual(50, config.benchmark.job_poll_wait_ms)
         self.assertEqual("preferred", config.database.ssl_mode)

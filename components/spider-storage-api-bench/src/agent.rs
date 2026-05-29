@@ -17,7 +17,7 @@ use axum::{
 };
 use serde::Serialize;
 use spider_storage_api_bench::{
-    api::{PollReadyTasksRequest, ReadyTaskEntryDto, ReadyTasksResponse},
+    api::{PollReadyTasksRequest, ReadyTaskEntryDto},
     client::StorageApiClient,
     metrics::{RequestCategory, RequestLatencySample, summarize_requests},
 };
@@ -26,6 +26,8 @@ use tokio::sync::Mutex;
 use crate::{
     AgentArgs,
     BenchmarkReport,
+    SchedulerPollReadyTaskRequest,
+    SchedulerReadyTaskResponse,
     SchedulerReadyTasksClient,
     distributed::{AgentRole, AgentRunAccepted, AgentRunRequest, AgentRunState, AgentRunStatus},
     record_timed_request,
@@ -425,8 +427,8 @@ async fn get_run(
 async fn poll_scheduler_ready_tasks(
     State(state): State<AgentState>,
     Path(run_id): Path<String>,
-    Json(request): Json<PollReadyTasksRequest>,
-) -> Result<Json<ReadyTasksResponse>, AgentError> {
+    Json(request): Json<SchedulerPollReadyTaskRequest>,
+) -> Result<Json<SchedulerReadyTaskResponse>, AgentError> {
     let scheduler = {
         let runs = state.runs.lock().await;
         let record = runs
@@ -449,12 +451,7 @@ async fn poll_scheduler_ready_tasks(
         scheduler
     };
     let start_time = Instant::now();
-    let response = scheduler_poll_ready_tasks(
-        &scheduler,
-        request.max_tasks,
-        Duration::from_millis(request.wait_ms),
-    )
-    .await;
+    let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
     scheduler
         .worker_poll_latency
         .lock()
@@ -464,45 +461,27 @@ async fn poll_scheduler_ready_tasks(
             RequestCategory::Blocking,
             start_time.elapsed(),
         ));
-    Ok(Json(response))
+    Ok(Json(SchedulerReadyTaskResponse { task }))
 }
 
-async fn scheduler_poll_ready_tasks(
+async fn scheduler_poll_ready_task(
     scheduler: &SchedulerQueue,
-    max_tasks: usize,
     wait: Duration,
-) -> ReadyTasksResponse {
-    if max_tasks == 0 {
-        return ReadyTasksResponse { tasks: Vec::new() };
-    }
-
-    let mut tasks = scheduler_drain_available_tasks(scheduler, max_tasks);
-    if tasks.is_empty()
-        && !wait.is_zero()
-        && let Ok(Ok(task)) = tokio::time::timeout(wait, scheduler.receiver.recv()).await
-    {
-        tasks.push(task);
-        tasks.extend(scheduler_drain_available_tasks(
-            scheduler,
-            max_tasks - tasks.len(),
-        ));
-    }
-
-    ReadyTasksResponse { tasks }
-}
-
-fn scheduler_drain_available_tasks(
-    scheduler: &SchedulerQueue,
-    max_tasks: usize,
-) -> Vec<ReadyTaskEntryDto> {
-    let mut tasks = Vec::with_capacity(max_tasks);
-    while tasks.len() < max_tasks {
-        match scheduler.receiver.try_recv() {
-            Ok(task) => tasks.push(task),
-            Err(async_channel::TryRecvError::Empty | async_channel::TryRecvError::Closed) => break,
+) -> Option<ReadyTaskEntryDto> {
+    match scheduler.receiver.try_recv() {
+        Ok(task) => Some(task),
+        Err(async_channel::TryRecvError::Closed) => None,
+        Err(async_channel::TryRecvError::Empty) => {
+            if wait.is_zero() {
+                None
+            } else {
+                match tokio::time::timeout(wait, scheduler.receiver.recv()).await {
+                    Ok(Ok(task)) => Some(task),
+                    Ok(Err(_)) | Err(_) => None,
+                }
+            }
         }
     }
-    tasks
 }
 
 async fn stop_run(

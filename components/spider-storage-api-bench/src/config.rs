@@ -153,7 +153,6 @@ pub struct BenchmarkConfig {
     pub task_sleep_ms: u64,
     pub client_count: usize,
     pub worker_count: usize,
-    pub worker_poll_batch: usize,
     pub worker_poll_wait_ms: u64,
     pub job_poll_wait_ms: u64,
     #[serde(default = "default_scheduler_poll_batch")]
@@ -208,9 +207,6 @@ impl BenchmarkConfig {
         }
         if self.worker_count == 0 {
             anyhow::bail!("worker_count must be greater than 0");
-        }
-        if self.worker_poll_batch == 0 {
-            anyhow::bail!("worker_poll_batch must be greater than 0");
         }
         if self.scheduler_poll_batch == 0 {
             anyhow::bail!("scheduler_poll_batch must be greater than 0");
@@ -292,7 +288,6 @@ job_count = 4
 payload_bytes = 16
 client_count = 2
 worker_count = 2
-worker_poll_batch = 8
 worker_poll_wait_ms = 10
 job_poll_wait_ms = 10
 warmup_sec = 0

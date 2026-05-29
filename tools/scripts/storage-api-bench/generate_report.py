@@ -510,7 +510,7 @@ def write_report(
         "",
         "## Setup",
         "",
-        f"The storage API target was `{setup['target']}` for each listed protocol run. Each run used `{setup['job_count']}` total jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup.get('task_sleep_ms', 0)}` ms simulated task sleep, `{setup['client_count']}` submit/monitor clients on the submitter agent, `{setup['worker_count']}` workers per worker agent, `{setup['worker_poll_batch']}` worker poll batch size, `{setup['worker_poll_wait_ms']}` ms worker poll wait, and `{setup['job_poll_wait_ms']}` ms job-state poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
+        f"The storage API target was `{setup['target']}` for each listed protocol run. Each run used `{setup['job_count']}` total jobs, `{setup['task_count']}` tasks per job, `{setup['payload_bytes']}` byte payloads, `{setup.get('task_sleep_ms', 0)}` ms simulated task sleep, `{setup['client_count']}` submit/monitor clients on the submitter agent, `{setup['worker_count']}` workers per worker agent, `{setup['worker_poll_wait_ms']}` ms worker poll wait, and `{setup['job_poll_wait_ms']}` ms job-state poll wait. The mixed workload used `{setup['flat_percent']}`% flat jobs and `{100 - setup['flat_percent']}`% deep jobs.",
         "",
         "## Request Latency Charts",
         "",

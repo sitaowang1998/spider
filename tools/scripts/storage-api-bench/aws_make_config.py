@@ -60,7 +60,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-sleep-ms", type=int, default=3)
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
-    parser.add_argument("--worker-poll-batch", type=int, default=64)
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
     parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
@@ -139,7 +138,6 @@ def render_config(
         f"task_sleep_ms = {args.task_sleep_ms}",
         f"client_count = {args.submitter_count}",
         f"worker_count = {args.worker_count}",
-        f"worker_poll_batch = {args.worker_poll_batch}",
         f"worker_poll_wait_ms = {args.worker_poll_wait_ms}",
         f"job_poll_wait_ms = {args.job_poll_wait_ms}",
         f"scheduler_poll_batch = {args.scheduler_poll_batch}",

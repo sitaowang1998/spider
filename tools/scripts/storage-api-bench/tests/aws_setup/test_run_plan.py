@@ -33,7 +33,6 @@ class AwsRunPlanTest(unittest.TestCase):
         config.benchmark.task_sleep_ms = 7
         config.benchmark.submitter_count = 12
         config.benchmark.worker_count = 24
-        config.benchmark.worker_poll_batch = 32
         config.benchmark.worker_poll_wait_ms = 25
         config.benchmark.job_poll_wait_ms = 50
         config.benchmark.flat_percent = 60
@@ -61,8 +60,6 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("2000", command)
         self.assertIn("--task-sleep-ms", command)
         self.assertIn("7", command)
-        self.assertIn("--worker-poll-batch", command)
-        self.assertIn("32", command)
         self.assertIn("--worker-poll-wait-ms", command)
         self.assertIn("25", command)
         self.assertIn("--job-poll-wait-ms", command)
