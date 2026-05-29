@@ -109,6 +109,29 @@ class AwsSetupConfigTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "node_counts"):
                 config_module.load_config(path)
 
+    def test_config_rejects_empty_benchmark_matrix_dimensions(self):
+        config_module = load_module("config")
+        cases = [
+            ("node_counts = []", "node_counts"),
+            ("protocols = []", "protocols"),
+            ("workloads = []", "workloads"),
+        ]
+        for setting, error in cases:
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / "config.toml"
+                path.write_text(
+                    textwrap.dedent(
+                        f"""
+                        [benchmark]
+                        {setting}
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(ValueError, error):
+                    config_module.load_config(path)
+
     def test_config_rejects_invalid_placement_strategy(self):
         config_module = load_module("config")
         with tempfile.TemporaryDirectory() as directory:

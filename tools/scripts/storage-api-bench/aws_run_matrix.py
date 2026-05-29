@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import pathlib
 import subprocess
 import sys
@@ -85,11 +86,20 @@ def main() -> int:
                 command.append("--no-reset-database")
             if args.database_reset_client_bin is not None:
                 command.extend(["--database-reset-client-bin", args.database_reset_client_bin])
-            print(f"=== AWS benchmark: nodes={node_count} protocol={protocol} ===", flush=True)
+            log(f"benchmark_start nodes={node_count} protocol={protocol}")
             result = subprocess.run(command, cwd=aws_common.ROOT, check=False)
             if result.returncode != 0:
                 return result.returncode
     return 0
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[aws_run_matrix] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

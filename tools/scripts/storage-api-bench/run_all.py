@@ -10,6 +10,7 @@ and runs `generate_report.py` to produce charts and `benchmark_report.md` there.
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import pathlib
 import shutil
@@ -39,7 +40,7 @@ def main() -> int:
 
     for protocol in PROTOCOLS:
         host, port = binds[protocol]
-        print(f"\n=== Starting {protocol} server on {host}:{port} ===", flush=True)
+        log(f"server_start protocol={protocol} bind={host}:{port}")
         server = subprocess.Popen(
             [
                 sys.executable,
@@ -62,7 +63,7 @@ def main() -> int:
                 return 1
             for workload in WORKLOADS:
                 output = data_dir / f"{protocol}_{workload}.json"
-                print(f"\n--- Running {protocol} client / {workload} ---", flush=True)
+                log(f"client_start protocol={protocol} workload={workload}")
                 result = subprocess.run(
                     [
                         sys.executable,
@@ -94,7 +95,7 @@ def main() -> int:
             if src.exists():
                 shutil.copy2(src, reports_dir / src.name)
 
-    print(f"\n=== Generating report in {reports_dir} ===", flush=True)
+    log(f"report_start output={reports_dir}")
     return subprocess.run(
         [
             sys.executable,
@@ -105,6 +106,15 @@ def main() -> int:
         cwd=ROOT,
         check=False,
     ).returncode
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[run_all] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

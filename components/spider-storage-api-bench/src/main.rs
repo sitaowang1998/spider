@@ -859,7 +859,14 @@ async fn run_client_worker<ClientType: StorageApiClient>(
                 ip_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             }),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "worker {}:{} register_execution_manager failed: {error}",
+            worker.agent_id,
+            worker.worker_index
+        )
+    })?;
     activity.record_valid_request(loop_started_at, register_started_at, register_latency);
     worker.execution_manager_id = execution_manager.execution_manager_id;
     let outputs = TaskOutputsSerializer::from_tuple(&(Vec::<u8>::new(),))?;
@@ -870,7 +877,14 @@ async fn run_client_worker<ClientType: StorageApiClient>(
             &mut request_latency_samples,
             &mut activity,
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "worker {}:{} poll_ready_tasks failed: {error}",
+                worker.agent_id,
+                worker.worker_index
+            )
+        })?;
         if let Some(task) = task {
             execute_ready_task(
                 &worker,
@@ -960,8 +974,10 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
     loop_started_at: Instant,
     request_latency_samples: &mut Vec<RequestLatencySample>,
     activity: &mut WorkerActivityTracker,
-) -> spider_storage_api_bench::api::ApiResult<()> {
+) -> anyhow::Result<()> {
     let create_started_at = Instant::now();
+    let job_id = task.job_id.clone();
+    let task_index = task.task_index;
     let (context, create_latency) = record_timed_request(
         request_latency_samples,
         "create_task_instance",
@@ -977,7 +993,16 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
                 execution_manager_id: worker.execution_manager_id.clone(),
             }),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "worker {}:{} create_task_instance failed for job={} task_index={}: {error}",
+            worker.agent_id,
+            worker.worker_index,
+            job_id,
+            task_index
+        )
+    })?;
     activity.record_valid_request(loop_started_at, create_started_at, create_latency);
     record_task_execution(worker.task_sleep_ms, loop_started_at, activity).await;
     let succeed_started_at = Instant::now();
@@ -995,7 +1020,18 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
                 serialized_outputs: outputs.to_vec(),
             }),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "worker {}:{} succeed_task_instance failed for job={} task_index={} \
+             task_instance_id={}: {error}",
+            worker.agent_id,
+            worker.worker_index,
+            job_id,
+            task_index,
+            context.task_instance_id
+        )
+    })?;
     activity.record_valid_request(loop_started_at, succeed_started_at, succeed_latency);
     Ok(())
 }

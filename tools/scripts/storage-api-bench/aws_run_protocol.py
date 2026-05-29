@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import pathlib
 import shlex
 import subprocess
@@ -75,12 +76,9 @@ def main() -> int:
     )
 
     for workload in parse_workloads(args.workloads):
-        print(
-            (
-                f"=== AWS benchmark workload start: nodes={args.node_count} "
-                f"protocol={args.protocol} workload={workload} ==="
-            ),
-            flush=True,
+        log(
+            f"workload_start nodes={args.node_count} protocol={args.protocol} "
+            f"workload={workload}"
         )
         if args.reset_database:
             result = subprocess.run(
@@ -116,14 +114,20 @@ def main() -> int:
             stop_server(server_instance_id)
         if result.returncode != 0:
             return result.returncode
-        print(
-            (
-                f"=== AWS benchmark workload complete: nodes={args.node_count} "
-                f"protocol={args.protocol} workload={workload} ==="
-            ),
-            flush=True,
+        log(
+            f"workload_complete nodes={args.node_count} protocol={args.protocol} "
+            f"workload={workload}"
         )
     return 0
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[aws_run_protocol] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

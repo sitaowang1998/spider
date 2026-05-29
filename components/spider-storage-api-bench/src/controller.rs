@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use spider_storage_api_bench::{
     api::{EndMetricsSessionRequest, StartMetricsSessionRequest},
@@ -81,13 +81,13 @@ async fn run_controller_workload(
         }))
         .collect::<Vec<_>>();
     let run_name = format!("{}_{}", protocol_name(protocol), workload_name(workload));
-    println!(
-        "=== controller benchmark start: protocol={} workload={} jobs={} workers={} ===",
+    log_controller_event(format_args!(
+        "benchmark_start protocol={} workload={} jobs={} workers={}",
         protocol_name(protocol),
         workload_name(workload),
         config.benchmark.job_count,
         workers.len(),
-    );
+    ));
     let metrics_session = start_server_metrics(protocol, &target, &run_name).await?;
     let wall_start = Instant::now();
     let distributed = config
@@ -131,13 +131,23 @@ async fn run_controller_workload(
         controller_request_samples,
     );
     write_reports(data_dir, &run_name, &agent_reports, &merged)?;
-    println!(
-        "=== controller benchmark complete: protocol={} workload={} elapsed_sec={:.3} ===",
+    log_controller_event(format_args!(
+        "benchmark_complete protocol={} workload={} elapsed_sec={:.3}",
         protocol_name(protocol),
         workload_name(workload),
         wall_start.elapsed().as_secs_f64(),
-    );
+    ));
     Ok(())
+}
+
+fn log_controller_event(args: std::fmt::Arguments<'_>) {
+    println!("[controller] {} {args}", unix_epoch_millis());
+}
+
+fn unix_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis())
 }
 
 struct AgentDispatch<'a> {
@@ -177,10 +187,10 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
     {
         Ok(report) => {
             validate_submitter_report(&report, dispatch.job_count)?;
-            println!(
-                "=== submitter complete: jobs={} failed_jobs={} ===",
+            log_controller_event(format_args!(
+                "submitter_complete jobs={} failed_jobs={}",
                 report.job_latency.count, report.job_latency.failed_jobs,
-            );
+            ));
             report
         }
         Err(err) => {
@@ -212,7 +222,9 @@ async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, 
              {worker_task_count}"
         );
     }
-    println!("=== workers complete: tasks_executed={worker_task_count} ===");
+    log_controller_event(format_args!(
+        "workers_complete tasks_executed={worker_task_count}"
+    ));
     if let Some(scheduler) = dispatch.scheduler {
         stop_scheduler(&http, dispatch.scheduler, dispatch.run_name).await;
         let scheduler_run_id = format!("{}_{}", dispatch.run_name, scheduler.id);

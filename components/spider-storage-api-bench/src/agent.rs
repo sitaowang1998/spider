@@ -151,6 +151,12 @@ async fn start_run(
     let task_run_id = run_id.clone();
     let task_state = state.clone();
     tokio::spawn(async move {
+        tracing::info!(
+            agent_id = %task_state.agent_id,
+            run_id = %task_run_id,
+            role = ?request.role,
+            "agent_run_start"
+        );
         let result = execute_run(&task_state, request).await;
         let mut runs = task_state.runs.lock().await;
         if let Some(record) = runs.get_mut(&task_run_id) {
@@ -158,10 +164,22 @@ async fn start_run(
                 Ok(report) => {
                     record.status = AgentRunState::Succeeded;
                     record.report = Some(report);
+                    tracing::info!(
+                        agent_id = %task_state.agent_id,
+                        run_id = %task_run_id,
+                        "agent_run_complete"
+                    );
                 }
                 Err(err) => {
                     record.status = AgentRunState::Failed;
-                    record.error = Some(err.to_string());
+                    let error = err.to_string();
+                    record.error = Some(error.clone());
+                    tracing::error!(
+                        agent_id = %task_state.agent_id,
+                        run_id = %task_run_id,
+                        error = %error,
+                        "agent_run_failed"
+                    );
                 }
             }
         }

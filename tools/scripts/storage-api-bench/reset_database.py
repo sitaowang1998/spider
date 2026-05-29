@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime
 import os
 import pathlib
 import shutil
@@ -37,9 +38,19 @@ def main() -> int:
     if not args.yes:
         print("refusing to reset database tables without --yes", file=sys.stderr)
         return 2
+    log(f"reset_start database={database.name} host={database.host} port={database.port}")
     reset_database(database, sql, args.client_bin)
-    print(f"reset database `{database.name}` on {database.host}:{database.port}")
+    log(f"reset_complete database={database.name} host={database.host} port={database.port}")
     return 0
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[reset_database] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

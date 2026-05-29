@@ -127,14 +127,23 @@ def load_config(path: pathlib.Path) -> AwsBenchConfig:
 
 
 def validate_config(config: AwsBenchConfig) -> None:
+    if not config.benchmark.node_counts:
+        msg = "node_counts must not be empty"
+        raise ValueError(msg)
     if max(config.benchmark.node_counts) > config.instances.worker_count:
         msg = "node_counts cannot exceed instances.worker_count"
         raise ValueError(msg)
     if sorted(config.benchmark.node_counts) != config.benchmark.node_counts:
         msg = "node_counts must be sorted in ascending order"
         raise ValueError(msg)
+    if not config.benchmark.protocols:
+        msg = "protocols must not be empty"
+        raise ValueError(msg)
     if set(config.benchmark.protocols) - {"grpc", "rest"}:
         msg = "protocols must contain only grpc and rest"
+        raise ValueError(msg)
+    if not config.benchmark.workloads:
+        msg = "workloads must not be empty"
         raise ValueError(msg)
     if set(config.benchmark.workloads) - {"flat", "deep", "mixed"}:
         msg = "workloads must contain only flat, deep, and mixed"

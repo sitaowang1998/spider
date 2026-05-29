@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import pathlib
 import subprocess
 import sys
@@ -19,13 +20,7 @@ def main() -> int:
     args = parse_args()
     args.data_dir.mkdir(parents=True, exist_ok=True)
     for workload in args.workloads:
-        print(
-            (
-                f"=== distributed protocol workload start: protocol={args.protocol} "
-                f"workload={workload} ==="
-            ),
-            flush=True,
-        )
+        log(f"workload_start protocol={args.protocol} workload={workload}")
         if args.reset_database:
             result = subprocess.run(
                 build_reset_database_command(args.config, args.database_reset_client_bin),
@@ -50,14 +45,17 @@ def main() -> int:
         result = subprocess.run(cmd, cwd=ROOT, check=False)
         if result.returncode != 0:
             return result.returncode
-        print(
-            (
-                f"=== distributed protocol workload complete: protocol={args.protocol} "
-                f"workload={workload} ==="
-            ),
-            flush=True,
-        )
+        log(f"workload_complete protocol={args.protocol} workload={workload}")
     return 0
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[run_distributed_protocol] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

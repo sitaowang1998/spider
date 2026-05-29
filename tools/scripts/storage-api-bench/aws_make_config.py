@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import ipaddress
 import pathlib
 import re
@@ -29,9 +30,21 @@ def main() -> int:
         render_config(args, server_ip, scheduler_ip, submitter_ip, worker_ips),
         encoding="utf-8",
     )
-    print(args.output)
-    print(f"submitter={submitter_ip} workers={len(worker_ips)} jobs={len(worker_ips) * args.jobs_per_worker}")
+    log(f"config_written path={args.output}")
+    log(
+        f"config_summary submitter={submitter_ip} workers={len(worker_ips)} "
+        f"jobs={len(worker_ips) * args.jobs_per_worker}"
+    )
     return 0
+
+
+def log(message: str) -> None:
+    timestamp = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds")
+    )
+    print(f"[aws_make_config] {timestamp} {message}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:

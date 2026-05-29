@@ -493,12 +493,14 @@ pub async fn run_server(
         ServerProtocol::Grpc => config.server.grpc_bind,
     });
 
+    tracing::info!(?protocol, %bind, "storage_server_start");
     match protocol {
         ServerProtocol::Rest => crate::rest::serve(bind, service).await?,
         ServerProtocol::Grpc => crate::grpc::serve(bind, service).await?,
     }
 
     runtime.stop_background_tasks().await?;
+    tracing::info!(?protocol, %bind, "storage_server_stop");
     Ok(())
 }
 
