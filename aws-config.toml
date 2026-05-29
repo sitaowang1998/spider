@@ -27,7 +27,7 @@ scheduler_poll_wait_ms = 10
 worker_count = 64
 worker_type = "c7i.xlarge"
 submitter_type = "c7i.xlarge"
-scheduler_type = "c7i.4xlarge"
+scheduler_type = "c7i.48xlarge"
 server_type = "r7i.48xlarge"
 controller_type = "c7i.large"
 # Optional override for the benchmark-node AMI. Leave as ami-xxxxxxxx to use
@@ -77,5 +77,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "scheduler"
+s3_folder_name = "mpmc"
 remote_data_dir = "/var/lib/spider-bench/data"

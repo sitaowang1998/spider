@@ -128,11 +128,13 @@ pub fn merge_agent_reports(
     let mut job_samples = Vec::new();
     let mut request_samples = controller_request_samples;
     let mut worker_activity_samples = Vec::new();
+    let mut scheduler_metrics = Vec::new();
 
     for (_, report) in &agent_reports {
         job_samples.extend(report.job_latency_samples.iter().cloned());
         request_samples.extend(report.request_latency_samples.iter().cloned());
         worker_activity_samples.extend(report.worker_activity_samples.iter().cloned());
+        scheduler_metrics.extend(report.scheduler_metrics.iter().cloned());
     }
 
     let job_latency = if job_samples.is_empty() {
@@ -159,6 +161,7 @@ pub fn merge_agent_reports(
         job_latency,
         request_latency,
         server_metrics,
+        scheduler_metrics: merge_request_summaries(scheduler_metrics.into_iter()),
         job_latency_samples: job_samples,
         request_latency_samples: request_samples,
         worker_activity_samples,
@@ -251,9 +254,14 @@ fn weighted_percentile_like(
 
 #[cfg(test)]
 mod tests {
-    use spider_storage_api_bench::metrics::RequestLatencySummary;
+    use spider_storage_api_bench::metrics::{
+        JobLatencySummary,
+        RequestLatencySummary,
+        ServerMetricsSessionReport,
+    };
 
-    use super::{allocate_jobs, merge_request_summaries};
+    use super::{allocate_jobs, merge_agent_reports, merge_request_summaries};
+    use crate::{BenchmarkReport, BenchmarkSetup};
 
     #[test]
     fn allocate_jobs_spreads_remainder() -> anyhow::Result<()> {
@@ -304,5 +312,86 @@ mod tests {
         assert_eq!(25, rows[0].avg_us);
         assert_eq!(1, rows[0].errors);
         assert_eq!(60, rows[0].max_us);
+    }
+
+    #[test]
+    fn merge_agent_reports_includes_scheduler_metrics() {
+        let setup = BenchmarkSetup {
+            protocol: "Rest".to_owned(),
+            target: "http://127.0.0.1:8080".to_owned(),
+            workload: spider_storage_api_bench::workload::WorkloadKind::Flat,
+            flat_percent: 100,
+            task_count: 1,
+            job_count: 1,
+            payload_bytes: 0,
+            task_sleep_ms: 0,
+            client_count: 1,
+            worker_count: 1,
+            channel_count: 1,
+            worker_poll_batch: 1,
+            worker_poll_wait_ms: 1,
+            job_poll_wait_ms: 1,
+            scheduler_poll_batch: 1,
+            scheduler_refill_interval_ms: 1,
+            scheduler_poll_wait_ms: 1,
+            database_host: "127.0.0.1".to_owned(),
+            database_port: 3306,
+            database_name: "spider".to_owned(),
+            database_username: "spider".to_owned(),
+            database_max_connections: 1,
+        };
+        let report = BenchmarkReport {
+            setup: setup.clone(),
+            job_latency: JobLatencySummary::default(),
+            request_latency: Vec::new(),
+            server_metrics: ServerMetricsSessionReport {
+                metrics_session_id: String::new(),
+                label: None,
+                elapsed_micros: 0,
+                request_latency: Vec::new(),
+                low_count_request_latency: Vec::new(),
+                request_sizes: Vec::new(),
+                job_execution_latency: JobLatencySummary::default(),
+            },
+            scheduler_metrics: vec![RequestLatencySummary {
+                category: "blocking".to_owned(),
+                operation: "worker_poll_ready_tasks".to_owned(),
+                count: 2,
+                errors: 0,
+                avg_us: 10,
+                p50_us: 10,
+                p90_us: 10,
+                p99_us: 10,
+                max_us: 10,
+            }],
+            job_latency_samples: Vec::new(),
+            request_latency_samples: Vec::new(),
+            worker_activity_samples: Vec::new(),
+            distributed: None,
+        };
+
+        let merged = merge_agent_reports(
+            setup,
+            vec![("scheduler".to_owned(), report)],
+            ServerMetricsSessionReport {
+                metrics_session_id: String::new(),
+                label: None,
+                elapsed_micros: 0,
+                request_latency: Vec::new(),
+                low_count_request_latency: Vec::new(),
+                request_sizes: Vec::new(),
+                job_execution_latency: JobLatencySummary::default(),
+            },
+            Vec::new(),
+            std::time::Duration::from_secs(1),
+            Vec::new(),
+        );
+
+        assert_eq!(1, merged.scheduler_metrics.len());
+        assert_eq!(
+            "worker_poll_ready_tasks",
+            merged.scheduler_metrics[0].operation
+        );
+        assert_eq!(10, merged.scheduler_metrics[0].avg_us);
     }
 }

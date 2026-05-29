@@ -4,7 +4,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -19,7 +19,7 @@ use serde::Serialize;
 use spider_storage_api_bench::{
     api::{PollReadyTasksRequest, ReadyTaskEntryDto, ReadyTasksResponse},
     client::StorageApiClient,
-    metrics::{RequestCategory, RequestLatencySample},
+    metrics::{RequestCategory, RequestLatencySample, summarize_requests},
 };
 use tokio::sync::Mutex;
 
@@ -53,6 +53,7 @@ struct AgentRunRecord {
 struct SchedulerQueue {
     sender: async_channel::Sender<ReadyTaskEntryDto>,
     receiver: async_channel::Receiver<ReadyTaskEntryDto>,
+    worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
 }
 
 #[derive(Serialize)]
@@ -124,7 +125,11 @@ async fn start_run(
     };
     let scheduler = if request.role == AgentRole::Scheduler {
         let (sender, receiver) = async_channel::unbounded();
-        Some(Arc::new(SchedulerQueue { sender, receiver }))
+        Some(Arc::new(SchedulerQueue {
+            sender,
+            receiver,
+            worker_poll_latency: Mutex::new(Vec::new()),
+        }))
     } else {
         None
     };
@@ -215,7 +220,7 @@ async fn run_scheduler_report(
         spider_storage_api_bench::server::ServerProtocol::Rest => {
             let client =
                 spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
-            run_scheduler_loop(client, &config, scheduler, stop_requested).await?
+            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
         }
         spider_storage_api_bench::server::ServerProtocol::Grpc => {
             let client = crate::connect_grpc_clients(&request.target, 1)
@@ -223,7 +228,7 @@ async fn run_scheduler_report(
                 .into_iter()
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("missing scheduler gRPC client"))?;
-            run_scheduler_loop(client, &config, scheduler, stop_requested).await?
+            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
         }
     };
     Ok(BenchmarkReport {
@@ -236,6 +241,7 @@ async fn run_scheduler_report(
         job_latency: spider_storage_api_bench::metrics::summarize(&[]),
         request_latency: spider_storage_api_bench::metrics::summarize_requests(&request_latency),
         server_metrics: crate::empty_server_metrics_report(),
+        scheduler_metrics: summarize_requests(&scheduler.worker_poll_latency.lock().await),
         job_latency_samples: Vec::new(),
         request_latency_samples: request_latency,
         worker_activity_samples: Vec::new(),
@@ -322,6 +328,7 @@ async fn run_submitter_report(
             &measurements.request_latency,
         ),
         server_metrics: crate::empty_server_metrics_report(),
+        scheduler_metrics: Vec::new(),
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
         worker_activity_samples: measurements.worker_activity,
@@ -388,6 +395,7 @@ async fn run_worker_report(
             &measurements.request_latency,
         ),
         server_metrics: crate::empty_server_metrics_report(),
+        scheduler_metrics: Vec::new(),
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
         worker_activity_samples: measurements.worker_activity,
@@ -440,14 +448,23 @@ async fn poll_scheduler_ready_tasks(
         drop(runs);
         scheduler
     };
-    Ok(Json(
-        scheduler_poll_ready_tasks(
-            &scheduler,
-            request.max_tasks,
-            Duration::from_millis(request.wait_ms),
-        )
-        .await,
-    ))
+    let start_time = Instant::now();
+    let response = scheduler_poll_ready_tasks(
+        &scheduler,
+        request.max_tasks,
+        Duration::from_millis(request.wait_ms),
+    )
+    .await;
+    scheduler
+        .worker_poll_latency
+        .lock()
+        .await
+        .push(RequestLatencySample::success(
+            "worker_poll_ready_tasks",
+            RequestCategory::Blocking,
+            start_time.elapsed(),
+        ));
+    Ok(Json(response))
 }
 
 async fn scheduler_poll_ready_tasks(

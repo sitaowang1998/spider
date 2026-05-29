@@ -85,6 +85,7 @@ class Run:
     controller_wall_time_us: int
     job_avg_us: float
     job_latency: dict[str, int]
+    server_job_execution_latency: dict[str, int]
     request_count: int
     client_request_avg_us: float
     server_request_avg_us: float
@@ -110,7 +111,7 @@ class Run:
         worker_slots = self.nodes * self.worker_count
         if worker_slots <= 0:
             return 0.0
-        return self.task_count * self.task_sleep_ms / 1000 / worker_slots
+        return self.task_count * self.task_sleep_ms * self.submitter_count / 1000 / worker_slots
 
 
 @dataclass(frozen=True)
@@ -156,14 +157,9 @@ def main() -> int:
         "Jobs / second",
         lambda run: run.throughput_jobs_per_s,
     )
-    draw_line_chart(
+    draw_e2e_latency_chart(
         runs,
         chart_paths[1],
-        "AWS Average End-to-End Job Latency",
-        "Flat workload. Average submit-to-completion latency. Lower is better.",
-        "Seconds",
-        lambda run: run.job_avg_us / 1_000_000,
-        baselines=[("optimal", (0.35, 0.35, 0.35), lambda run: run.optimal_job_latency_s)],
     )
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
 
@@ -209,6 +205,11 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             for row in data["server_metrics"].get("request_latency", [])
             if row.get("category") != "phase"
         }
+        scheduler_by_key = {
+            (row["category"], row["operation"]): row
+            for row in data.get("scheduler_metrics", [])
+            if row.get("category") != "phase"
+        }
         for client_row in data["request_latency"]:
             if client_row.get("category") == "phase":
                 continue
@@ -216,6 +217,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             server_row = None
             if operation == "poll_ready_tasks":
                 operation = WORKER_POLL_OPERATION
+                server_row = scheduler_by_key.get((client_row["category"], operation))
             elif operation == "scheduler_poll_ready_tasks":
                 operation = SCHEDULER_STORAGE_POLL_OPERATION
                 server_row = server_by_key.get(("blocking", "poll_ready_tasks"))
@@ -258,6 +260,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             if row.get("category") != "phase"
         )
         worker_activity_count, worker_idle_avg_pct = average_worker_idle_pct(data)
+        server_metrics = data["server_metrics"]
         runs.append(
             Run(
                 nodes=nodes,
@@ -270,7 +273,10 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                 worker_count=int(setup["worker_count"]),
                 controller_wall_time_us=wall_time_us,
                 job_avg_us=average_job_latency_us(data),
-                job_latency=data["job_latency"],
+                job_latency=normalize_latency_summary(data["job_latency"]),
+                server_job_execution_latency=normalize_latency_summary(
+                    server_metrics.get("job_execution_latency", {})
+                ),
                 request_count=request_count,
                 client_request_avg_us=client_avg,
                 server_request_avg_us=server_avg,
@@ -317,6 +323,22 @@ def average_job_latency_us(data: dict[str, object]) -> float:
     if isinstance(latency, dict) and "p50_us" in latency:
         return float(latency["p50_us"])
     return 0.0
+
+
+def normalize_latency_summary(summary: object) -> dict[str, int]:
+    if not isinstance(summary, dict):
+        summary = {}
+    normalized = {
+        "count": int(summary.get("count", 0)),
+        "avg_us": int(float(summary.get("avg_us", 0))),
+        "p50_us": int(summary.get("p50_us", 0)),
+        "p90_us": int(summary.get("p90_us", 0)),
+        "p99_us": int(summary.get("p99_us", 0)),
+        "max_us": int(summary.get("max_us", 0)),
+    }
+    if normalized["avg_us"] == 0 and normalized["p50_us"] > 0:
+        normalized["avg_us"] = normalized["p50_us"]
+    return normalized
 
 
 def average_worker_idle_pct(data: dict[str, object]) -> tuple[int, float]:
@@ -402,6 +424,86 @@ def unique_runs_by_node(runs: list[Run]) -> list[Run]:
     for run in runs:
         by_node.setdefault(run.nodes, run)
     return list(by_node.values())
+
+
+def draw_e2e_latency_chart(runs: list[Run], output: pathlib.Path) -> None:
+    width = 1500
+    height = 820
+    margin_left = 110
+    margin_right = 320
+    margin_top = 90
+    margin_bottom = 110
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    nodes = sorted({run.nodes for run in runs})
+    values = [run.job_avg_us / 1_000_000 for run in runs]
+    values.extend(run.server_job_execution_latency["avg_us"] / 1_000_000 for run in runs)
+    values.extend(run.optimal_job_latency_s for run in runs)
+    y_max = nice_upper_bound(max(values))
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surface)
+    paint_background(ctx)
+    draw_axes(
+        ctx,
+        "AWS Average End-to-End Latency",
+        "Client E2E covers register through result; task execution covers storage start-to-terminal time.",
+        "Seconds",
+        margin_left,
+        margin_top,
+        plot_width,
+        plot_height,
+        nodes,
+        y_max,
+    )
+
+    legend = []
+    for protocol in PROTOCOLS:
+        series = [run for run in runs if run.protocol == protocol]
+        if not series:
+            continue
+        draw_series(
+            ctx,
+            series,
+            nodes,
+            margin_left,
+            margin_top,
+            plot_width,
+            plot_height,
+            y_max,
+            COLORS[protocol],
+            lambda run: run.job_avg_us / 1_000_000,
+        )
+        legend.append((f"{protocol} client E2E", COLORS[protocol]))
+        execution_color = COLORS["grpc_light"] if protocol == "Grpc" else COLORS["rest_light"]
+        draw_series(
+            ctx,
+            series,
+            nodes,
+            margin_left,
+            margin_top,
+            plot_width,
+            plot_height,
+            y_max,
+            execution_color,
+            lambda run: run.server_job_execution_latency["avg_us"] / 1_000_000,
+        )
+        legend.append((f"{protocol} task execution", execution_color))
+    draw_series(
+        ctx,
+        sorted(unique_runs_by_node(runs), key=lambda run: run.nodes),
+        nodes,
+        margin_left,
+        margin_top,
+        plot_width,
+        plot_height,
+        y_max,
+        (0.35, 0.35, 0.35),
+        lambda run: run.optimal_job_latency_s,
+    )
+    legend.append(("optimal", (0.35, 0.35, 0.35)))
+    draw_legend(ctx, legend, width - margin_right + 35, margin_top)
+    surface.write_to_png(str(output))
 
 
 def draw_request_latency_chart(
@@ -627,7 +729,7 @@ def operation_label(operation: str) -> str:
 
 def request_chart_subtitle(operation: str) -> str:
     if operation == WORKER_POLL_OPERATION:
-        return "Worker calls to the scheduler cache. No storage-server time is included."
+        return "Worker calls to the scheduler cache. Stacked bars show scheduler handler time and client overhead."
     if operation == SCHEDULER_STORAGE_POLL_OPERATION:
         return "Scheduler batch polling against the storage server. Lower is better."
     return "Stacked bars show server work and client overhead. Lower is better."
@@ -635,7 +737,7 @@ def request_chart_subtitle(operation: str) -> str:
 
 def request_chart_notes(operation: str) -> list[str]:
     if operation == WORKER_POLL_OPERATION:
-        return ["g = gRPC, r = REST", "scheduler response = worker-observed scheduler latency"]
+        return ["g = gRPC, r = REST", "scheduler response = scheduler handler latency"]
     return ["g = gRPC, r = REST", "client overhead = client avg - server avg", "server other = server avg - measured phases"]
 
 
@@ -670,8 +772,12 @@ def request_component_rows(
             }
             server_avg_ms = server_avg_us / 1000
             phase_sum = sum(components.values())
-            if operation == WORKER_POLL_OPERATION and server_avg_us == 0:
-                components["scheduler response"] = client_avg_us / 1000
+            if operation == WORKER_POLL_OPERATION:
+                if server_avg_us > 0:
+                    components["scheduler response"] = server_avg_ms
+                    components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
+                else:
+                    components["scheduler response"] = client_avg_us / 1000
             elif components:
                 components["server other"] = max(server_avg_ms - phase_sum, 0.0)
             else:
@@ -969,9 +1075,10 @@ def setup_paragraph(runs: list[Run]) -> str:
         f"({format_set(total_tasks)} total tasks). Each run uses one dedicated submitter node "
         f"with {format_set(submitters)} submitter clients and {format_set(workers)} worker "
         "processes per worker node. The optimal E2E time is the ideal per-job compute lower "
-        "bound `task_count * task_sleep_ms / (worker_nodes * workers_per_node)`, excluding "
-        "storage, scheduling, polling, and transport overhead. Results compare gRPC and REST "
-        "against the same storage server and RDS-backed storage layer."
+        "bound when concurrent submitter jobs share the cluster: "
+        "`task_count * task_sleep_ms * submitter_clients / (worker_nodes * workers_per_node)`, "
+        "excluding storage, scheduling, polling, and transport overhead. Results compare gRPC "
+        "and REST against the same storage server and RDS-backed storage layer."
     )
 
 
@@ -1009,22 +1116,39 @@ def speedup_table(runs: list[Run]) -> list[str]:
 
 def e2e_table(runs: list[Run]) -> list[str]:
     lines = ["", "## End-To-End Job Latency", ""]
+    lines.append(
+        "Client E2E is measured by the benchmark client from before job registration until "
+        "the terminal job result is observed. Task execution is measured by storage from a "
+        "successful `start_job` until the job reaches success or failure."
+    )
     lines.extend(
         [
-            "| Nodes | Protocol | Optimal (s) | Avg (s) | P50 (s) | P90 (s) | P99 (s) | Max (s) |",
-            "|---:|---|---:|---:|---:|---:|---:|---:|",
+            "",
+            "| Nodes | Protocol | Metric | Optimal (s) | Avg (s) | P50 (s) | P90 (s) | P99 (s) | Max (s) |",
+            "|---:|---|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for run in sorted(runs, key=lambda row: (row.nodes, row.protocol)):
-        latency = run.job_latency
+        lines.append(e2e_latency_row(run, "Client E2E", run.job_latency, run.job_avg_us))
         lines.append(
-            f"| {run.nodes} | {run.protocol} | {run.optimal_job_latency_s:.3f} | "
-            f"{run.job_avg_us / 1_000_000:.3f} | "
-            f"{latency['p50_us'] / 1_000_000:.3f} | "
-            f"{latency['p90_us'] / 1_000_000:.3f} | {latency['p99_us'] / 1_000_000:.3f} | "
-            f"{latency['max_us'] / 1_000_000:.3f} |"
+            e2e_latency_row(
+                run,
+                "Task execution",
+                run.server_job_execution_latency,
+                run.server_job_execution_latency["avg_us"],
+            )
         )
     return lines
+
+
+def e2e_latency_row(run: Run, metric: str, latency: dict[str, int], avg_us: float) -> str:
+    return (
+        f"| {run.nodes} | {run.protocol} | {metric} | {run.optimal_job_latency_s:.3f} | "
+        f"{avg_us / 1_000_000:.3f} | "
+        f"{latency['p50_us'] / 1_000_000:.3f} | "
+        f"{latency['p90_us'] / 1_000_000:.3f} | {latency['p99_us'] / 1_000_000:.3f} | "
+        f"{latency['max_us'] / 1_000_000:.3f} |"
+    )
 
 
 def worker_idle_table(runs: list[Run]) -> list[str]:

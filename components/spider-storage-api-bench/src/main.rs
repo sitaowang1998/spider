@@ -139,6 +139,8 @@ pub(crate) struct BenchmarkReport {
     pub(crate) request_latency: Vec<RequestLatencySummary>,
     pub(crate) server_metrics: ServerMetricsSessionReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) scheduler_metrics: Vec<RequestLatencySummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) job_latency_samples: Vec<JobLatencySample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) request_latency_samples: Vec<RequestLatencySample>,
@@ -323,6 +325,7 @@ pub(crate) async fn run_client_report(
         job_latency,
         request_latency,
         server_metrics: measurements.server_metrics,
+        scheduler_metrics: Vec::new(),
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
         worker_activity_samples: measurements.worker_activity,
@@ -345,6 +348,10 @@ fn print_report(report: &BenchmarkReport) {
         "{}",
         render_summary(&report.server_metrics.job_execution_latency)
     );
+    if !report.scheduler_metrics.is_empty() {
+        println!("scheduler_request_latency");
+        println!("{}", render_request_summary(&report.scheduler_metrics));
+    }
 }
 
 impl BenchmarkSetup {
@@ -1220,6 +1227,17 @@ mod tests {
                     max_us: 200,
                 },
             },
+            scheduler_metrics: vec![RequestLatencySummary {
+                category: "blocking".to_owned(),
+                operation: "worker_poll_ready_tasks".to_owned(),
+                count: 3,
+                errors: 0,
+                avg_us: 25,
+                p50_us: 20,
+                p90_us: 30,
+                p99_us: 35,
+                max_us: 40,
+            }],
             job_latency_samples: Vec::new(),
             request_latency_samples: Vec::new(),
             worker_activity_samples: Vec::new(),
@@ -1240,6 +1258,11 @@ mod tests {
             200,
             value["server_metrics"]["job_execution_latency"]["avg_us"]
         );
+        assert_eq!(
+            "worker_poll_ready_tasks",
+            value["scheduler_metrics"][0]["operation"]
+        );
+        assert_eq!(25, value["scheduler_metrics"][0]["avg_us"]);
         Ok(())
     }
 
