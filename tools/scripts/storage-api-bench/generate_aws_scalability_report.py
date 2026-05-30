@@ -80,6 +80,7 @@ class Run:
     job_count: int
     task_count: int
     task_sleep_ms: int
+    flat_percent: int
     submitter_count: int
     worker_count: int
     controller_wall_time_us: int
@@ -111,7 +112,33 @@ class Run:
         worker_slots = self.nodes * self.worker_count
         if worker_slots <= 0:
             return 0.0
-        return self.task_count * self.task_sleep_ms * self.submitter_count / 1000 / worker_slots
+        active_jobs = min(self.job_count, self.submitter_count)
+        if active_jobs <= 0:
+            return 0.0
+        if self.workload == "Mixed":
+            flat_latency = self.optimal_latency_for_parallelism(worker_slots, active_jobs, self.task_count)
+            deep_latency = self.optimal_latency_for_parallelism(worker_slots, active_jobs, 1)
+            flat_fraction = self.flat_percent / 100
+            return flat_latency * flat_fraction + deep_latency * (1 - flat_fraction)
+        per_job_parallelism = self.per_job_parallelism()
+        return self.optimal_latency_for_parallelism(worker_slots, active_jobs, per_job_parallelism)
+
+    def optimal_latency_for_parallelism(
+        self,
+        worker_slots: int,
+        active_jobs: int,
+        per_job_parallelism: int,
+    ) -> float:
+        if per_job_parallelism <= 0:
+            return 0.0
+        slots_per_active_job = max(1, min(per_job_parallelism, worker_slots // active_jobs))
+        task_waves = math.ceil(self.task_count / slots_per_active_job)
+        return task_waves * self.task_sleep_ms / 1000
+
+    def per_job_parallelism(self) -> int:
+        if self.workload == "Deep":
+            return 1
+        return self.task_count
 
 
 @dataclass(frozen=True)
@@ -269,6 +296,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                 job_count=int(setup["job_count"]),
                 task_count=int(setup["task_count"]),
                 task_sleep_ms=int(setup.get("task_sleep_ms", 0)),
+                flat_percent=int(setup.get("flat_percent", 100)),
                 submitter_count=int(setup["client_count"]),
                 worker_count=int(setup["worker_count"]),
                 controller_wall_time_us=wall_time_us,
@@ -1071,10 +1099,12 @@ def setup_paragraph(runs: list[Run]) -> str:
         f"{format_set(task_sleep_ms)} ms simulated sleep per task, and the run size scales from {format_set(job_counts)} jobs "
         f"({format_set(total_tasks)} total tasks). Each run uses one dedicated submitter node "
         f"with {format_set(submitters)} submitter clients and {format_set(workers)} worker "
-        "processes per worker node. The optimal E2E time is the ideal per-job compute lower "
-        "bound when concurrent submitter jobs share the cluster: "
-        "`task_count * task_sleep_ms * submitter_clients / (worker_nodes * workers_per_node)`, "
-        "excluding storage, scheduling, polling, and transport overhead. Results compare gRPC "
+        "processes per worker node. The optimal E2E time is the ideal per-active-job compute "
+        "lower bound: `ceil(task_count / min(per_job_parallelism, "
+        "floor(worker_nodes * workers_per_node / active_jobs))) * task_sleep_ms`, where "
+        "`active_jobs = min(job_count, submitter_clients)`. Flat jobs can expose `task_count` "
+        "runnable tasks, and deep jobs can expose one runnable task. This excludes storage, "
+        "scheduling, polling, and transport overhead. Results compare gRPC "
         "and REST against the same storage server and RDS-backed storage layer."
     )
 
