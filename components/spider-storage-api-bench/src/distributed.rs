@@ -132,11 +132,15 @@ pub fn merge_agent_reports(
     let mut job_samples = Vec::new();
     let mut worker_activity_samples = Vec::new();
     let mut scheduler_metrics = Vec::new();
+    let mut scheduler_queues = Vec::new();
 
     for (_, report) in &agent_reports {
         job_samples.extend(report.job_latency_samples.iter().cloned());
         worker_activity_samples.extend(report.worker_activity_samples.iter().cloned());
         scheduler_metrics.extend(report.scheduler_metrics.iter().cloned());
+        if let Some(scheduler_queue) = &report.scheduler_queue {
+            scheduler_queues.push(scheduler_queue.clone());
+        }
     }
 
     let job_latency = if job_samples.is_empty() {
@@ -164,6 +168,7 @@ pub fn merge_agent_reports(
         request_latency,
         server_metrics,
         scheduler_metrics: merge_request_summaries(scheduler_metrics.into_iter()),
+        scheduler_queue: merge_scheduler_queue_summaries(&scheduler_queues),
         job_latency_samples: job_samples,
         request_latency_samples: Vec::new(),
         worker_activity_samples,
@@ -238,6 +243,59 @@ fn merge_request_summaries(
             .cmp(&(right.category.as_str(), right.operation.as_str()))
     });
     merged
+}
+
+fn merge_scheduler_queue_summaries(
+    summaries: &[crate::SchedulerQueueSummary],
+) -> Option<crate::SchedulerQueueSummary> {
+    if summaries.is_empty() {
+        return None;
+    }
+    let worker_poll_count = summaries
+        .iter()
+        .map(|summary| summary.worker_poll_count)
+        .sum::<u64>();
+    let total_queue_depth = summaries
+        .iter()
+        .map(|summary| summary.avg_queue_depth * u64_as_f64(summary.worker_poll_count))
+        .sum::<f64>();
+    let total_queue_wait_us = summaries
+        .iter()
+        .map(|summary| summary.avg_queue_wait_us * u64_as_f64(summary.worker_poll_count))
+        .sum::<f64>();
+    Some(crate::SchedulerQueueSummary {
+        worker_poll_limit: summaries
+            .iter()
+            .map(|summary| summary.worker_poll_limit)
+            .max()
+            .unwrap_or(0),
+        worker_poll_count,
+        max_queue_depth: summaries
+            .iter()
+            .map(|summary| summary.max_queue_depth)
+            .max()
+            .unwrap_or(0),
+        avg_queue_depth: if worker_poll_count == 0 {
+            0.0
+        } else {
+            total_queue_depth / u64_as_f64(worker_poll_count)
+        },
+        max_queue_wait_us: summaries
+            .iter()
+            .map(|summary| summary.max_queue_wait_us)
+            .max()
+            .unwrap_or(0),
+        avg_queue_wait_us: if worker_poll_count == 0 {
+            0.0
+        } else {
+            total_queue_wait_us / u64_as_f64(worker_poll_count)
+        },
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+const fn u64_as_f64(value: u64) -> f64 {
+    value as f64
 }
 
 fn weighted_percentile_like(
@@ -335,6 +393,7 @@ mod tests {
             scheduler_poll_batch: 1,
             scheduler_refill_interval_ms: 1,
             scheduler_poll_wait_ms: 1,
+            scheduler_worker_poll_concurrency: 1,
             database_host: "127.0.0.1".to_owned(),
             database_port: 3306,
             database_name: "spider".to_owned(),
@@ -365,6 +424,14 @@ mod tests {
                 p99_us: 10,
                 max_us: 10,
             }],
+            scheduler_queue: Some(crate::SchedulerQueueSummary {
+                worker_poll_limit: 1,
+                worker_poll_count: 2,
+                max_queue_depth: 1,
+                avg_queue_depth: 0.5,
+                max_queue_wait_us: 20,
+                avg_queue_wait_us: 10.0,
+            }),
             job_latency_samples: Vec::new(),
             request_latency_samples: Vec::new(),
             worker_activity_samples: Vec::new(),
@@ -394,5 +461,11 @@ mod tests {
             merged.scheduler_metrics[0].operation
         );
         assert_eq!(10, merged.scheduler_metrics[0].avg_us);
+        let scheduler_queue = merged
+            .scheduler_queue
+            .expect("merged scheduler queue summary should be present");
+        assert_eq!(2, scheduler_queue.worker_poll_count);
+        assert_eq!(1, scheduler_queue.max_queue_depth);
+        assert!((scheduler_queue.avg_queue_wait_us - 10.0).abs() < f64::EPSILON);
     }
 }

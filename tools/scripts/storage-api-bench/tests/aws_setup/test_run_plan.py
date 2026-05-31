@@ -35,6 +35,7 @@ class AwsRunPlanTest(unittest.TestCase):
         config.benchmark.worker_count = 24
         config.benchmark.worker_poll_wait_ms = 25
         config.benchmark.job_poll_wait_ms = 50
+        config.benchmark.scheduler_worker_poll_concurrency = 384
         config.benchmark.flat_percent = 60
         config.database.name = "spider_db"
         config.database.username = "spider_user"
@@ -65,6 +66,8 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("25", command)
         self.assertIn("--job-poll-wait-ms", command)
         self.assertIn("50", command)
+        self.assertIn("--scheduler-worker-poll-concurrency", command)
+        self.assertIn("384", command)
         self.assertIn("--database-host", command)
         self.assertIn("bench-db.example.com", command)
         self.assertIn("--results-s3-uri", command)

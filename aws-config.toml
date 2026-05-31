@@ -21,6 +21,7 @@ job_poll_wait_ms = 10
 scheduler_poll_batch = 10240
 scheduler_refill_interval_ms = 10
 scheduler_poll_wait_ms = 10
+scheduler_worker_poll_concurrency = 256
 
 [instances]
 worker_count = 64
@@ -76,5 +77,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "scheduler-trace"
+s3_folder_name = "scheduler-rate-limit"
 remote_data_dir = "/var/lib/spider-bench/data"

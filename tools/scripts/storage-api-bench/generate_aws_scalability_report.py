@@ -185,10 +185,12 @@ class TraceSeries:
     protocol: str
     workload: str
     events: list[tuple[int, int]]
+    queue_events: list[tuple[int, int]]
     requests: list[dict[str, int | str]]
     start_epoch_us: int
     end_epoch_us: int
     max_concurrency: int
+    max_queue_depth: int
 
 
 def main() -> int:
@@ -217,7 +219,11 @@ def main() -> int:
         chart_paths[1],
     )
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
-    trace_chart_paths = draw_trace_concurrency_charts(trace_series, args.output_dir)
+    trace_chart_paths = draw_trace_concurrency_charts(
+        trace_series,
+        args.output_dir,
+        write_perfetto=not args.skip_perfetto,
+    )
     chart_paths.extend(trace_chart_paths)
 
     for operation in request_operations(request_metrics):
@@ -237,6 +243,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", type=pathlib.Path, default=DEFAULT_INPUT_DIR)
     parser.add_argument("--output-dir", type=pathlib.Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--skip-perfetto",
+        action="store_true",
+        help="Skip large Perfetto JSON trace generation and only refresh reports/PNGs.",
+    )
     return parser.parse_args()
 
 
@@ -359,7 +370,9 @@ def load_trace_series(input_dir: pathlib.Path) -> list[TraceSeries]:
 
     series = []
     for (nodes, protocol, workload), paths in sorted(traces_by_key.items()):
+        paths = newest_trace_paths(paths)
         events: list[tuple[int, int]] = []
+        queue_events: list[tuple[int, int]] = []
         requests: list[dict[str, int | str]] = []
         start_epoch_us: int | None = None
         end_epoch_us: int | None = None
@@ -377,17 +390,34 @@ def load_trace_series(input_dir: pathlib.Path) -> list[TraceSeries]:
                     end_epoch_us = end_us if end_epoch_us is None else max(end_epoch_us, end_us)
                     events.append((start_us, 1))
                     events.append((end_us, -1))
+                    queue_wait_us = int(row.get("queue_wait_us", 0))
+                    queue_depth_at_start = int(row.get("queue_depth_at_start", 0))
+                    queue_depth_after_enqueue = int(row.get("queue_depth_after_enqueue", 0))
+                    queued = bool(row.get("queued", False)) or (
+                        queue_depth_after_enqueue > queue_depth_at_start
+                    )
+                    if queued and queue_wait_us > 0:
+                        queue_events.append((start_us, 1))
+                        queue_events.append((start_us + queue_wait_us, -1))
                     requests.append(
                         {
                             "request": str(row["request"]),
                             "start_epoch_us": start_us,
                             "end_epoch_us": end_us,
                             "latency_us": int(row["latency_us"]),
+                            "queued": int(queued),
+                            "queue_wait_us": queue_wait_us,
+                            "queue_depth_at_start": queue_depth_at_start,
+                            "queue_depth_after_enqueue": queue_depth_after_enqueue,
+                            "available_permits_at_start": int(
+                                row.get("available_permits_at_start", 0)
+                            ),
                         }
                     )
         if start_epoch_us is None or end_epoch_us is None:
             continue
         events.sort(key=lambda event: (event[0], -event[1]))
+        queue_events.sort(key=lambda event: (event[0], -event[1]))
         requests.sort(key=lambda row: int(row["start_epoch_us"]))
         series.append(
             TraceSeries(
@@ -395,13 +425,21 @@ def load_trace_series(input_dir: pathlib.Path) -> list[TraceSeries]:
                 protocol=protocol,
                 workload=workload,
                 events=events,
+                queue_events=queue_events,
                 requests=requests,
                 start_epoch_us=start_epoch_us,
                 end_epoch_us=end_epoch_us,
                 max_concurrency=max_concurrency(events),
+                max_queue_depth=max_concurrency(queue_events),
             )
         )
     return series
+
+
+def newest_trace_paths(paths: list[pathlib.Path]) -> list[pathlib.Path]:
+    if len(paths) <= 1:
+        return paths
+    return [max(paths, key=lambda path: path.stat().st_mtime_ns)]
 
 
 def normalize_protocol(value: str) -> str:
@@ -849,7 +887,12 @@ def draw_request_component_chart(
     surface.write_to_png(str(output))
 
 
-def draw_trace_concurrency_charts(trace_series: list[TraceSeries], output_dir: pathlib.Path) -> list[pathlib.Path]:
+def draw_trace_concurrency_charts(
+    trace_series: list[TraceSeries],
+    output_dir: pathlib.Path,
+    *,
+    write_perfetto: bool,
+) -> list[pathlib.Path]:
     paths = []
     keys = sorted({(series.protocol, series.workload) for series in trace_series})
     for protocol, workload in keys:
@@ -866,12 +909,16 @@ def draw_trace_concurrency_charts(trace_series: list[TraceSeries], output_dir: p
         stale_timeline_path = output_dir / f"aws_scheduler_trace_timeline_{protocol.lower()}_{workload.lower()}.png"
         if stale_timeline_path.exists():
             stale_timeline_path.unlink()
-        perfetto_path = output_dir / f"aws_scheduler_trace_perfetto_{protocol.lower()}_{workload.lower()}.json"
-        write_perfetto_trace(selected, perfetto_path)
-        paths.append(perfetto_path)
         latency_path = output_dir / f"aws_scheduler_trace_latency_over_time_{protocol.lower()}_{workload.lower()}.png"
         draw_trace_latency_over_time_chart(selected, latency_path)
         paths.append(latency_path)
+        queue_path = output_dir / f"aws_scheduler_trace_queue_{protocol.lower()}_{workload.lower()}.png"
+        if queue_path.exists():
+            queue_path.unlink()
+        if write_perfetto:
+            perfetto_path = output_dir / f"aws_scheduler_trace_perfetto_{protocol.lower()}_{workload.lower()}.json"
+            write_perfetto_trace(selected, perfetto_path)
+            paths.append(perfetto_path)
     return paths
 
 
@@ -1097,6 +1144,15 @@ def write_perfetto_trace(series: list[TraceSeries], output: pathlib.Path) -> Non
                             "request_index": index,
                             "request": str(request["request"]),
                             "latency_us": int(request["latency_us"]),
+                            "queued": bool(request.get("queued", 0)),
+                            "queue_wait_us": int(request.get("queue_wait_us", 0)),
+                            "queue_depth_at_start": int(request.get("queue_depth_at_start", 0)),
+                            "queue_depth_after_enqueue": int(
+                                request.get("queue_depth_after_enqueue", 0)
+                            ),
+                            "available_permits_at_start": int(
+                                request.get("available_permits_at_start", 0)
+                            ),
                         },
                     }
                 )
@@ -1122,7 +1178,7 @@ def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathli
     draw_trace_small_multiple_title(
         ctx,
         f"AWS Scheduler Request Latency Over Time ({ordered_series[0].protocol}, {ordered_series[0].workload})",
-        "Worker-to-scheduler requests are grouped by start time. Lines show avg, p50, p90, and p99 latency per time bucket.",
+        "Worker-to-scheduler latency uses the left axis. Instantaneous scheduler queue depth uses the right axis.",
         margin_left,
     )
     draw_trace_y_axis_header(ctx, "Latency (ms)", margin_left, margin_top)
@@ -1131,7 +1187,10 @@ def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathli
         rows = trace_latency_percentile_rows(item, bucket_s)
         y_top = margin_top + index * (panel_height + panel_gap)
         show_x_labels = index == len(ordered_series) - 1
-        y_max = nice_upper_bound(max((max(row["avg_ms"], row["p99_ms"]) for row in rows), default=1.0))
+        queue_y_max = nice_upper_bound(max(item.max_queue_depth, 1))
+        y_max = nice_upper_bound(
+            max((max(row["avg_ms"], row["p99_ms"], row["avg_queue_wait_ms"]) for row in rows), default=1.0)
+        )
         draw_trace_latency_panel_axes(
             ctx,
             item,
@@ -1142,25 +1201,53 @@ def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathli
             x_max,
             y_max,
             show_x_labels,
+            right_y_max=queue_y_max,
         )
         draw_latency_percentile_series(ctx, rows, "avg_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.10, 0.52, 0.34))
         draw_latency_percentile_series(ctx, rows, "p50_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.10, 0.34, 0.74))
         draw_latency_percentile_series(ctx, rows, "p90_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.78, 0.36, 0.10))
         draw_latency_percentile_series(ctx, rows, "p99_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.77, 0.29, 0.30))
-    draw_latency_percentile_legend(ctx, margin_left + plot_width - 120, 44)
+        draw_latency_percentile_series(
+            ctx,
+            rows,
+            "avg_queue_wait_ms",
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            y_max,
+            (0.50, 0.33, 0.72),
+            dash=(7.0, 5.0),
+        )
+        draw_queue_depth_series(
+            ctx,
+            item,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            queue_y_max,
+            (0.22, 0.22, 0.22),
+        )
+    draw_latency_percentile_legend(ctx, margin_left + plot_width - 230, 44)
     draw_trace_x_axis_label(ctx, margin_left, height - margin_bottom + 58, plot_width)
     surface.write_to_png(str(output))
 
 
 def trace_latency_percentile_rows(series: TraceSeries, bucket_s: float) -> list[dict[str, float]]:
     buckets: dict[int, list[float]] = defaultdict(list)
+    queue_wait_buckets: dict[int, list[float]] = defaultdict(list)
     for request in series.requests:
         start_s = (int(request["start_epoch_us"]) - series.start_epoch_us) / 1_000_000
         bucket = int(start_s / bucket_s)
         buckets[bucket].append(int(request["latency_us"]) / 1000)
+        queue_wait_buckets[bucket].append(int(request.get("queue_wait_us", 0)) / 1000)
     rows = []
     for bucket, values in sorted(buckets.items()):
         values.sort()
+        queue_wait_values = sorted(queue_wait_buckets[bucket])
         rows.append(
             {
                 "time_s": (bucket + 0.5) * bucket_s,
@@ -1168,6 +1255,7 @@ def trace_latency_percentile_rows(series: TraceSeries, bucket_s: float) -> list[
                 "p50_ms": percentile(values, 0.50),
                 "p90_ms": percentile(values, 0.90),
                 "p99_ms": percentile(values, 0.99),
+                "avg_queue_wait_ms": sum(queue_wait_values) / len(queue_wait_values),
             }
         )
     return rows
@@ -1309,6 +1397,7 @@ def draw_trace_latency_panel_axes(
     x_max: float,
     y_max: float,
     show_x_labels: bool,
+    right_y_max: float | None = None,
 ) -> None:
     set_color(ctx, COLORS["grid"])
     ctx.set_line_width(1)
@@ -1325,7 +1414,37 @@ def draw_trace_latency_panel_axes(
         ctx.show_text(label)
         set_color(ctx, COLORS["grid"])
     draw_trace_vertical_grid(ctx, margin_left, margin_top, plot_width, plot_height, x_max, show_x_labels)
-    draw_trace_panel_label(ctx, series, margin_left + plot_width + 18, margin_top)
+    if right_y_max is not None:
+        draw_trace_right_axis(ctx, margin_left, margin_top, plot_width, plot_height, right_y_max)
+    label_offset = 88 if right_y_max is not None else 18
+    draw_trace_panel_label(ctx, series, margin_left + plot_width + label_offset, margin_top)
+
+
+def draw_trace_right_axis(
+    ctx: cairo.Context,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    y_max: float,
+) -> None:
+    x = margin_left + plot_width
+    set_color(ctx, COLORS["text"])
+    ctx.set_line_width(2)
+    ctx.move_to(x, margin_top)
+    ctx.line_to(x, margin_top + plot_height)
+    ctx.stroke()
+    select_font(ctx, 13)
+    for index in range(3):
+        y = margin_top + plot_height - plot_height * index / 2
+        label = format_axis_value(y_max * index / 2)
+        set_color(ctx, COLORS["muted"])
+        ctx.move_to(x + 10, y + 5)
+        ctx.show_text(label)
+    select_font(ctx, 12, bold=True)
+    set_color(ctx, COLORS["muted"])
+    ctx.move_to(x + 10, margin_top - 10)
+    ctx.show_text("Queued")
 
 
 def draw_latency_percentile_series(
@@ -1339,11 +1458,16 @@ def draw_latency_percentile_series(
     x_max: float,
     y_max: float,
     color: tuple[float, float, float],
+    dash: tuple[float, float] | None = None,
 ) -> None:
     if not rows:
         return
     set_color(ctx, color)
     ctx.set_line_width(2)
+    if dash is None:
+        ctx.set_dash([])
+    else:
+        ctx.set_dash(dash)
     for index, row in enumerate(rows):
         x = margin_left + plot_width * row["time_s"] / x_max
         y = margin_top + plot_height - plot_height * row[key] / y_max
@@ -1352,6 +1476,39 @@ def draw_latency_percentile_series(
         else:
             ctx.line_to(x, y)
     ctx.stroke()
+    ctx.set_dash([])
+
+
+def draw_queue_depth_series(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    y_max: float,
+    color: tuple[float, float, float],
+) -> None:
+    set_color(ctx, color)
+    ctx.set_line_width(2)
+    ctx.set_dash((4.0, 4.0))
+    current = 0
+    ctx.move_to(margin_left, margin_top + plot_height)
+    for timestamp_us, delta in series.queue_events:
+        elapsed_s = (timestamp_us - series.start_epoch_us) / 1_000_000
+        x = margin_left + plot_width * elapsed_s / x_max
+        y = margin_top + plot_height - plot_height * current / y_max
+        ctx.line_to(x, y)
+        current += delta
+        y = margin_top + plot_height - plot_height * current / y_max
+        ctx.line_to(x, y)
+    duration_s = (series.end_epoch_us - series.start_epoch_us) / 1_000_000
+    end_x = margin_left + plot_width * duration_s / x_max
+    end_y = margin_top + plot_height - plot_height * current / y_max
+    ctx.line_to(end_x, end_y)
+    ctx.stroke()
+    ctx.set_dash([])
 
 
 def draw_latency_percentile_legend(ctx: cairo.Context, x: int, y: int) -> None:
@@ -1362,6 +1519,8 @@ def draw_latency_percentile_legend(ctx: cairo.Context, x: int, y: int) -> None:
             ("p50", (0.10, 0.34, 0.74)),
             ("p90", (0.78, 0.36, 0.10)),
             ("p99", (0.77, 0.29, 0.30)),
+            ("avg queue wait", (0.50, 0.33, 0.72)),
+            ("queue depth", (0.22, 0.22, 0.22)),
         ],
         x,
         y,

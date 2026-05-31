@@ -35,6 +35,7 @@ class BenchmarkConfig:
     scheduler_poll_batch: int = 1024
     scheduler_refill_interval_ms: int = 10
     scheduler_poll_wait_ms: int = 20
+    scheduler_worker_poll_concurrency: int = 512
     flat_percent: int = 50
 
 
@@ -156,6 +157,9 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if config.benchmark.job_poll_wait_ms < 0:
         msg = "job_poll_wait_ms must be greater than or equal to 0"
+        raise ValueError(msg)
+    if config.benchmark.scheduler_worker_poll_concurrency <= 0:
+        msg = "scheduler_worker_poll_concurrency must be greater than 0"
         raise ValueError(msg)
     if not config.instances.remote_root.startswith("/"):
         msg = "instances.remote_root must be an absolute path, for example /opt/spider"

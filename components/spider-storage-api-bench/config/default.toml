@@ -25,6 +25,7 @@ job_poll_wait_ms = 10
 scheduler_poll_batch = 1024
 scheduler_refill_interval_ms = 10
 scheduler_poll_wait_ms = 20
+scheduler_worker_poll_concurrency = 512
 warmup_sec = 5
 duration_sec = 30
 flat_percent = 80

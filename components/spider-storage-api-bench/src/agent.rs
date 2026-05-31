@@ -7,7 +7,7 @@ use std::{
     sync::{
         Arc,
         Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -26,7 +26,7 @@ use spider_storage_api_bench::{
     client::StorageApiClient,
     metrics::{RequestCategory, RequestLatencySample, summarize_requests},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore, TryAcquireError};
 
 use crate::{
     AgentArgs,
@@ -60,8 +60,45 @@ struct AgentRunRecord {
 struct SchedulerQueue {
     sender: async_channel::Sender<ReadyTaskEntryDto>,
     receiver: async_channel::Receiver<ReadyTaskEntryDto>,
+    worker_poll_limit: usize,
+    worker_poll_permits: Semaphore,
+    queued_worker_polls: AtomicUsize,
+    worker_poll_count: AtomicU64,
+    total_queue_depth: AtomicU64,
+    max_queue_depth: AtomicUsize,
+    total_queue_wait_us: AtomicU64,
+    max_queue_wait_us: AtomicU64,
     worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
     trace: Option<Arc<SchedulerTrace>>,
+}
+
+impl SchedulerQueue {
+    fn queue_summary(&self) -> crate::SchedulerQueueSummary {
+        let worker_poll_count = self.worker_poll_count.load(Ordering::Relaxed);
+        let total_queue_depth = self.total_queue_depth.load(Ordering::Relaxed);
+        let total_queue_wait_us = self.total_queue_wait_us.load(Ordering::Relaxed);
+        crate::SchedulerQueueSummary {
+            worker_poll_limit: self.worker_poll_limit,
+            worker_poll_count,
+            max_queue_depth: self.max_queue_depth.load(Ordering::Relaxed),
+            avg_queue_depth: if worker_poll_count == 0 {
+                0.0
+            } else {
+                average_u64(total_queue_depth, worker_poll_count)
+            },
+            max_queue_wait_us: self.max_queue_wait_us.load(Ordering::Relaxed),
+            avg_queue_wait_us: if worker_poll_count == 0 {
+                0.0
+            } else {
+                average_u64(total_queue_wait_us, worker_poll_count)
+            },
+        }
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+const fn average_u64(total: u64, count: u64) -> f64 {
+    total as f64 / count as f64
 }
 
 struct SchedulerTrace {
@@ -80,6 +117,11 @@ struct SchedulerTraceRecord<'a> {
     start_epoch_us: u128,
     end_epoch_us: u128,
     latency_us: u128,
+    queued: bool,
+    queue_wait_us: u128,
+    queue_depth_at_start: usize,
+    queue_depth_after_enqueue: usize,
+    available_permits_at_start: usize,
     succeeded: bool,
     task_found: Option<bool>,
     task_count: Option<usize>,
@@ -160,6 +202,16 @@ async fn start_run(
         None
     };
     let scheduler = if request.role == AgentRole::Scheduler {
+        let config = spider_storage_api_bench::config::BenchConfig::load(&state.config_path)
+            .map_err(|error| {
+                AgentError::internal(format!(
+                    "failed to load scheduler config for concurrency limit: {error}"
+                ))
+            })?;
+        config.benchmark.validate().map_err(|error| {
+            AgentError::internal(format!("invalid scheduler benchmark config: {error}"))
+        })?;
+        let worker_poll_concurrency = config.benchmark.scheduler_worker_poll_concurrency;
         let (sender, receiver) = async_channel::unbounded();
         let trace = match &request.scheduler_trace_path {
             Some(path) => Some(Arc::new(
@@ -174,6 +226,14 @@ async fn start_run(
         Some(Arc::new(SchedulerQueue {
             sender,
             receiver,
+            worker_poll_limit: worker_poll_concurrency,
+            worker_poll_permits: Semaphore::new(worker_poll_concurrency),
+            queued_worker_polls: AtomicUsize::new(0),
+            worker_poll_count: AtomicU64::new(0),
+            total_queue_depth: AtomicU64::new(0),
+            max_queue_depth: AtomicUsize::new(0),
+            total_queue_wait_us: AtomicU64::new(0),
+            max_queue_wait_us: AtomicU64::new(0),
             worker_poll_latency: Mutex::new(Vec::new()),
             trace,
         }))
@@ -327,6 +387,7 @@ async fn run_scheduler_report(
         request_latency: spider_storage_api_bench::metrics::summarize_requests(&request_latency),
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: summarize_requests(&scheduler.worker_poll_latency.lock().await),
+        scheduler_queue: Some(scheduler.queue_summary()),
         job_latency_samples: Vec::new(),
         request_latency_samples: Vec::new(),
         worker_activity_samples: Vec::new(),
@@ -367,6 +428,11 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
                         start_epoch_us: trace_finish.start_epoch_us,
                         end_epoch_us: unix_epoch_micros(),
                         latency_us: trace_finish.start.elapsed().as_micros(),
+                        queued: false,
+                        queue_wait_us: 0,
+                        queue_depth_at_start: 0,
+                        queue_depth_after_enqueue: 0,
+                        available_permits_at_start: 0,
                         succeeded: true,
                         task_found: None,
                         task_count: Some(ready.tasks.len()),
@@ -384,6 +450,11 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
                         start_epoch_us: trace_finish.start_epoch_us,
                         end_epoch_us: unix_epoch_micros(),
                         latency_us: trace_finish.start.elapsed().as_micros(),
+                        queued: false,
+                        queue_wait_us: 0,
+                        queue_depth_at_start: 0,
+                        queue_depth_after_enqueue: 0,
+                        available_permits_at_start: 0,
                         succeeded: false,
                         task_found: None,
                         task_count: None,
@@ -453,6 +524,7 @@ async fn run_submitter_report(
         ),
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: Vec::new(),
+        scheduler_queue: None,
         job_latency_samples: measurements.job_latency,
         request_latency_samples: Vec::new(),
         worker_activity_samples: measurements.worker_activity,
@@ -520,6 +592,7 @@ async fn run_worker_report(
         ),
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: Vec::new(),
+        scheduler_queue: None,
         job_latency_samples: Vec::new(),
         request_latency_samples: Vec::new(),
         worker_activity_samples: measurements.worker_activity,
@@ -546,6 +619,7 @@ async fn get_run(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn poll_scheduler_ready_tasks(
     State(state): State<AgentState>,
     Path(run_id): Path<String>,
@@ -572,8 +646,55 @@ async fn poll_scheduler_ready_tasks(
         drop(runs);
         scheduler
     };
-    let trace_finish = scheduler.trace.as_ref().map(|trace| trace.start_request());
     let start_time = Instant::now();
+    let trace_finish = scheduler.trace.as_ref().map(|trace| trace.start_request());
+    let queue_depth_at_start = scheduler.queued_worker_polls.load(Ordering::Relaxed);
+    let available_permits_at_start = scheduler.worker_poll_permits.available_permits();
+    let (queued, queue_depth_after_enqueue, _permit) = match scheduler
+        .worker_poll_permits
+        .try_acquire()
+    {
+        Ok(permit) => (false, queue_depth_at_start, permit),
+        Err(TryAcquireError::NoPermits) => {
+            let queue_depth_after_enqueue = scheduler
+                .queued_worker_polls
+                .fetch_add(1, Ordering::Relaxed)
+                + 1;
+            scheduler
+                .max_queue_depth
+                .fetch_max(queue_depth_after_enqueue, Ordering::Relaxed);
+            let permit_result = scheduler.worker_poll_permits.acquire().await;
+            scheduler
+                .queued_worker_polls
+                .fetch_sub(1, Ordering::Relaxed);
+            (
+                true,
+                queue_depth_after_enqueue,
+                permit_result.map_err(|error| {
+                    AgentError::internal(format!("scheduler worker poll limiter closed: {error}"))
+                })?,
+            )
+        }
+        Err(TryAcquireError::Closed) => {
+            return Err(AgentError::internal("scheduler worker poll limiter closed"));
+        }
+    };
+    let queue_wait_us = if queued {
+        start_time.elapsed().as_micros()
+    } else {
+        0
+    };
+    scheduler.worker_poll_count.fetch_add(1, Ordering::Relaxed);
+    scheduler
+        .total_queue_depth
+        .fetch_add(queue_depth_after_enqueue as u64, Ordering::Relaxed);
+    let queue_wait_us_u64 = u64::try_from(queue_wait_us).unwrap_or(u64::MAX);
+    scheduler
+        .total_queue_wait_us
+        .fetch_add(queue_wait_us_u64, Ordering::Relaxed);
+    scheduler
+        .max_queue_wait_us
+        .fetch_max(queue_wait_us_u64, Ordering::Relaxed);
     let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
     if let (Some(trace), Some(trace_finish)) = (&scheduler.trace, trace_finish) {
         trace
@@ -585,6 +706,11 @@ async fn poll_scheduler_ready_tasks(
                 start_epoch_us: trace_finish.start_epoch_us,
                 end_epoch_us: unix_epoch_micros(),
                 latency_us: trace_finish.start.elapsed().as_micros(),
+                queued,
+                queue_wait_us,
+                queue_depth_at_start,
+                queue_depth_after_enqueue,
+                available_permits_at_start,
                 succeeded: true,
                 task_found: Some(task.is_some()),
                 task_count: None,
@@ -762,10 +888,35 @@ impl IntoResponse for AgentError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, AtomicUsize},
+        },
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
-    use super::{AgentRunRecord, run_id_is_active};
-    use crate::distributed::AgentRunState;
+    use axum::{
+        Json,
+        extract::{Path, State},
+    };
+    use serde_json::Value;
+    use spider_storage_api_bench::api::ReadyTaskEntryDto;
+    use tokio::sync::{Mutex, Semaphore};
+
+    use super::{
+        AgentRunRecord,
+        AgentState,
+        SchedulerQueue,
+        SchedulerTrace,
+        poll_scheduler_ready_tasks,
+        run_id_is_active,
+    };
+    use crate::{
+        SchedulerPollReadyTaskRequest,
+        distributed::{AgentRole, AgentRunState},
+    };
 
     #[test]
     fn completed_run_id_can_be_reused() {
@@ -799,5 +950,121 @@ mod tests {
         );
 
         assert!(run_id_is_active(&runs, "grpc_flat_agent"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_worker_poll_requests_queue_when_limit_is_reached() -> anyhow::Result<()> {
+        let trace_path = unique_trace_path();
+        let (sender, receiver) = async_channel::unbounded();
+        let scheduler = Arc::new(SchedulerQueue {
+            sender,
+            receiver,
+            worker_poll_limit: 1,
+            worker_poll_permits: Semaphore::new(1),
+            queued_worker_polls: AtomicUsize::new(0),
+            worker_poll_count: AtomicU64::new(0),
+            total_queue_depth: AtomicU64::new(0),
+            max_queue_depth: AtomicUsize::new(0),
+            total_queue_wait_us: AtomicU64::new(0),
+            max_queue_wait_us: AtomicU64::new(0),
+            worker_poll_latency: Mutex::new(Vec::new()),
+            trace: Some(Arc::new(SchedulerTrace::new(
+                trace_path
+                    .to_str()
+                    .expect("trace path should be valid utf-8"),
+                None,
+            )?)),
+        });
+        let permit = scheduler
+            .worker_poll_permits
+            .acquire()
+            .await
+            .expect("scheduler worker poll limiter should be open");
+        let state = scheduler_agent_state(scheduler.clone());
+        scheduler
+            .sender
+            .send(ReadyTaskEntryDto {
+                resource_group_id: "resource-group".to_owned(),
+                job_id: "job".to_owned(),
+                task_index: 7,
+            })
+            .await
+            .expect("scheduler ready-task queue should be open");
+
+        let mut handle = tokio::spawn(poll_scheduler_ready_tasks(
+            State(state),
+            Path("run".to_owned()),
+            Json(SchedulerPollReadyTaskRequest { wait_ms: 0 }),
+        ));
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(20)) => {}
+            result = &mut handle => {
+                let _ = result.expect("scheduler poll task should not panic");
+                anyhow::bail!("scheduler poll completed before a limiter permit was available");
+            }
+        }
+        drop(permit);
+
+        let response = tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("scheduler poll should complete after limiter permit is released")
+            .expect("scheduler poll task should not panic")
+            .map_err(|error| anyhow::anyhow!(error.message))?
+            .0;
+        assert_eq!(Some(7), response.task.map(|task| task.task_index));
+        assert_eq!(1, scheduler.worker_poll_latency.lock().await.len());
+        scheduler
+            .trace
+            .as_ref()
+            .expect("scheduler trace should be configured")
+            .flush()?;
+
+        let trace = std::fs::read_to_string(&trace_path)?;
+        let record: Value = serde_json::from_str(trace.trim())?;
+        assert_eq!("worker_poll_ready_tasks", record["request"]);
+        assert_eq!(Some(true), record["queued"].as_bool());
+        let queue_wait_us = record["queue_wait_us"].as_u64().unwrap_or_default();
+        let latency_us = record["latency_us"].as_u64().unwrap_or_default();
+        assert!(queue_wait_us > 0);
+        assert!(latency_us >= queue_wait_us);
+        assert_eq!(0, record["queue_depth_at_start"]);
+        assert_eq!(1, record["queue_depth_after_enqueue"]);
+        assert_eq!(0, record["available_permits_at_start"]);
+        let queue_summary = scheduler.queue_summary();
+        assert_eq!(1, queue_summary.worker_poll_limit);
+        assert_eq!(1, queue_summary.worker_poll_count);
+        assert_eq!(1, queue_summary.max_queue_depth);
+        assert!((queue_summary.avg_queue_depth - 1.0).abs() < f64::EPSILON);
+        assert!(queue_summary.max_queue_wait_us > 0);
+        assert!(queue_summary.avg_queue_wait_us > 0.0);
+        Ok(())
+    }
+
+    fn scheduler_agent_state(scheduler: Arc<SchedulerQueue>) -> AgentState {
+        let mut runs = HashMap::new();
+        runs.insert(
+            "run".to_owned(),
+            AgentRunRecord {
+                status: AgentRunState::Running,
+                report: None,
+                error: None,
+                stop_requested: None,
+                scheduler: Some(scheduler),
+            },
+        );
+        AgentState {
+            agent_id: "scheduler-agent".to_owned(),
+            role: AgentRole::Scheduler,
+            config_path: "config/default.toml".into(),
+            runs: Arc::new(Mutex::new(runs)),
+        }
+    }
+
+    fn unique_trace_path() -> std::path::PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("spider-scheduler-trace-{now}.jsonl"))
     }
 }

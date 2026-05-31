@@ -45,6 +45,7 @@ class AwsSetupConfigTest(unittest.TestCase):
                     worker_count = 24
                     worker_poll_wait_ms = 25
                     job_poll_wait_ms = 50
+                    scheduler_worker_poll_concurrency = 384
                     flat_percent = 60
 
                     [instances]
@@ -79,6 +80,7 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(7, config.benchmark.task_sleep_ms)
         self.assertEqual(25, config.benchmark.worker_poll_wait_ms)
         self.assertEqual(50, config.benchmark.job_poll_wait_ms)
+        self.assertEqual(384, config.benchmark.scheduler_worker_poll_concurrency)
         self.assertEqual("preferred", config.database.ssl_mode)
         self.assertEqual(128, config.instances.worker_count)
         self.assertEqual("", config.network.placement_group)

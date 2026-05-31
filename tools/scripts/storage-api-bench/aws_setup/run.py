@@ -108,6 +108,8 @@ def build_matrix_command(
         str(config.benchmark.scheduler_refill_interval_ms),
         "--scheduler-poll-wait-ms",
         str(config.benchmark.scheduler_poll_wait_ms),
+        "--scheduler-worker-poll-concurrency",
+        str(config.benchmark.scheduler_worker_poll_concurrency),
         "--flat-percent",
         str(config.benchmark.flat_percent),
         "--database-host",

@@ -143,6 +143,8 @@ pub(crate) struct BenchmarkReport {
     pub(crate) server_metrics: ServerMetricsSessionReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) scheduler_metrics: Vec<RequestLatencySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scheduler_queue: Option<SchedulerQueueSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) job_latency_samples: Vec<JobLatencySample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,6 +153,16 @@ pub(crate) struct BenchmarkReport {
     pub(crate) worker_activity_samples: Vec<WorkerActivitySample>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) distributed: Option<distributed::DistributedReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct SchedulerQueueSummary {
+    pub(crate) worker_poll_limit: usize,
+    pub(crate) worker_poll_count: u64,
+    pub(crate) max_queue_depth: usize,
+    pub(crate) avg_queue_depth: f64,
+    pub(crate) max_queue_wait_us: u64,
+    pub(crate) avg_queue_wait_us: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -189,6 +201,7 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) scheduler_poll_batch: usize,
     pub(crate) scheduler_refill_interval_ms: u64,
     pub(crate) scheduler_poll_wait_ms: u64,
+    pub(crate) scheduler_worker_poll_concurrency: usize,
     pub(crate) database_host: String,
     pub(crate) database_port: u16,
     pub(crate) database_name: String,
@@ -328,6 +341,7 @@ pub(crate) async fn run_client_report(
         request_latency,
         server_metrics: measurements.server_metrics,
         scheduler_metrics: Vec::new(),
+        scheduler_queue: None,
         job_latency_samples: measurements.job_latency,
         request_latency_samples: measurements.request_latency,
         worker_activity_samples: measurements.worker_activity,
@@ -353,6 +367,25 @@ fn print_report(report: &BenchmarkReport) {
     if !report.scheduler_metrics.is_empty() {
         println!("scheduler_request_latency");
         println!("{}", render_request_summary(&report.scheduler_metrics));
+    }
+    if let Some(scheduler_queue) = &report.scheduler_queue {
+        println!("scheduler_queue");
+        println!(
+            "{}",
+            concat!(
+                "worker_poll_limit\tworker_poll_count\tmax_queue_depth\tavg_queue_depth",
+                "\tmax_queue_wait_us\tavg_queue_wait_us"
+            )
+        );
+        println!(
+            "{}\t{}\t{}\t{:.2}\t{}\t{:.2}",
+            scheduler_queue.worker_poll_limit,
+            scheduler_queue.worker_poll_count,
+            scheduler_queue.max_queue_depth,
+            scheduler_queue.avg_queue_depth,
+            scheduler_queue.max_queue_wait_us,
+            scheduler_queue.avg_queue_wait_us
+        );
     }
 }
 
@@ -380,6 +413,7 @@ impl BenchmarkSetup {
             scheduler_poll_batch: config.benchmark.scheduler_poll_batch,
             scheduler_refill_interval_ms: config.benchmark.scheduler_refill_interval_ms,
             scheduler_poll_wait_ms: config.benchmark.scheduler_poll_wait_ms,
+            scheduler_worker_poll_concurrency: config.benchmark.scheduler_worker_poll_concurrency,
             database_host: config.database.host.clone(),
             database_port: config.database.port,
             database_name: config.database.name.clone(),
@@ -1181,6 +1215,7 @@ mod tests {
         BenchmarkReport,
         BenchmarkSetup,
         Cli,
+        SchedulerQueueSummary,
         ServerProtocol,
         execution_manager_worker_count,
         total_connection_count,
@@ -1231,6 +1266,10 @@ mod tests {
         assert_eq!(value["client_count"], config.benchmark.client_count);
         assert_eq!(value["worker_count"], config.benchmark.worker_count);
         assert_eq!(value["task_sleep_ms"], config.benchmark.task_sleep_ms);
+        assert_eq!(
+            value["scheduler_worker_poll_concurrency"],
+            config.benchmark.scheduler_worker_poll_concurrency
+        );
         assert!(value.get("database_password").is_none());
         Ok(())
     }
@@ -1294,6 +1333,14 @@ mod tests {
                 p99_us: 35,
                 max_us: 40,
             }],
+            scheduler_queue: Some(SchedulerQueueSummary {
+                worker_poll_limit: 512,
+                worker_poll_count: 3,
+                max_queue_depth: 2,
+                avg_queue_depth: 1.5,
+                max_queue_wait_us: 40,
+                avg_queue_wait_us: 20.0,
+            }),
             job_latency_samples: Vec::new(),
             request_latency_samples: Vec::new(),
             worker_activity_samples: Vec::new(),
@@ -1319,6 +1366,8 @@ mod tests {
             value["scheduler_metrics"][0]["operation"]
         );
         assert_eq!(25, value["scheduler_metrics"][0]["avg_us"]);
+        assert_eq!(512, value["scheduler_queue"]["worker_poll_limit"]);
+        assert_eq!(2, value["scheduler_queue"]["max_queue_depth"]);
         Ok(())
     }
 

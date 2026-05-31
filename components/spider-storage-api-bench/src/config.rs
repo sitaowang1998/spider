@@ -161,6 +161,8 @@ pub struct BenchmarkConfig {
     pub scheduler_refill_interval_ms: u64,
     #[serde(default = "default_scheduler_poll_wait_ms")]
     pub scheduler_poll_wait_ms: u64,
+    #[serde(default = "default_scheduler_worker_poll_concurrency")]
+    pub scheduler_worker_poll_concurrency: usize,
     pub warmup_sec: u64,
     pub duration_sec: u64,
     pub flat_percent: u8,
@@ -181,6 +183,10 @@ const fn default_scheduler_refill_interval_ms() -> u64 {
 
 const fn default_scheduler_poll_wait_ms() -> u64 {
     20
+}
+
+const fn default_scheduler_worker_poll_concurrency() -> usize {
+    512
 }
 
 impl BenchmarkConfig {
@@ -211,6 +217,9 @@ impl BenchmarkConfig {
         if self.scheduler_poll_batch == 0 {
             anyhow::bail!("scheduler_poll_batch must be greater than 0");
         }
+        if self.scheduler_worker_poll_concurrency == 0 {
+            anyhow::bail!("scheduler_worker_poll_concurrency must be greater than 0");
+        }
         Ok(())
     }
 }
@@ -227,6 +236,7 @@ mod tests {
         assert_eq!(3, config.benchmark.task_sleep_ms);
         assert_eq!(8, config.benchmark.client_count);
         assert_eq!(16, config.benchmark.worker_count);
+        assert_eq!(512, config.benchmark.scheduler_worker_poll_concurrency);
         assert_eq!("spider-db", config.database.name);
         Ok(())
     }
