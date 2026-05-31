@@ -6,7 +6,7 @@ run_id = "spider-storage-bench-128"
 endpoint_url = ""
 
 [benchmark]
-node_counts = [1, 2, 4, 8, 16, 32, 64]
+node_counts = [16, 32, 64]
 protocols = ["grpc"]
 workloads = ["flat"]
 jobs_per_worker = 10

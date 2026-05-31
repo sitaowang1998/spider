@@ -405,6 +405,7 @@ def load_trace_series(input_dir: pathlib.Path) -> list[TraceSeries]:
                             "start_epoch_us": start_us,
                             "end_epoch_us": end_us,
                             "latency_us": int(row["latency_us"]),
+                            "task_found": int(bool(row.get("task_found", False))),
                             "queued": int(queued),
                             "queue_wait_us": queue_wait_us,
                             "queue_depth_at_start": queue_depth_at_start,
@@ -912,6 +913,19 @@ def draw_trace_concurrency_charts(
         latency_path = output_dir / f"aws_scheduler_trace_latency_over_time_{protocol.lower()}_{workload.lower()}.png"
         draw_trace_latency_over_time_chart(selected, latency_path)
         paths.append(latency_path)
+        returned = [filter_trace_series_to_returned_tasks(series) for series in selected]
+        returned = [series for series in returned if series is not None]
+        if returned:
+            returned_path = output_dir / (
+                f"aws_scheduler_trace_concurrency_returned_{protocol.lower()}_{workload.lower()}.png"
+            )
+            draw_trace_concurrency_chart(returned, returned_path, returned_only=True)
+            paths.append(returned_path)
+            returned_latency_path = output_dir / (
+                f"aws_scheduler_trace_latency_over_time_returned_{protocol.lower()}_{workload.lower()}.png"
+            )
+            draw_trace_latency_over_time_chart(returned, returned_latency_path, returned_only=True)
+            paths.append(returned_latency_path)
         queue_path = output_dir / f"aws_scheduler_trace_queue_{protocol.lower()}_{workload.lower()}.png"
         if queue_path.exists():
             queue_path.unlink()
@@ -922,7 +936,43 @@ def draw_trace_concurrency_charts(
     return paths
 
 
-def draw_trace_concurrency_chart(series: list[TraceSeries], output: pathlib.Path) -> None:
+def filter_trace_series_to_returned_tasks(series: TraceSeries) -> TraceSeries | None:
+    requests = [request for request in series.requests if int(request.get("task_found", 0)) == 1]
+    if not requests:
+        return None
+    events: list[tuple[int, int]] = []
+    queue_events: list[tuple[int, int]] = []
+    for request in requests:
+        start_us = int(request["start_epoch_us"])
+        end_us = int(request["end_epoch_us"])
+        events.append((start_us, 1))
+        events.append((end_us, -1))
+        queue_wait_us = int(request.get("queue_wait_us", 0))
+        if int(request.get("queued", 0)) == 1 and queue_wait_us > 0:
+            queue_events.append((start_us, 1))
+            queue_events.append((start_us + queue_wait_us, -1))
+    events.sort(key=lambda event: (event[0], -event[1]))
+    queue_events.sort(key=lambda event: (event[0], -event[1]))
+    return TraceSeries(
+        nodes=series.nodes,
+        protocol=series.protocol,
+        workload=series.workload,
+        events=events,
+        queue_events=queue_events,
+        requests=requests,
+        start_epoch_us=min(int(request["start_epoch_us"]) for request in requests),
+        end_epoch_us=max(int(request["end_epoch_us"]) for request in requests),
+        max_concurrency=max_concurrency(events),
+        max_queue_depth=max_concurrency(queue_events),
+    )
+
+
+def draw_trace_concurrency_chart(
+    series: list[TraceSeries],
+    output: pathlib.Path,
+    *,
+    returned_only: bool = False,
+) -> None:
     ordered_series = sorted(series, key=lambda row: row.nodes)
     width = 1700
     panel_height = 150
@@ -940,8 +990,12 @@ def draw_trace_concurrency_chart(series: list[TraceSeries], output: pathlib.Path
     paint_background(ctx)
     draw_trace_small_multiple_title(
         ctx,
-        f"AWS Scheduler Request Concurrency ({ordered_series[0].protocol}, {ordered_series[0].workload})",
-        "Each panel shows one node-count run using every traced scheduler request start/end. Time starts at the first traced request.",
+        trace_chart_title(
+            "AWS Scheduler Request Concurrency",
+            ordered_series[0],
+            returned_only,
+        ),
+        trace_concurrency_subtitle(returned_only),
         margin_left,
     )
 
@@ -1159,7 +1213,12 @@ def write_perfetto_trace(series: list[TraceSeries], output: pathlib.Path) -> Non
         file.write('\n],"displayTimeUnit":"ms"}\n')
 
 
-def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathlib.Path) -> None:
+def draw_trace_latency_over_time_chart(
+    series: list[TraceSeries],
+    output: pathlib.Path,
+    *,
+    returned_only: bool = False,
+) -> None:
     ordered_series = sorted(series, key=lambda row: row.nodes)
     width = 1800
     panel_height = 170
@@ -1177,8 +1236,12 @@ def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathli
     paint_background(ctx)
     draw_trace_small_multiple_title(
         ctx,
-        f"AWS Scheduler Request Latency Over Time ({ordered_series[0].protocol}, {ordered_series[0].workload})",
-        "Worker-to-scheduler latency uses the left axis. Instantaneous scheduler queue depth uses the right axis.",
+        trace_chart_title(
+            "AWS Scheduler Request Latency Over Time",
+            ordered_series[0],
+            returned_only,
+        ),
+        trace_latency_subtitle(returned_only),
         margin_left,
     )
     draw_trace_y_axis_header(ctx, "Latency (ms)", margin_left, margin_top)
@@ -1266,6 +1329,35 @@ def percentile(values: list[float], percentile_value: float) -> float:
         return 0.0
     index = min(len(values) - 1, max(0, math.ceil(len(values) * percentile_value) - 1))
     return values[index]
+
+
+def trace_chart_title(prefix: str, series: TraceSeries, returned_only: bool) -> str:
+    suffix = " Returned Tasks Only" if returned_only else ""
+    return f"{prefix}{suffix} ({series.protocol}, {series.workload})"
+
+
+def trace_concurrency_subtitle(returned_only: bool) -> str:
+    if returned_only:
+        return (
+            "Only worker-to-scheduler polls that returned a task are included. "
+            "Empty polls and timeouts are filtered out."
+        )
+    return (
+        "Each panel shows one node-count run using every traced scheduler request start/end. "
+        "Time starts at the first traced request."
+    )
+
+
+def trace_latency_subtitle(returned_only: bool) -> str:
+    if returned_only:
+        return (
+            "Only polls returning a task are included. Latency uses the left axis; "
+            "queue depth for those requests uses the right axis."
+        )
+    return (
+        "Worker-to-scheduler latency uses the left axis. "
+        "Instantaneous scheduler queue depth uses the right axis."
+    )
 
 
 def draw_trace_small_multiple_title(
