@@ -27,7 +27,7 @@ class AwsRunPlanTest(unittest.TestCase):
         config.aws.run_id = "aws-128"
         config.benchmark.node_counts = [1, 2, 4, 8, 16, 64, 128]
         config.benchmark.protocols = ["grpc", "rest"]
-        config.benchmark.jobs_per_worker = 20
+        config.benchmark.job_count = 320
         config.benchmark.tasks_per_job = 2000
         config.benchmark.payload_bytes = 256
         config.benchmark.task_sleep_ms = 7
@@ -56,8 +56,8 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("rest", command)
         self.assertIn("--workloads", command)
         self.assertIn("flat,deep,mixed", command)
-        self.assertIn("--jobs-per-worker", command)
-        self.assertIn("20", command)
+        self.assertIn("--job-count", command)
+        self.assertIn("320", command)
         self.assertIn("--tasks-per-job", command)
         self.assertIn("2000", command)
         self.assertIn("--task-sleep-ms", command)

@@ -46,7 +46,10 @@ use spider_storage_api_bench::{
     workload::{JobPayload, WorkloadKind, build_jobs},
 };
 use spider_tdl::wire::TaskOutputsSerializer;
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{
+    sync::{Barrier, Mutex},
+    task::JoinSet,
+};
 
 mod agent;
 mod controller;
@@ -505,6 +508,7 @@ async fn run_workload<ClientType: StorageApiClient>(
     )?;
     let completed = Arc::new(Mutex::new(HashSet::new()));
     let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
+    let started_jobs = Arc::new(Mutex::new(VecDeque::new()));
     let mut worker_tasks = spawn_worker_tasks(
         worker_clients,
         WorkerSpawnOptions {
@@ -520,6 +524,7 @@ async fn run_workload<ClientType: StorageApiClient>(
     let mut measurements = match run_submit_clients(
         submit_clients,
         job_queue,
+        started_jobs,
         &completed,
         prepared.resource_group_id,
         config.benchmark.job_poll_wait_ms,
@@ -591,9 +596,11 @@ pub(crate) async fn run_submitter_workload<ClientType: StorageApiClient>(
     )?;
     let completed = Arc::new(Mutex::new(HashSet::new()));
     let job_queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
+    let started_jobs = Arc::new(Mutex::new(VecDeque::new()));
     run_submit_clients(
         clients,
         job_queue,
+        started_jobs,
         &completed,
         resource_group_id,
         config.benchmark.job_poll_wait_ms,
@@ -757,8 +764,15 @@ struct SubmitClient<ClientType: StorageApiClient> {
     client: ClientType,
     completed: Arc<Mutex<HashSet<String>>>,
     job_queue: Arc<Mutex<VecDeque<JobPayload>>>,
+    started_jobs: Arc<Mutex<VecDeque<StartedJob>>>,
+    submit_barrier: Arc<Barrier>,
     job_poll_wait_ms: u64,
     resource_group_id: String,
+}
+
+struct StartedJob {
+    job_id: String,
+    start_time: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -798,16 +812,23 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
 async fn run_submit_clients<ClientType: StorageApiClient>(
     clients: Vec<ClientType>,
     job_queue: Arc<Mutex<VecDeque<JobPayload>>>,
+    started_jobs: Arc<Mutex<VecDeque<StartedJob>>>,
     completed: &Arc<Mutex<HashSet<String>>>,
     resource_group_id: String,
     job_poll_wait_ms: u64,
 ) -> anyhow::Result<ClientWorkloadMeasurements> {
+    if clients.is_empty() {
+        anyhow::bail!("submitter requires at least one client");
+    }
     let mut submit_tasks = JoinSet::new();
+    let submit_barrier = Arc::new(Barrier::new(clients.len()));
     for client in clients {
         submit_tasks.spawn(run_submit_client(SubmitClient {
             client,
             completed: Arc::clone(completed),
             job_queue: Arc::clone(&job_queue),
+            started_jobs: Arc::clone(&started_jobs),
+            submit_barrier: Arc::clone(&submit_barrier),
             job_poll_wait_ms,
             resource_group_id: resource_group_id.clone(),
         }));
@@ -837,6 +858,32 @@ async fn run_submit_client<ClientType: StorageApiClient>(
         request_latency: Vec::new(),
         worker_activity: Vec::new(),
     };
+    let submit_result = submit_all_jobs(&client, &mut measurements).await;
+    client.submit_barrier.wait().await;
+    submit_result?;
+    while let Some(job) = pop_started_job(&client.started_jobs).await {
+        let succeeded = monitor_job(
+            &client.client,
+            &mut measurements.request_latency,
+            &job.job_id,
+            client.job_poll_wait_ms,
+        )
+        .await?;
+        client.completed.lock().await.insert(job.job_id);
+        let latency = job.start_time.elapsed();
+        measurements.job_latency.push(if succeeded {
+            JobLatencySample::success(latency)
+        } else {
+            JobLatencySample::failure(latency)
+        });
+    }
+    Ok(measurements)
+}
+
+async fn submit_all_jobs<ClientType: StorageApiClient>(
+    client: &SubmitClient<ClientType>,
+    measurements: &mut ClientWorkloadMeasurements,
+) -> anyhow::Result<()> {
     while let Some(job) = pop_job(&client.job_queue).await {
         let start_time = Instant::now();
         let job_id = record_request(
@@ -862,22 +909,13 @@ async fn run_submit_client<ClientType: StorageApiClient>(
             }),
         )
         .await?;
-        let succeeded = monitor_job(
-            &client.client,
-            &mut measurements.request_latency,
-            &job_id,
-            client.job_poll_wait_ms,
-        )
-        .await?;
-        client.completed.lock().await.insert(job_id);
-        let latency = start_time.elapsed();
-        measurements.job_latency.push(if succeeded {
-            JobLatencySample::success(latency)
-        } else {
-            JobLatencySample::failure(latency)
-        });
+        client
+            .started_jobs
+            .lock()
+            .await
+            .push_back(StartedJob { job_id, start_time });
     }
-    Ok(measurements)
+    Ok(())
 }
 
 async fn run_client_worker<ClientType: StorageApiClient>(
@@ -975,11 +1013,16 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
         ));
     }
     let task = result?;
+    request_latency_samples.push(RequestLatencySample::success(
+        "poll_ready_tasks",
+        RequestCategory::Blocking,
+        poll_latency,
+    ));
     if task.is_none() {
         activity.record_empty_poll(poll_latency);
     } else {
         request_latency_samples.push(RequestLatencySample::success(
-            "poll_ready_tasks",
+            "poll_ready_tasks_returned",
             RequestCategory::Blocking,
             poll_latency,
         ));
@@ -1167,6 +1210,10 @@ const fn duration_micros(duration: Duration) -> u128 {
 }
 
 async fn pop_job(job_queue: &Arc<Mutex<VecDeque<JobPayload>>>) -> Option<JobPayload> {
+    job_queue.lock().await.pop_front()
+}
+
+async fn pop_started_job(job_queue: &Arc<Mutex<VecDeque<StartedJob>>>) -> Option<StartedJob> {
     job_queue.lock().await.pop_front()
 }
 

@@ -9,7 +9,7 @@ endpoint_url = ""
 node_counts = [16, 32, 64]
 protocols = ["grpc"]
 workloads = ["flat"]
-jobs_per_worker = 10
+job_count = 160
 tasks_per_job = 1000
 payload_bytes = 1024
 task_sleep_ms = 3
@@ -77,5 +77,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "scheduler-rate-limit"
+s3_folder_name = "scheduler-filter"
 remote_data_dir = "/var/lib/spider-bench/data"

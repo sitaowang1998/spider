@@ -24,7 +24,7 @@ class BenchmarkConfig:
     )
     protocols: list[str] = dataclasses.field(default_factory=lambda: ["grpc", "rest"])
     workloads: list[str] = dataclasses.field(default_factory=lambda: ["flat", "deep", "mixed"])
-    jobs_per_worker: int = 10
+    job_count: int = 1280
     tasks_per_job: int = 1000
     payload_bytes: int = 128
     task_sleep_ms: int = 3
@@ -148,6 +148,9 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if set(config.benchmark.workloads) - {"flat", "deep", "mixed"}:
         msg = "workloads must contain only flat, deep, and mixed"
+        raise ValueError(msg)
+    if config.benchmark.job_count <= 0:
+        msg = "job_count must be greater than 0"
         raise ValueError(msg)
     if config.benchmark.task_sleep_ms < 0:
         msg = "task_sleep_ms must be greater than or equal to 0"

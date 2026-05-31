@@ -231,7 +231,7 @@ def write_localstack_config(path: pathlib.Path, endpoint_url: str) -> None:
             node_counts = [1, 2]
             protocols = ["grpc", "rest"]
             workloads = ["flat", "deep", "mixed"]
-            jobs_per_worker = 1
+            job_count = 2
             tasks_per_job = 10
 
             [instances]

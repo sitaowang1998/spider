@@ -33,7 +33,7 @@ def main() -> int:
     log(f"config_written path={args.output}")
     log(
         f"config_summary submitter={submitter_ip} workers={len(worker_ips)} "
-        f"jobs={len(worker_ips) * args.jobs_per_worker}"
+        f"jobs={args.job_count}"
     )
     return 0
 
@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         help="Text file with one worker-agent private IP per line.",
     )
     parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--jobs-per-worker", type=int, default=10)
+    parser.add_argument("--job-count", type=int, default=1280)
     parser.add_argument("--tasks-per-job", type=int, default=1000)
     parser.add_argument("--payload-bytes", type=int, default=128)
     parser.add_argument("--task-sleep-ms", type=int, default=3)
@@ -128,7 +128,6 @@ def render_config(
     submitter_ip: str,
     worker_ips: list[str],
 ) -> str:
-    job_count = len(worker_ips) * args.jobs_per_worker
     lines = [
         "[server]",
         f'rest_bind = "0.0.0.0:{args.rest_port}"',
@@ -147,7 +146,7 @@ def render_config(
         "",
         "[benchmark]",
         f"task_count = {args.tasks_per_job}",
-        f"job_count = {job_count}",
+        f"job_count = {args.job_count}",
         f"payload_bytes = {args.payload_bytes}",
         f"task_sleep_ms = {args.task_sleep_ms}",
         f"client_count = {args.submitter_count}",

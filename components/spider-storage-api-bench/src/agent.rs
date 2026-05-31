@@ -68,7 +68,8 @@ struct SchedulerQueue {
     max_queue_depth: AtomicUsize,
     total_queue_wait_us: AtomicU64,
     max_queue_wait_us: AtomicU64,
-    worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
+    worker_poll_all_latency: Mutex<Vec<RequestLatencySample>>,
+    worker_poll_returned_latency: Mutex<Vec<RequestLatencySample>>,
     trace: Option<Arc<SchedulerTrace>>,
 }
 
@@ -234,7 +235,8 @@ async fn start_run(
             max_queue_depth: AtomicUsize::new(0),
             total_queue_wait_us: AtomicU64::new(0),
             max_queue_wait_us: AtomicU64::new(0),
-            worker_poll_latency: Mutex::new(Vec::new()),
+            worker_poll_all_latency: Mutex::new(Vec::new()),
+            worker_poll_returned_latency: Mutex::new(Vec::new()),
             trace,
         }))
     } else {
@@ -386,7 +388,7 @@ async fn run_scheduler_report(
         job_latency: spider_storage_api_bench::metrics::summarize(&[]),
         request_latency: spider_storage_api_bench::metrics::summarize_requests(&request_latency),
         server_metrics: crate::empty_server_metrics_report(),
-        scheduler_metrics: summarize_requests(&scheduler.worker_poll_latency.lock().await),
+        scheduler_metrics: summarize_scheduler_worker_poll_requests(&scheduler).await,
         scheduler_queue: Some(scheduler.queue_summary()),
         job_latency_samples: Vec::new(),
         request_latency_samples: Vec::new(),
@@ -719,18 +721,42 @@ async fn poll_scheduler_ready_tasks(
                 AgentError::internal(format!("failed to write scheduler trace: {error}"))
             })?;
     }
+    scheduler
+        .worker_poll_all_latency
+        .lock()
+        .await
+        .push(RequestLatencySample::success(
+            "worker_poll_ready_tasks",
+            RequestCategory::Blocking,
+            start_time.elapsed(),
+        ));
     if task.is_some() {
         scheduler
-            .worker_poll_latency
+            .worker_poll_returned_latency
             .lock()
             .await
             .push(RequestLatencySample::success(
-                "worker_poll_ready_tasks",
+                "worker_poll_ready_tasks_returned",
                 RequestCategory::Blocking,
                 start_time.elapsed(),
             ));
     }
     Ok(Json(SchedulerReadyTaskResponse { task }))
+}
+
+async fn summarize_scheduler_worker_poll_requests(
+    scheduler: &SchedulerQueue,
+) -> Vec<spider_storage_api_bench::metrics::RequestLatencySummary> {
+    let mut samples = scheduler.worker_poll_all_latency.lock().await.clone();
+    samples.extend(
+        scheduler
+            .worker_poll_returned_latency
+            .lock()
+            .await
+            .iter()
+            .cloned(),
+    );
+    summarize_requests(&samples)
 }
 
 async fn scheduler_poll_ready_task(
@@ -967,7 +993,8 @@ mod tests {
             max_queue_depth: AtomicUsize::new(0),
             total_queue_wait_us: AtomicU64::new(0),
             max_queue_wait_us: AtomicU64::new(0),
-            worker_poll_latency: Mutex::new(Vec::new()),
+            worker_poll_all_latency: Mutex::new(Vec::new()),
+            worker_poll_returned_latency: Mutex::new(Vec::new()),
             trace: Some(Arc::new(SchedulerTrace::new(
                 trace_path
                     .to_str()
@@ -1012,7 +1039,8 @@ mod tests {
             .map_err(|error| anyhow::anyhow!(error.message))?
             .0;
         assert_eq!(Some(7), response.task.map(|task| task.task_index));
-        assert_eq!(1, scheduler.worker_poll_latency.lock().await.len());
+        assert_eq!(1, scheduler.worker_poll_all_latency.lock().await.len());
+        assert_eq!(1, scheduler.worker_poll_returned_latency.lock().await.len());
         scheduler
             .trace
             .as_ref()

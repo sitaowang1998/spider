@@ -37,7 +37,7 @@ class AwsSetupConfigTest(unittest.TestCase):
                     node_counts = [1, 2, 4, 8, 16, 64, 128]
                     protocols = ["grpc", "rest"]
                     workloads = ["flat", "deep", "mixed"]
-                    jobs_per_worker = 20
+                    job_count = 320
                     tasks_per_job = 2000
                     payload_bytes = 256
                     task_sleep_ms = 7
@@ -75,7 +75,7 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual([1, 2, 4, 8, 16, 64, 128], config.benchmark.node_counts)
         self.assertEqual(["grpc", "rest"], config.benchmark.protocols)
         self.assertEqual(["flat", "deep", "mixed"], config.benchmark.workloads)
-        self.assertEqual(20, config.benchmark.jobs_per_worker)
+        self.assertEqual(320, config.benchmark.job_count)
         self.assertEqual(2000, config.benchmark.tasks_per_job)
         self.assertEqual(7, config.benchmark.task_sleep_ms)
         self.assertEqual(25, config.benchmark.worker_poll_wait_ms)

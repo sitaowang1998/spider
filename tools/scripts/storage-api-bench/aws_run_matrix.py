@@ -35,8 +35,8 @@ def main() -> int:
                 args.remote_root,
                 "--remote-workspace",
                 f"{args.remote_workspace_root}/{args.run_id}/{node_count}",
-                "--jobs-per-worker",
-                str(args.jobs_per_worker),
+                "--job-count",
+                str(args.job_count),
                 "--tasks-per-job",
                 str(args.tasks_per_job),
                 "--payload-bytes",
@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=pathlib.Path, default=aws_common.ROOT / "data")
     parser.add_argument("--remote-root", default="~/spider")
     parser.add_argument("--remote-workspace-root", default=".aws-bench")
-    parser.add_argument("--jobs-per-worker", type=int, default=10)
+    parser.add_argument("--job-count", type=int, default=1280)
     parser.add_argument("--tasks-per-job", type=int, default=1000)
     parser.add_argument("--payload-bytes", type=int, default=128)
     parser.add_argument("--task-sleep-ms", type=int, default=3)

@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=pathlib.Path, required=True)
     parser.add_argument("--remote-root", default="/opt/spider")
     parser.add_argument("--remote-workspace")
-    parser.add_argument("--jobs-per-worker", type=int, default=10)
+    parser.add_argument("--job-count", type=int, default=1280)
     parser.add_argument("--tasks-per-job", type=int, default=1000)
     parser.add_argument("--payload-bytes", type=int, default=128)
     parser.add_argument("--task-sleep-ms", type=int, default=3)
@@ -293,8 +293,8 @@ def make_config(
             str(worker_ips_path),
             "--output",
             str(output),
-            "--jobs-per-worker",
-            str(args.jobs_per_worker),
+            "--job-count",
+            str(args.job_count),
             "--tasks-per-job",
             str(args.tasks_per_job),
             "--payload-bytes",

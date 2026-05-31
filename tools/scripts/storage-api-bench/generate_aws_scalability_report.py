@@ -23,6 +23,7 @@ REQUEST_ORDER = (
     "get_job_state",
     "get_session",
     "worker_poll_ready_tasks",
+    "worker_poll_ready_tasks_returned",
     "scheduler_poll_ready_tasks",
     "register_execution_manager",
     "register_job",
@@ -30,6 +31,7 @@ REQUEST_ORDER = (
     "succeed_task_instance",
 )
 WORKER_POLL_OPERATION = "worker_poll_ready_tasks"
+WORKER_POLL_RETURNED_OPERATION = "worker_poll_ready_tasks_returned"
 SCHEDULER_STORAGE_POLL_OPERATION = "scheduler_poll_ready_tasks"
 PHASE_ORDER = (
     "db_add",
@@ -60,6 +62,7 @@ COLORS = {
 }
 REQUEST_TRACE_COLORS = {
     "worker_poll_ready_tasks": (0.10, 0.34, 0.74),
+    "worker_poll_ready_tasks_returned": (0.14, 0.45, 0.85),
     "scheduler_poll_ready_tasks": (0.78, 0.36, 0.10),
 }
 TRACE_COLORS = (
@@ -285,6 +288,9 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             server_row = None
             if operation == "poll_ready_tasks":
                 operation = WORKER_POLL_OPERATION
+                server_row = scheduler_by_key.get((client_row["category"], operation))
+            elif operation == "poll_ready_tasks_returned":
+                operation = WORKER_POLL_RETURNED_OPERATION
                 server_row = scheduler_by_key.get((client_row["category"], operation))
             elif operation == "scheduler_poll_ready_tasks":
                 operation = SCHEDULER_STORAGE_POLL_OPERATION
@@ -1698,13 +1704,14 @@ def draw_trace_series(
 def operation_label(operation: str) -> str:
     labels = {
         WORKER_POLL_OPERATION: "Worker To Scheduler Poll",
+        WORKER_POLL_RETURNED_OPERATION: "Worker To Scheduler Poll Returned Task",
         SCHEDULER_STORAGE_POLL_OPERATION: "Scheduler To Storage Poll",
     }
     return labels.get(operation, operation)
 
 
 def request_chart_subtitle(operation: str) -> str:
-    if operation == WORKER_POLL_OPERATION:
+    if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
         return "Worker calls to the scheduler cache. Stacked bars show scheduler handler time and client overhead."
     if operation == SCHEDULER_STORAGE_POLL_OPERATION:
         return "Scheduler batch polling against the storage server. Lower is better."
@@ -1712,7 +1719,7 @@ def request_chart_subtitle(operation: str) -> str:
 
 
 def request_chart_notes(operation: str) -> list[str]:
-    if operation == WORKER_POLL_OPERATION:
+    if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
         return ["g = gRPC, r = REST", "scheduler response = scheduler handler latency"]
     return ["g = gRPC, r = REST", "client overhead = client avg - server avg", "server other = server avg - measured phases"]
 
@@ -1748,14 +1755,14 @@ def request_component_rows(
             }
             server_avg_ms = server_avg_us / 1000
             phase_sum = sum(components.values())
-            if operation == WORKER_POLL_OPERATION:
+            if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
                 components["scheduler response"] = server_avg_ms
                 components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             elif components:
                 components["server other"] = max(server_avg_ms - phase_sum, 0.0)
             else:
                 components["server total"] = server_avg_ms
-            if operation != WORKER_POLL_OPERATION:
+            if operation not in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
                 components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             rows.append(
                 {
