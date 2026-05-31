@@ -43,6 +43,7 @@ class AwsRunPlanTest(unittest.TestCase):
         command = run_module.build_matrix_command(
             config,
             database_endpoint="bench-db.example.com",
+            results_s3_uri="s3://bench-results/run-001",
             data_dir=pathlib.Path("/tmp/results"),
             workspace_root=pathlib.Path("/tmp/workspace"),
         )
@@ -66,6 +67,8 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("50", command)
         self.assertIn("--database-host", command)
         self.assertIn("bench-db.example.com", command)
+        self.assertIn("--results-s3-uri", command)
+        self.assertIn("s3://bench-results/run-001", command)
 
     def test_full_run_steps_keep_teardown_last(self):
         full_run = load_module("full_run")

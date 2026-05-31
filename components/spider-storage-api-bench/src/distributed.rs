@@ -33,6 +33,10 @@ pub struct AgentRunRequest {
     pub(crate) scheduler_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) scheduler_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scheduler_trace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scheduler_trace_s3_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,16 +127,14 @@ pub fn merge_agent_reports(
     server_metrics: ServerMetricsSessionReport,
     job_allocation: Vec<AgentJobAllocation>,
     controller_wall_time: Duration,
-    controller_request_samples: Vec<RequestLatencySample>,
+    controller_request_samples: &[RequestLatencySample],
 ) -> BenchmarkReport {
     let mut job_samples = Vec::new();
-    let mut request_samples = controller_request_samples;
     let mut worker_activity_samples = Vec::new();
     let mut scheduler_metrics = Vec::new();
 
     for (_, report) in &agent_reports {
         job_samples.extend(report.job_latency_samples.iter().cloned());
-        request_samples.extend(report.request_latency_samples.iter().cloned());
         worker_activity_samples.extend(report.worker_activity_samples.iter().cloned());
         scheduler_metrics.extend(report.scheduler_metrics.iter().cloned());
     }
@@ -142,15 +144,15 @@ pub fn merge_agent_reports(
     } else {
         summarize(&job_samples)
     };
-    let request_latency = if request_samples.is_empty() {
-        merge_request_summaries(
-            agent_reports
-                .iter()
-                .flat_map(|(_, report)| report.request_latency.iter().cloned()),
-        )
-    } else {
-        summarize_requests(&request_samples)
-    };
+    let request_latency = merge_request_summaries(
+        summarize_requests(controller_request_samples)
+            .into_iter()
+            .chain(
+                agent_reports
+                    .iter()
+                    .flat_map(|(_, report)| report.request_latency.iter().cloned()),
+            ),
+    );
     let agents = agent_reports
         .into_iter()
         .map(|(agent_id, _)| agent_id)
@@ -163,7 +165,7 @@ pub fn merge_agent_reports(
         server_metrics,
         scheduler_metrics: merge_request_summaries(scheduler_metrics.into_iter()),
         job_latency_samples: job_samples,
-        request_latency_samples: request_samples,
+        request_latency_samples: Vec::new(),
         worker_activity_samples,
         distributed: Some(DistributedReport {
             agent_count: agents.len(),
@@ -383,7 +385,7 @@ mod tests {
             },
             Vec::new(),
             std::time::Duration::from_secs(1),
-            Vec::new(),
+            &[],
         );
 
         assert_eq!(1, merged.scheduler_metrics.len());

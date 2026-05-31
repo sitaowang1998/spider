@@ -23,10 +23,12 @@ def main() -> int:
     config = config_module.load_config(args.config)
     state = state_module.load_state(args.state)
     database_endpoint = args.database_endpoint or lookup_database_endpoint(state)
+    results_s3_uri = lookup_results_s3_uri(state)
     progress(f"using database endpoint {database_endpoint}")
     command = build_matrix_command(
         config,
         database_endpoint=database_endpoint,
+        results_s3_uri=results_s3_uri,
         data_dir=args.data_dir,
         workspace_root=args.workspace_root,
     )
@@ -61,6 +63,7 @@ def build_matrix_command(
     config: config_module.AwsBenchConfig,
     *,
     database_endpoint: str,
+    results_s3_uri: str | None,
     data_dir: pathlib.Path,
     workspace_root: pathlib.Path,
 ) -> list[str]:
@@ -122,6 +125,8 @@ def build_matrix_command(
         "--database-ssl-mode",
         config.database.ssl_mode,
     ]
+    if results_s3_uri is not None:
+        command.extend(["--results-s3-uri", results_s3_uri])
     return command
 
 
@@ -133,6 +138,15 @@ def lookup_database_endpoint(state: dict[str, object]) -> str:
             return endpoint
     msg = "database endpoint missing from state; pass --database-endpoint"
     raise ValueError(msg)
+
+
+def lookup_results_s3_uri(state: dict[str, object]) -> str | None:
+    resources = state.get("resources", {})
+    if isinstance(resources, dict):
+        endpoint = resources.get("results_s3_uri")
+        if isinstance(endpoint, str) and endpoint:
+            return endpoint
+    return None
 
 
 if __name__ == "__main__":

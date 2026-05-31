@@ -106,6 +106,8 @@ def main() -> int:
                     config,
                     args.data_dir,
                     workload,
+                    remote_log_dir.parent / "scheduler-traces",
+                    scheduler_trace_s3_prefix(args.trace_s3_prefix, args.node_count, args.protocol, workload),
                 ),
                 cwd=aws_common.ROOT,
                 check=False,
@@ -178,6 +180,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--agent-start-timeout", type=int, default=300)
     parser.add_argument("--server-start-timeout", type=int, default=600)
+    parser.add_argument("--trace-s3-prefix")
     parser.set_defaults(reset_database=True)
     args = parser.parse_args()
     if args.remote_workspace is None:
@@ -190,8 +193,10 @@ def build_controller_command(
     config: pathlib.Path,
     data_dir: pathlib.Path,
     workload: str,
+    scheduler_trace_dir: pathlib.PurePosixPath,
+    scheduler_trace_s3_prefix: str | None,
 ) -> list[str]:
-    return [
+    command = [
         sys.executable,
         str(aws_common.SCRIPT_DIR / "run_distributed_protocol.py"),
         "--protocol",
@@ -203,6 +208,21 @@ def build_controller_command(
         "--workloads",
         workload,
     ]
+    command.extend(["--scheduler-trace-dir", str(scheduler_trace_dir)])
+    if scheduler_trace_s3_prefix is not None:
+        command.extend(["--scheduler-trace-s3-prefix", scheduler_trace_s3_prefix])
+    return command
+
+
+def scheduler_trace_s3_prefix(
+    trace_s3_prefix: str | None,
+    node_count: int,
+    protocol: str,
+    workload: str,
+) -> str | None:
+    if trace_s3_prefix is None:
+        return None
+    return f"{trace_s3_prefix.rstrip('/')}/aws-{node_count}/{protocol}/{workload}"
 
 
 def build_reset_database_command(

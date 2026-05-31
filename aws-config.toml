@@ -7,7 +7,7 @@ endpoint_url = ""
 
 [benchmark]
 node_counts = [1, 2, 4, 8, 16, 32, 64]
-protocols = ["grpc", "rest"]
+protocols = ["grpc"]
 workloads = ["flat"]
 jobs_per_worker = 10
 tasks_per_job = 1000
@@ -18,7 +18,7 @@ worker_count = 16
 flat_percent = 50
 worker_poll_wait_ms = 1
 job_poll_wait_ms = 10
-scheduler_poll_batch = 1024
+scheduler_poll_batch = 10240
 scheduler_refill_interval_ms = 10
 scheduler_poll_wait_ms = 10
 
@@ -26,7 +26,7 @@ scheduler_poll_wait_ms = 10
 worker_count = 64
 worker_type = "c7i.xlarge"
 submitter_type = "c7i.xlarge"
-scheduler_type = "c7i.48xlarge"
+scheduler_type = "c7i.4xlarge"
 server_type = "r7i.48xlarge"
 controller_type = "c7i.large"
 # Optional override for the benchmark-node AMI. Leave as ami-xxxxxxxx to use
@@ -45,7 +45,7 @@ port = 3306
 instance_class = "db.r7i.48xlarge"
 allocated_storage = 400
 storage_type = "gp3"
-max_connections = 256
+max_connections = 512
 ssl_mode = "preferred"
 
 [network]
@@ -76,5 +76,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "http2"
+s3_folder_name = "scheduler-trace"
 remote_data_dir = "/var/lib/spider-bench/data"

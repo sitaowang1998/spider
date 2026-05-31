@@ -129,6 +129,10 @@ struct ControllerArgs {
     data_dir: PathBuf,
     #[arg(long)]
     flat_percent: Option<u8>,
+    #[arg(long)]
+    scheduler_trace_dir: Option<PathBuf>,
+    #[arg(long)]
+    scheduler_trace_s3_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

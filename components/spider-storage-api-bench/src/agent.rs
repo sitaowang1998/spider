@@ -1,10 +1,15 @@
 use std::{
     collections::HashMap,
+    fs::File,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    process::Command,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -56,6 +61,34 @@ struct SchedulerQueue {
     sender: async_channel::Sender<ReadyTaskEntryDto>,
     receiver: async_channel::Receiver<ReadyTaskEntryDto>,
     worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
+    trace: Option<Arc<SchedulerTrace>>,
+}
+
+struct SchedulerTrace {
+    path: PathBuf,
+    s3_uri: Option<String>,
+    next_request_id: AtomicU64,
+    writer: StdMutex<BufWriter<File>>,
+}
+
+#[derive(Serialize)]
+struct SchedulerTraceRecord<'a> {
+    request_id: u64,
+    request: &'a str,
+    run_id: &'a str,
+    agent_id: &'a str,
+    start_epoch_us: u128,
+    end_epoch_us: u128,
+    latency_us: u128,
+    succeeded: bool,
+    task_found: Option<bool>,
+    task_count: Option<usize>,
+}
+
+struct SchedulerTraceFinish {
+    request_id: u64,
+    start_epoch_us: u128,
+    start: Instant,
 }
 
 #[derive(Serialize)]
@@ -93,6 +126,7 @@ async fn health(State(state): State<AgentState>) -> Json<HealthResponse> {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 async fn start_run(
     State(state): State<AgentState>,
     Json(request): Json<AgentRunRequest>,
@@ -127,10 +161,21 @@ async fn start_run(
     };
     let scheduler = if request.role == AgentRole::Scheduler {
         let (sender, receiver) = async_channel::unbounded();
+        let trace = match &request.scheduler_trace_path {
+            Some(path) => Some(Arc::new(
+                SchedulerTrace::new(path, request.scheduler_trace_s3_uri.clone()).map_err(
+                    |error| {
+                        AgentError::internal(format!("failed to open scheduler trace: {error}"))
+                    },
+                )?,
+            )),
+            None => None,
+        };
         Some(Arc::new(SchedulerQueue {
             sender,
             receiver,
             worker_poll_latency: Mutex::new(Vec::new()),
+            trace,
         }))
     } else {
         None
@@ -240,7 +285,15 @@ async fn run_scheduler_report(
         spider_storage_api_bench::server::ServerProtocol::Rest => {
             let client =
                 spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
-            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
+            run_scheduler_loop(
+                client,
+                &config,
+                &state.agent_id,
+                &request,
+                scheduler.clone(),
+                stop_requested,
+            )
+            .await?
         }
         spider_storage_api_bench::server::ServerProtocol::Grpc => {
             let client = crate::connect_grpc_clients(&request.target, 1)
@@ -248,9 +301,21 @@ async fn run_scheduler_report(
                 .into_iter()
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("missing scheduler gRPC client"))?;
-            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
+            run_scheduler_loop(
+                client,
+                &config,
+                &state.agent_id,
+                &request,
+                scheduler.clone(),
+                stop_requested,
+            )
+            .await?
         }
     };
+    if let Some(trace) = &scheduler.trace {
+        trace.flush()?;
+        trace.upload()?;
+    }
     Ok(BenchmarkReport {
         setup: crate::BenchmarkSetup::new(
             request.protocol,
@@ -263,7 +328,7 @@ async fn run_scheduler_report(
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: summarize_requests(&scheduler.worker_poll_latency.lock().await),
         job_latency_samples: Vec::new(),
-        request_latency_samples: request_latency,
+        request_latency_samples: Vec::new(),
         worker_activity_samples: Vec::new(),
         distributed: None,
     })
@@ -272,13 +337,16 @@ async fn run_scheduler_report(
 async fn run_scheduler_loop<ClientType: StorageApiClient>(
     client: ClientType,
     config: &spider_storage_api_bench::config::BenchConfig,
+    agent_id: &str,
+    request: &AgentRunRequest,
     scheduler: Arc<SchedulerQueue>,
     stop_requested: Arc<AtomicBool>,
 ) -> anyhow::Result<Vec<RequestLatencySample>> {
     let mut request_latency = Vec::new();
     let refill_interval = Duration::from_millis(config.benchmark.scheduler_refill_interval_ms);
     while !stop_requested.load(Ordering::Relaxed) {
-        let (ready, _) = record_timed_request(
+        let trace_finish = scheduler.trace.as_ref().map(|trace| trace.start_request());
+        let ready_result = record_timed_request(
             &mut request_latency,
             "scheduler_poll_ready_tasks",
             RequestCategory::Blocking,
@@ -287,7 +355,43 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
                 wait_ms: config.benchmark.scheduler_poll_wait_ms,
             }),
         )
-        .await?;
+        .await;
+        let ready = match ready_result {
+            Ok((ready, _)) => {
+                if let (Some(trace), Some(trace_finish)) = (&scheduler.trace, trace_finish) {
+                    trace.record(&SchedulerTraceRecord {
+                        request_id: trace_finish.request_id,
+                        request: "scheduler_poll_ready_tasks",
+                        run_id: &request.run_id,
+                        agent_id,
+                        start_epoch_us: trace_finish.start_epoch_us,
+                        end_epoch_us: unix_epoch_micros(),
+                        latency_us: trace_finish.start.elapsed().as_micros(),
+                        succeeded: true,
+                        task_found: None,
+                        task_count: Some(ready.tasks.len()),
+                    })?;
+                }
+                ready
+            }
+            Err(error) => {
+                if let (Some(trace), Some(trace_finish)) = (&scheduler.trace, trace_finish) {
+                    trace.record(&SchedulerTraceRecord {
+                        request_id: trace_finish.request_id,
+                        request: "scheduler_poll_ready_tasks",
+                        run_id: &request.run_id,
+                        agent_id,
+                        start_epoch_us: trace_finish.start_epoch_us,
+                        end_epoch_us: unix_epoch_micros(),
+                        latency_us: trace_finish.start.elapsed().as_micros(),
+                        succeeded: false,
+                        task_found: None,
+                        task_count: None,
+                    })?;
+                }
+                return Err(error.into());
+            }
+        };
         if !ready.tasks.is_empty() {
             scheduler_push_tasks(&scheduler, ready.tasks).await?;
         }
@@ -350,7 +454,7 @@ async fn run_submitter_report(
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: Vec::new(),
         job_latency_samples: measurements.job_latency,
-        request_latency_samples: measurements.request_latency,
+        request_latency_samples: Vec::new(),
         worker_activity_samples: measurements.worker_activity,
         distributed: None,
     })
@@ -416,8 +520,8 @@ async fn run_worker_report(
         ),
         server_metrics: crate::empty_server_metrics_report(),
         scheduler_metrics: Vec::new(),
-        job_latency_samples: measurements.job_latency,
-        request_latency_samples: measurements.request_latency,
+        job_latency_samples: Vec::new(),
+        request_latency_samples: Vec::new(),
         worker_activity_samples: measurements.worker_activity,
         distributed: None,
     })
@@ -468,8 +572,27 @@ async fn poll_scheduler_ready_tasks(
         drop(runs);
         scheduler
     };
+    let trace_finish = scheduler.trace.as_ref().map(|trace| trace.start_request());
     let start_time = Instant::now();
     let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
+    if let (Some(trace), Some(trace_finish)) = (&scheduler.trace, trace_finish) {
+        trace
+            .record(&SchedulerTraceRecord {
+                request_id: trace_finish.request_id,
+                request: "worker_poll_ready_tasks",
+                run_id: &run_id,
+                agent_id: &state.agent_id,
+                start_epoch_us: trace_finish.start_epoch_us,
+                end_epoch_us: unix_epoch_micros(),
+                latency_us: trace_finish.start.elapsed().as_micros(),
+                succeeded: true,
+                task_found: Some(task.is_some()),
+                task_count: None,
+            })
+            .map_err(|error| {
+                AgentError::internal(format!("failed to write scheduler trace: {error}"))
+            })?;
+    }
     if task.is_some() {
         scheduler
             .worker_poll_latency
@@ -538,6 +661,13 @@ struct AgentError {
 }
 
 impl AgentError {
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
+    }
+
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -558,6 +688,70 @@ impl AgentError {
             message: message.into(),
         }
     }
+}
+
+impl SchedulerTrace {
+    fn new(path: &str, s3_uri: Option<String>) -> anyhow::Result<Self> {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = File::create(&path)?;
+        Ok(Self {
+            path,
+            s3_uri,
+            next_request_id: AtomicU64::new(1),
+            writer: StdMutex::new(BufWriter::new(file)),
+        })
+    }
+
+    fn start_request(&self) -> SchedulerTraceFinish {
+        SchedulerTraceFinish {
+            request_id: self.next_request_id.fetch_add(1, Ordering::Relaxed),
+            start_epoch_us: unix_epoch_micros(),
+            start: Instant::now(),
+        }
+    }
+
+    fn record(&self, record: &SchedulerTraceRecord<'_>) -> anyhow::Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("scheduler trace writer lock poisoned"))?;
+        serde_json::to_writer(&mut *writer, &record)?;
+        writer.write_all(b"\n")?;
+        drop(writer);
+        Ok(())
+    }
+
+    fn flush(&self) -> anyhow::Result<()> {
+        self.writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("scheduler trace writer lock poisoned"))?
+            .flush()?;
+        Ok(())
+    }
+
+    fn upload(&self) -> anyhow::Result<()> {
+        let Some(s3_uri) = &self.s3_uri else {
+            return Ok(());
+        };
+        let status = Command::new("aws")
+            .args(["s3", "cp"])
+            .arg(&self.path)
+            .arg(s3_uri)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("scheduler trace upload failed with status {status}");
+        }
+        Ok(())
+    }
+}
+
+fn unix_epoch_micros() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_micros())
 }
 
 impl IntoResponse for AgentError {

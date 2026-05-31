@@ -47,11 +47,14 @@ pub async fn run_controller(args: ControllerArgs) -> anyhow::Result<()> {
         args.protocol,
         args.workload,
         &args.data_dir,
+        args.scheduler_trace_dir.as_deref(),
+        args.scheduler_trace_s3_prefix.as_deref(),
     )
     .await?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_controller_workload(
     config: &BenchConfig,
     scheduler: Option<&DistributedAgentConfig>,
@@ -60,6 +63,8 @@ async fn run_controller_workload(
     protocol: ServerProtocol,
     workload: WorkloadKind,
     data_dir: &std::path::Path,
+    scheduler_trace_dir: Option<&std::path::Path>,
+    scheduler_trace_s3_prefix: Option<&str>,
 ) -> anyhow::Result<()> {
     let target = match protocol {
         ServerProtocol::Rest => config.server.rest_target.clone(),
@@ -112,6 +117,8 @@ async fn run_controller_workload(
             poll_interval: Duration::from_millis(distributed.poll_interval_ms),
             session_id: prepared.session_id,
             resource_group_id: &prepared.resource_group_id,
+            scheduler_trace_dir,
+            scheduler_trace_s3_prefix,
         })
         .await
         .map(|reports| (reports, prepared.request_latency))
@@ -128,7 +135,7 @@ async fn run_controller_workload(
         server_metrics,
         allocations,
         wall_start.elapsed(),
-        controller_request_samples,
+        &controller_request_samples,
     );
     write_reports(data_dir, &run_name, &agent_reports, &merged)?;
     log_controller_event(format_args!(
@@ -165,6 +172,8 @@ struct AgentDispatch<'a> {
     poll_interval: Duration,
     session_id: u64,
     resource_group_id: &'a str,
+    scheduler_trace_dir: Option<&'a std::path::Path>,
+    scheduler_trace_s3_prefix: Option<&'a str>,
 }
 
 async fn run_agents(dispatch: AgentDispatch<'_>) -> anyhow::Result<Vec<(String, BenchmarkReport)>> {
@@ -289,6 +298,8 @@ async fn start_scheduler_agent(
         resource_group_id: None,
         scheduler_url: None,
         scheduler_run_id: None,
+        scheduler_trace_path: scheduler_trace_path(dispatch, scheduler),
+        scheduler_trace_s3_uri: scheduler_trace_s3_uri(dispatch, scheduler),
     };
     post_agent_run(http, scheduler, &request).await?;
     Ok(Some(run_id))
@@ -312,6 +323,8 @@ async fn start_worker_agent(
         resource_group_id: None,
         scheduler_url: dispatch.scheduler.map(agent_url),
         scheduler_run_id,
+        scheduler_trace_path: None,
+        scheduler_trace_s3_uri: None,
     };
     post_agent_run(http, worker, &request).await
 }
@@ -333,9 +346,38 @@ async fn start_submitter_agent(
         resource_group_id: Some(dispatch.resource_group_id.to_owned()),
         scheduler_url: None,
         scheduler_run_id: None,
+        scheduler_trace_path: None,
+        scheduler_trace_s3_uri: None,
     };
     post_agent_run(http, dispatch.submitter, &request).await?;
     Ok(run_id)
+}
+
+fn scheduler_trace_path(
+    dispatch: &AgentDispatch<'_>,
+    scheduler: &DistributedAgentConfig,
+) -> Option<String> {
+    dispatch.scheduler_trace_dir.map(|trace_dir| {
+        trace_dir
+            .join(dispatch.run_name)
+            .join(format!("{}.jsonl", scheduler.id))
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
+fn scheduler_trace_s3_uri(
+    dispatch: &AgentDispatch<'_>,
+    scheduler: &DistributedAgentConfig,
+) -> Option<String> {
+    dispatch.scheduler_trace_s3_prefix.map(|prefix| {
+        format!(
+            "{}/{}/{}.jsonl",
+            prefix.trim_end_matches('/'),
+            dispatch.run_name,
+            scheduler.id
+        )
+    })
 }
 
 async fn post_agent_run(

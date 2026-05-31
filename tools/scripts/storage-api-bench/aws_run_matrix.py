@@ -82,6 +82,8 @@ def main() -> int:
                 "--database-ssl-mode",
                 args.database_ssl_mode,
             ]
+            if args.results_s3_uri is not None:
+                command.extend(["--trace-s3-prefix", f"{args.results_s3_uri.rstrip('/')}/traces"])
             if not args.reset_database:
                 command.append("--no-reset-database")
             if args.database_reset_client_bin is not None:
@@ -148,6 +150,7 @@ def parse_args() -> argparse.Namespace:
         "--database-reset-client-bin",
         help="MariaDB/MySQL client binary on the controller.",
     )
+    parser.add_argument("--results-s3-uri")
     parser.set_defaults(reset_database=True)
     return parser.parse_args()
 

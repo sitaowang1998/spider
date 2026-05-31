@@ -42,6 +42,10 @@ def main() -> int:
         ]
         if args.flat_percent is not None:
             cmd.extend(["--flat-percent", str(args.flat_percent)])
+        if args.scheduler_trace_dir is not None:
+            cmd.extend(["--scheduler-trace-dir", str(args.scheduler_trace_dir)])
+        if args.scheduler_trace_s3_prefix is not None:
+            cmd.extend(["--scheduler-trace-s3-prefix", args.scheduler_trace_s3_prefix])
         result = subprocess.run(cmd, cwd=ROOT, check=False)
         if result.returncode != 0:
             return result.returncode
@@ -68,6 +72,8 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "data/distributed",
     )
     parser.add_argument("--flat-percent", type=int)
+    parser.add_argument("--scheduler-trace-dir", type=pathlib.Path)
+    parser.add_argument("--scheduler-trace-s3-prefix")
     parser.add_argument("--workloads", type=parse_workloads, default=list(DEFAULT_WORKLOADS))
     parser.add_argument(
         "--reset-database",

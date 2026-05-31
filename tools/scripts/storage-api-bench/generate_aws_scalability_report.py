@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import pathlib
+from collections import defaultdict
 from dataclasses import dataclass
 
 import cairo
@@ -57,6 +58,20 @@ COLORS = {
     "client_overhead": (0.91, 0.52, 0.14),
     "scheduler_response": (0.28, 0.58, 0.76),
 }
+REQUEST_TRACE_COLORS = {
+    "worker_poll_ready_tasks": (0.10, 0.34, 0.74),
+    "scheduler_poll_ready_tasks": (0.78, 0.36, 0.10),
+}
+TRACE_COLORS = (
+    (0.10, 0.34, 0.74),
+    (0.10, 0.52, 0.34),
+    (0.78, 0.36, 0.10),
+    (0.50, 0.33, 0.72),
+    (0.77, 0.29, 0.30),
+    (0.24, 0.56, 0.70),
+    (0.46, 0.46, 0.46),
+    (0.64, 0.40, 0.18),
+)
 PHASE_COLORS = {
     "db_add": (0.09, 0.44, 0.70),
     "db_register": (0.07, 0.50, 0.46),
@@ -164,10 +179,23 @@ class PhaseMetric:
     avg_us: float
 
 
+@dataclass
+class TraceSeries:
+    nodes: int
+    protocol: str
+    workload: str
+    events: list[tuple[int, int]]
+    requests: list[dict[str, int | str]]
+    start_epoch_us: int
+    end_epoch_us: int
+    max_concurrency: int
+
+
 def main() -> int:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     runs, request_metrics, phase_metrics = load_results(args.input_dir)
+    trace_series = load_trace_series(args.input_dir)
     if not runs:
         raise ValueError(f"no benchmark JSON files found under {args.input_dir}")
 
@@ -189,6 +217,8 @@ def main() -> int:
         chart_paths[1],
     )
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
+    trace_chart_paths = draw_trace_concurrency_charts(trace_series, args.output_dir)
+    chart_paths.extend(trace_chart_paths)
 
     for operation in request_operations(request_metrics):
         path = args.output_dir / f"aws_request_{operation}.png"
@@ -317,6 +347,78 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
         sorted(request_metrics, key=lambda row: (row.operation, row.protocol, row.nodes)),
         sorted(phase_metrics, key=lambda row: (row.request_operation, row.phase, row.protocol, row.nodes)),
     )
+
+
+def load_trace_series(input_dir: pathlib.Path) -> list[TraceSeries]:
+    traces_by_key: dict[tuple[int, str, str], list[pathlib.Path]] = defaultdict(list)
+    for path in sorted((input_dir / "traces").glob("aws-*/*/*/*/*.jsonl")):
+        nodes = int(path.parents[3].name.rsplit("-", 1)[-1])
+        protocol = normalize_protocol(path.parents[2].name)
+        workload = normalize_workload(path.parents[1].name)
+        traces_by_key[(nodes, protocol, workload)].append(path)
+
+    series = []
+    for (nodes, protocol, workload), paths in sorted(traces_by_key.items()):
+        events: list[tuple[int, int]] = []
+        requests: list[dict[str, int | str]] = []
+        start_epoch_us: int | None = None
+        end_epoch_us: int | None = None
+        for path in paths:
+            with path.open(encoding="utf-8") as file:
+                for line in file:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if row["request"] != WORKER_POLL_OPERATION:
+                        continue
+                    start_us = int(row["start_epoch_us"])
+                    end_us = int(row["end_epoch_us"])
+                    start_epoch_us = start_us if start_epoch_us is None else min(start_epoch_us, start_us)
+                    end_epoch_us = end_us if end_epoch_us is None else max(end_epoch_us, end_us)
+                    events.append((start_us, 1))
+                    events.append((end_us, -1))
+                    requests.append(
+                        {
+                            "request": str(row["request"]),
+                            "start_epoch_us": start_us,
+                            "end_epoch_us": end_us,
+                            "latency_us": int(row["latency_us"]),
+                        }
+                    )
+        if start_epoch_us is None or end_epoch_us is None:
+            continue
+        events.sort(key=lambda event: (event[0], -event[1]))
+        requests.sort(key=lambda row: int(row["start_epoch_us"]))
+        series.append(
+            TraceSeries(
+                nodes=nodes,
+                protocol=protocol,
+                workload=workload,
+                events=events,
+                requests=requests,
+                start_epoch_us=start_epoch_us,
+                end_epoch_us=end_epoch_us,
+                max_concurrency=max_concurrency(events),
+            )
+        )
+    return series
+
+
+def normalize_protocol(value: str) -> str:
+    return {"grpc": "Grpc", "rest": "Rest"}.get(value, value.title())
+
+
+def normalize_workload(value: str) -> str:
+    return value.title()
+
+
+def max_concurrency(events: list[tuple[int, int]]) -> int:
+    current = 0
+    maximum = 0
+    for _timestamp, delta in events:
+        current += delta
+        maximum = max(maximum, current)
+    return maximum
 
 
 def parse_node_count(path: pathlib.Path) -> int:
@@ -747,6 +849,601 @@ def draw_request_component_chart(
     surface.write_to_png(str(output))
 
 
+def draw_trace_concurrency_charts(trace_series: list[TraceSeries], output_dir: pathlib.Path) -> list[pathlib.Path]:
+    paths = []
+    keys = sorted({(series.protocol, series.workload) for series in trace_series})
+    for protocol, workload in keys:
+        selected = [
+            series
+            for series in trace_series
+            if series.protocol == protocol and series.workload == workload
+        ]
+        if not selected:
+            continue
+        path = output_dir / f"aws_scheduler_trace_concurrency_{protocol.lower()}_{workload.lower()}.png"
+        draw_trace_concurrency_chart(selected, path)
+        paths.append(path)
+        stale_timeline_path = output_dir / f"aws_scheduler_trace_timeline_{protocol.lower()}_{workload.lower()}.png"
+        if stale_timeline_path.exists():
+            stale_timeline_path.unlink()
+        perfetto_path = output_dir / f"aws_scheduler_trace_perfetto_{protocol.lower()}_{workload.lower()}.json"
+        write_perfetto_trace(selected, perfetto_path)
+        paths.append(perfetto_path)
+        latency_path = output_dir / f"aws_scheduler_trace_latency_over_time_{protocol.lower()}_{workload.lower()}.png"
+        draw_trace_latency_over_time_chart(selected, latency_path)
+        paths.append(latency_path)
+    return paths
+
+
+def draw_trace_concurrency_chart(series: list[TraceSeries], output: pathlib.Path) -> None:
+    ordered_series = sorted(series, key=lambda row: row.nodes)
+    width = 1700
+    panel_height = 150
+    panel_gap = 24
+    height = 170 + len(ordered_series) * panel_height + (len(ordered_series) - 1) * panel_gap + 95
+    margin_left = 130
+    margin_right = 250
+    margin_top = 110
+    margin_bottom = 100
+    plot_width = width - margin_left - margin_right
+    x_max = nice_upper_bound(max((item.end_epoch_us - item.start_epoch_us) / 1_000_000 for item in ordered_series))
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surface)
+    paint_background(ctx)
+    draw_trace_small_multiple_title(
+        ctx,
+        f"AWS Scheduler Request Concurrency ({ordered_series[0].protocol}, {ordered_series[0].workload})",
+        "Each panel shows one node-count run using every traced scheduler request start/end. Time starts at the first traced request.",
+        margin_left,
+    )
+
+    for index, item in enumerate(ordered_series):
+        color = TRACE_COLORS[index % len(TRACE_COLORS)]
+        y_top = margin_top + index * (panel_height + panel_gap)
+        show_x_labels = index == len(ordered_series) - 1
+        draw_trace_panel_axes(
+            ctx,
+            item,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            show_x_labels,
+        )
+        draw_trace_series(
+            ctx,
+            item,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            nice_upper_bound(item.max_concurrency),
+            color,
+        )
+    draw_trace_x_axis_label(ctx, margin_left, height - margin_bottom + 58, plot_width)
+    surface.write_to_png(str(output))
+
+
+def draw_trace_timeline_chart(series: list[TraceSeries], output: pathlib.Path) -> None:
+    ordered_series = sorted(series, key=lambda row: row.nodes)
+    request_types = trace_request_types(ordered_series)
+    width = 1800
+    panel_height = max(150, 80 * len(request_types))
+    panel_gap = 26
+    height = 170 + len(ordered_series) * panel_height + (len(ordered_series) - 1) * panel_gap + 95
+    margin_left = 230
+    margin_right = 230
+    margin_top = 110
+    margin_bottom = 100
+    plot_width = width - margin_left - margin_right
+    x_max = nice_upper_bound(max((item.end_epoch_us - item.start_epoch_us) / 1_000_000 for item in ordered_series))
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surface)
+    paint_background(ctx)
+    draw_trace_small_multiple_title(
+        ctx,
+        f"AWS Scheduler Request Timeline ({ordered_series[0].protocol}, {ordered_series[0].workload})",
+        "Each horizontal segment is one traced scheduler request. Segment length is request duration.",
+        margin_left,
+    )
+    for index, item in enumerate(ordered_series):
+        y_top = margin_top + index * (panel_height + panel_gap)
+        show_x_labels = index == len(ordered_series) - 1
+        draw_trace_timeline_panel_axes(
+            ctx,
+            item,
+            request_types,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            show_x_labels,
+        )
+        draw_trace_timeline_panel(
+            ctx,
+            item,
+            request_types,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+        )
+    draw_trace_x_axis_label(ctx, margin_left, height - margin_bottom + 58, plot_width)
+    surface.write_to_png(str(output))
+
+
+def trace_request_types(series: list[TraceSeries]) -> list[str]:
+    names = {str(request["request"]) for item in series for request in item.requests}
+    preferred = [SCHEDULER_STORAGE_POLL_OPERATION, WORKER_POLL_OPERATION]
+    ordered = [name for name in preferred if name in names]
+    ordered.extend(sorted(names - set(ordered)))
+    return ordered
+
+
+def draw_trace_timeline_panel_axes(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    request_types: list[str],
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    show_x_labels: bool,
+) -> None:
+    set_color(ctx, COLORS["grid"])
+    ctx.set_line_width(1)
+    select_font(ctx, 13)
+    band_height = plot_height / len(request_types)
+    for index, request_type in enumerate(request_types):
+        y = margin_top + index * band_height
+        ctx.move_to(margin_left, y)
+        ctx.line_to(margin_left + plot_width, y)
+        ctx.stroke()
+        set_color(ctx, COLORS["muted"])
+        label = trace_request_label(request_type)
+        extents = ctx.text_extents(label)
+        ctx.move_to(margin_left - 18 - extents.width, y + band_height / 2 + 5)
+        ctx.show_text(label)
+        set_color(ctx, COLORS["grid"])
+    ctx.move_to(margin_left, margin_top + plot_height)
+    ctx.line_to(margin_left + plot_width, margin_top + plot_height)
+    ctx.stroke()
+    draw_trace_vertical_grid(ctx, margin_left, margin_top, plot_width, plot_height, x_max, show_x_labels)
+    draw_panel_y_axis_label(ctx, "Latency (ms)", margin_left, margin_top, plot_height)
+    draw_trace_panel_label(ctx, series, margin_left + plot_width + 18, margin_top)
+
+
+def draw_trace_timeline_panel(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    request_types: list[str],
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+) -> None:
+    band_height = plot_height / len(request_types)
+    lane_count = 18
+    ctx.set_line_width(max(1.0, band_height / lane_count * 0.55))
+    for request in series.requests:
+        request_type = str(request["request"])
+        type_index = request_types.index(request_type)
+        start_s = (int(request["start_epoch_us"]) - series.start_epoch_us) / 1_000_000
+        end_s = (int(request["end_epoch_us"]) - series.start_epoch_us) / 1_000_000
+        x1 = margin_left + plot_width * start_s / x_max
+        x2 = margin_left + plot_width * end_s / x_max
+        lane = int(request["start_epoch_us"]) % lane_count
+        y = margin_top + type_index * band_height + (lane + 0.5) * band_height / lane_count
+        set_color_alpha(ctx, request_trace_color(request_type), 0.18)
+        ctx.move_to(x1, y)
+        ctx.line_to(max(x2, x1 + 0.5), y)
+        ctx.stroke()
+
+
+def write_perfetto_trace(series: list[TraceSeries], output: pathlib.Path) -> None:
+    ordered_series = sorted(series, key=lambda row: row.nodes)
+    with output.open("w", encoding="utf-8") as file:
+        file.write('{"traceEvents":[\n')
+        first = True
+
+        def write_event(event: dict[str, object]) -> None:
+            nonlocal first
+            if not first:
+                file.write(",\n")
+            json.dump(event, file, separators=(",", ":"))
+            first = False
+
+        for item in ordered_series:
+            write_event(
+                {
+                    "name": "process_name",
+                    "ph": "M",
+                    "pid": item.nodes,
+                    "tid": 0,
+                    "args": {"name": f"{item.nodes} worker nodes"},
+                }
+            )
+            write_event(
+                {
+                    "name": "thread_name",
+                    "ph": "M",
+                    "pid": item.nodes,
+                    "tid": 1,
+                    "args": {"name": "worker -> scheduler poll"},
+                }
+            )
+            for index, request in enumerate(item.requests):
+                start_us = int(request["start_epoch_us"]) - item.start_epoch_us
+                duration_us = max(1, int(request["end_epoch_us"]) - int(request["start_epoch_us"]))
+                write_event(
+                    {
+                        "name": trace_request_label(str(request["request"])),
+                        "cat": "scheduler",
+                        "ph": "X",
+                        "ts": start_us,
+                        "dur": duration_us,
+                        "pid": item.nodes,
+                        "tid": 1,
+                        "args": {
+                            "node_count": item.nodes,
+                            "request_index": index,
+                            "request": str(request["request"]),
+                            "latency_us": int(request["latency_us"]),
+                        },
+                    }
+                )
+        file.write('\n],"displayTimeUnit":"ms"}\n')
+
+
+def draw_trace_latency_over_time_chart(series: list[TraceSeries], output: pathlib.Path) -> None:
+    ordered_series = sorted(series, key=lambda row: row.nodes)
+    width = 1800
+    panel_height = 170
+    panel_gap = 26
+    height = 170 + len(ordered_series) * panel_height + (len(ordered_series) - 1) * panel_gap + 95
+    margin_left = 120
+    margin_right = 250
+    margin_top = 110
+    margin_bottom = 100
+    plot_width = width - margin_left - margin_right
+    x_max = nice_upper_bound(max((item.end_epoch_us - item.start_epoch_us) / 1_000_000 for item in ordered_series))
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surface)
+    paint_background(ctx)
+    draw_trace_small_multiple_title(
+        ctx,
+        f"AWS Scheduler Request Latency Over Time ({ordered_series[0].protocol}, {ordered_series[0].workload})",
+        "Worker-to-scheduler requests are grouped by start time. Lines show avg, p50, p90, and p99 latency per time bucket.",
+        margin_left,
+    )
+    draw_trace_y_axis_header(ctx, "Latency (ms)", margin_left, margin_top)
+    bucket_s = max(0.05, x_max / 120)
+    for index, item in enumerate(ordered_series):
+        rows = trace_latency_percentile_rows(item, bucket_s)
+        y_top = margin_top + index * (panel_height + panel_gap)
+        show_x_labels = index == len(ordered_series) - 1
+        y_max = nice_upper_bound(max((max(row["avg_ms"], row["p99_ms"]) for row in rows), default=1.0))
+        draw_trace_latency_panel_axes(
+            ctx,
+            item,
+            margin_left,
+            y_top,
+            plot_width,
+            panel_height,
+            x_max,
+            y_max,
+            show_x_labels,
+        )
+        draw_latency_percentile_series(ctx, rows, "avg_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.10, 0.52, 0.34))
+        draw_latency_percentile_series(ctx, rows, "p50_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.10, 0.34, 0.74))
+        draw_latency_percentile_series(ctx, rows, "p90_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.78, 0.36, 0.10))
+        draw_latency_percentile_series(ctx, rows, "p99_ms", margin_left, y_top, plot_width, panel_height, x_max, y_max, (0.77, 0.29, 0.30))
+    draw_latency_percentile_legend(ctx, margin_left + plot_width - 120, 44)
+    draw_trace_x_axis_label(ctx, margin_left, height - margin_bottom + 58, plot_width)
+    surface.write_to_png(str(output))
+
+
+def trace_latency_percentile_rows(series: TraceSeries, bucket_s: float) -> list[dict[str, float]]:
+    buckets: dict[int, list[float]] = defaultdict(list)
+    for request in series.requests:
+        start_s = (int(request["start_epoch_us"]) - series.start_epoch_us) / 1_000_000
+        bucket = int(start_s / bucket_s)
+        buckets[bucket].append(int(request["latency_us"]) / 1000)
+    rows = []
+    for bucket, values in sorted(buckets.items()):
+        values.sort()
+        rows.append(
+            {
+                "time_s": (bucket + 0.5) * bucket_s,
+                "avg_ms": sum(values) / len(values),
+                "p50_ms": percentile(values, 0.50),
+                "p90_ms": percentile(values, 0.90),
+                "p99_ms": percentile(values, 0.99),
+            }
+        )
+    return rows
+
+
+def percentile(values: list[float], percentile_value: float) -> float:
+    if not values:
+        return 0.0
+    index = min(len(values) - 1, max(0, math.ceil(len(values) * percentile_value) - 1))
+    return values[index]
+
+
+def draw_trace_small_multiple_title(
+    ctx: cairo.Context,
+    title: str,
+    subtitle: str,
+    margin_left: int,
+) -> None:
+    set_color(ctx, COLORS["text"])
+    select_font(ctx, 28, bold=True)
+    ctx.move_to(margin_left, 44)
+    ctx.show_text(title)
+    select_font(ctx, 15)
+    set_color(ctx, COLORS["muted"])
+    ctx.move_to(margin_left, 70)
+    ctx.show_text(subtitle)
+
+
+def draw_trace_panel_axes(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    show_x_labels: bool,
+) -> None:
+    y_max = nice_upper_bound(series.max_concurrency)
+    set_color(ctx, COLORS["grid"])
+    ctx.set_line_width(1)
+    select_font(ctx, 14)
+    for index in range(3):
+        y = margin_top + plot_height - plot_height * index / 2
+        ctx.move_to(margin_left, y)
+        ctx.line_to(margin_left + plot_width, y)
+        ctx.stroke()
+        set_color(ctx, COLORS["muted"])
+        label = format_axis_value(y_max * index / 2)
+        extents = ctx.text_extents(label)
+        ctx.move_to(margin_left - 16 - extents.width, y + 5)
+        ctx.show_text(label)
+        set_color(ctx, COLORS["grid"])
+
+    for index in range(6):
+        x = margin_left + plot_width * index / 5
+        ctx.move_to(x, margin_top)
+        ctx.line_to(x, margin_top + plot_height)
+        ctx.stroke()
+        if show_x_labels:
+            set_color(ctx, COLORS["muted"])
+            label = format_axis_value(x_max * index / 5)
+            extents = ctx.text_extents(label)
+            ctx.move_to(x - extents.width / 2, margin_top + plot_height + 30)
+            ctx.show_text(label)
+            set_color(ctx, COLORS["grid"])
+
+    set_color(ctx, COLORS["text"])
+    ctx.set_line_width(2)
+    ctx.move_to(margin_left, margin_top)
+    ctx.line_to(margin_left, margin_top + plot_height)
+    ctx.line_to(margin_left + plot_width, margin_top + plot_height)
+    ctx.stroke()
+    select_font(ctx, 15, bold=True)
+    ctx.move_to(margin_left + plot_width + 18, margin_top + 22)
+    ctx.show_text(f"{series.nodes} nodes")
+    select_font(ctx, 13)
+    set_color(ctx, COLORS["muted"])
+    ctx.move_to(margin_left + plot_width + 18, margin_top + 44)
+    ctx.show_text(f"max {series.max_concurrency}")
+    ctx.move_to(margin_left + plot_width + 18, margin_top + 64)
+    duration_s = (series.end_epoch_us - series.start_epoch_us) / 1_000_000
+    ctx.show_text(f"{duration_s:.2f}s")
+
+
+def draw_trace_vertical_grid(
+    ctx: cairo.Context,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    show_x_labels: bool,
+) -> None:
+    set_color(ctx, COLORS["grid"])
+    ctx.set_line_width(1)
+    select_font(ctx, 14)
+    for index in range(6):
+        x = margin_left + plot_width * index / 5
+        ctx.move_to(x, margin_top)
+        ctx.line_to(x, margin_top + plot_height)
+        ctx.stroke()
+        if show_x_labels:
+            set_color(ctx, COLORS["muted"])
+            label = format_axis_value(x_max * index / 5)
+            extents = ctx.text_extents(label)
+            ctx.move_to(x - extents.width / 2, margin_top + plot_height + 30)
+            ctx.show_text(label)
+            set_color(ctx, COLORS["grid"])
+    set_color(ctx, COLORS["text"])
+    ctx.set_line_width(2)
+    ctx.move_to(margin_left, margin_top)
+    ctx.line_to(margin_left, margin_top + plot_height)
+    ctx.line_to(margin_left + plot_width, margin_top + plot_height)
+    ctx.stroke()
+
+
+def draw_trace_panel_label(ctx: cairo.Context, series: TraceSeries, x: float, y: float) -> None:
+    select_font(ctx, 15, bold=True)
+    set_color(ctx, COLORS["text"])
+    ctx.move_to(x, y + 22)
+    ctx.show_text(f"{series.nodes} nodes")
+    select_font(ctx, 13)
+    set_color(ctx, COLORS["muted"])
+    ctx.move_to(x, y + 44)
+    ctx.show_text(f"{len(series.requests)} requests")
+    duration_s = (series.end_epoch_us - series.start_epoch_us) / 1_000_000
+    ctx.move_to(x, y + 64)
+    ctx.show_text(f"{duration_s:.2f}s")
+
+
+def draw_trace_latency_panel_axes(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    y_max: float,
+    show_x_labels: bool,
+) -> None:
+    set_color(ctx, COLORS["grid"])
+    ctx.set_line_width(1)
+    select_font(ctx, 14)
+    for index in range(3):
+        y = margin_top + plot_height - plot_height * index / 2
+        ctx.move_to(margin_left, y)
+        ctx.line_to(margin_left + plot_width, y)
+        ctx.stroke()
+        set_color(ctx, COLORS["muted"])
+        label = format_axis_value(y_max * index / 2)
+        extents = ctx.text_extents(label)
+        ctx.move_to(margin_left - 16 - extents.width, y + 5)
+        ctx.show_text(label)
+        set_color(ctx, COLORS["grid"])
+    draw_trace_vertical_grid(ctx, margin_left, margin_top, plot_width, plot_height, x_max, show_x_labels)
+    draw_trace_panel_label(ctx, series, margin_left + plot_width + 18, margin_top)
+
+
+def draw_latency_percentile_series(
+    ctx: cairo.Context,
+    rows: list[dict[str, float]],
+    key: str,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    y_max: float,
+    color: tuple[float, float, float],
+) -> None:
+    if not rows:
+        return
+    set_color(ctx, color)
+    ctx.set_line_width(2)
+    for index, row in enumerate(rows):
+        x = margin_left + plot_width * row["time_s"] / x_max
+        y = margin_top + plot_height - plot_height * row[key] / y_max
+        if index == 0:
+            ctx.move_to(x, y)
+        else:
+            ctx.line_to(x, y)
+    ctx.stroke()
+
+
+def draw_latency_percentile_legend(ctx: cairo.Context, x: int, y: int) -> None:
+    draw_legend(
+        ctx,
+        [
+            ("avg", (0.10, 0.52, 0.34)),
+            ("p50", (0.10, 0.34, 0.74)),
+            ("p90", (0.78, 0.36, 0.10)),
+            ("p99", (0.77, 0.29, 0.30)),
+        ],
+        x,
+        y,
+    )
+
+
+def draw_panel_y_axis_label(
+    ctx: cairo.Context,
+    label: str,
+    margin_left: int,
+    margin_top: int,
+    plot_height: int,
+) -> None:
+    select_font(ctx, 13)
+    set_color(ctx, COLORS["muted"])
+    ctx.save()
+    ctx.translate(margin_left - 70, margin_top + plot_height / 2)
+    ctx.rotate(-math.pi / 2)
+    extents = ctx.text_extents(label)
+    ctx.move_to(-extents.width / 2, 0)
+    ctx.show_text(label)
+    ctx.restore()
+
+
+def draw_trace_y_axis_header(ctx: cairo.Context, label: str, margin_left: int, margin_top: int) -> None:
+    select_font(ctx, 14, bold=True)
+    set_color(ctx, COLORS["muted"])
+    ctx.move_to(margin_left - 92, margin_top - 16)
+    ctx.show_text(label)
+
+
+def request_trace_color(request_type: str) -> tuple[float, float, float]:
+    return REQUEST_TRACE_COLORS.get(request_type, COLORS["server_other"])
+
+
+def trace_request_label(request_type: str) -> str:
+    labels = {
+        SCHEDULER_STORAGE_POLL_OPERATION: "scheduler -> storage poll",
+        WORKER_POLL_OPERATION: "worker -> scheduler poll",
+    }
+    return labels.get(request_type, request_type.replace("_", " "))
+
+
+def draw_trace_x_axis_label(ctx: cairo.Context, margin_left: int, y: int, plot_width: int) -> None:
+    select_font(ctx, 16)
+    set_color(ctx, COLORS["muted"])
+    label = "Seconds from first traced request"
+    extents = ctx.text_extents(label)
+    ctx.move_to(margin_left + plot_width / 2 - extents.width / 2, y)
+    ctx.show_text(label)
+
+
+def draw_trace_series(
+    ctx: cairo.Context,
+    series: TraceSeries,
+    margin_left: int,
+    margin_top: int,
+    plot_width: int,
+    plot_height: int,
+    x_max: float,
+    y_max: float,
+    color: tuple[float, float, float],
+) -> None:
+    set_color(ctx, color)
+    ctx.set_line_width(2)
+    current = 0
+    ctx.move_to(margin_left, margin_top + plot_height)
+    for timestamp_us, delta in series.events:
+        elapsed_s = (timestamp_us - series.start_epoch_us) / 1_000_000
+        x = margin_left + plot_width * elapsed_s / x_max
+        y = margin_top + plot_height - plot_height * current / y_max
+        ctx.line_to(x, y)
+        current += delta
+        y = margin_top + plot_height - plot_height * current / y_max
+        ctx.line_to(x, y)
+    duration_s = (series.end_epoch_us - series.start_epoch_us) / 1_000_000
+    end_x = margin_left + plot_width * duration_s / x_max
+    end_y = margin_top + plot_height - plot_height * current / y_max
+    ctx.line_to(end_x, end_y)
+    ctx.stroke()
+
+
 def operation_label(operation: str) -> str:
     labels = {
         WORKER_POLL_OPERATION: "Worker To Scheduler Poll",
@@ -1018,6 +1715,10 @@ def paint_background(ctx: cairo.Context) -> None:
 
 def set_color(ctx: cairo.Context, color: tuple[float, float, float]) -> None:
     ctx.set_source_rgb(*color)
+
+
+def set_color_alpha(ctx: cairo.Context, color: tuple[float, float, float], alpha: float) -> None:
+    ctx.set_source_rgba(color[0], color[1], color[2], alpha)
 
 
 def select_font(ctx: cairo.Context, size: int, *, bold: bool = False) -> None:

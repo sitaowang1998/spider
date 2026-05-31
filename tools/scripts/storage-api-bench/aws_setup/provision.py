@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import subprocess
 import sys
@@ -100,6 +101,7 @@ def provision(
     save_progress_state(state_path, state)
     progress("ensuring results bucket")
     ensure_results_bucket(client, config, resources)
+    ensure_results_upload_policy(client, config, resources)
     save_progress_state(state_path, state)
     progress("waiting for EC2 instances to enter running state")
     wait_for_ec2(client, resources["instance_ids"])
@@ -905,6 +907,50 @@ def ensure_results_bucket(
     client.run(create_bucket_command(bucket, config.aws.region))
     resources["result_bucket"] = bucket
     resources["results_s3_uri"] = f"s3://{bucket}/{result_s3_folder_name(config)}"
+
+
+def ensure_results_upload_policy(
+    client: aws_cli.AwsCli,
+    config: config_module.AwsBenchConfig,
+    resources: dict[str, object],
+) -> None:
+    results_s3_uri = resources.get("results_s3_uri")
+    if not isinstance(results_s3_uri, str) or not results_s3_uri.startswith("s3://"):
+        return
+    bucket, prefix = split_s3_uri(results_s3_uri)
+    object_arn = f"arn:aws:s3:::{bucket}/{prefix.rstrip('/')}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:AbortMultipartUpload",
+                    "s3:ListMultipartUploadParts",
+                    "s3:PutObject",
+                ],
+                "Resource": object_arn,
+            }
+        ],
+    }
+    client.run(
+        [
+            "iam",
+            "put-role-policy",
+            "--role-name",
+            config.instances.iam_instance_profile,
+            "--policy-name",
+            f"{config.aws.run_id}-results-upload",
+            "--policy-document",
+            json.dumps(policy),
+        ]
+    )
+
+
+def split_s3_uri(s3_uri: str) -> tuple[str, str]:
+    rest = s3_uri.removeprefix("s3://")
+    bucket, _, prefix = rest.partition("/")
+    return bucket, prefix
 
 
 def result_s3_folder_name(config: config_module.AwsBenchConfig) -> str:
