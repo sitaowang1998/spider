@@ -937,11 +937,16 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
         ));
     }
     let task = result?;
+    request_latency_samples.push(RequestLatencySample::success(
+        "poll_ready_tasks",
+        RequestCategory::Blocking,
+        poll_latency,
+    ));
     if task.is_none() {
         activity.record_empty_poll(poll_latency);
     } else {
         request_latency_samples.push(RequestLatencySample::success(
-            "poll_ready_tasks",
+            "poll_ready_tasks_returned",
             RequestCategory::Blocking,
             poll_latency,
         ));

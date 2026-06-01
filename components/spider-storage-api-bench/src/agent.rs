@@ -470,17 +470,21 @@ async fn poll_scheduler_ready_tasks(
     };
     let start_time = Instant::now();
     let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
+    let latency = start_time.elapsed();
+    let mut worker_poll_latency = scheduler.worker_poll_latency.lock().await;
+    worker_poll_latency.push(RequestLatencySample::success(
+        "worker_poll_ready_tasks",
+        RequestCategory::Blocking,
+        latency,
+    ));
     if task.is_some() {
-        scheduler
-            .worker_poll_latency
-            .lock()
-            .await
-            .push(RequestLatencySample::success(
-                "worker_poll_ready_tasks",
-                RequestCategory::Blocking,
-                start_time.elapsed(),
-            ));
+        worker_poll_latency.push(RequestLatencySample::success(
+            "worker_poll_ready_tasks_returned",
+            RequestCategory::Blocking,
+            latency,
+        ));
     }
+    drop(worker_poll_latency);
     Ok(Json(SchedulerReadyTaskResponse { task }))
 }
 

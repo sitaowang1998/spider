@@ -22,6 +22,7 @@ REQUEST_ORDER = (
     "get_job_state",
     "get_session",
     "worker_poll_ready_tasks",
+    "worker_poll_ready_tasks_returned",
     "scheduler_poll_ready_tasks",
     "register_execution_manager",
     "register_job",
@@ -29,6 +30,7 @@ REQUEST_ORDER = (
     "succeed_task_instance",
 )
 WORKER_POLL_OPERATION = "worker_poll_ready_tasks"
+WORKER_POLL_RETURNED_OPERATION = "worker_poll_ready_tasks_returned"
 SCHEDULER_STORAGE_POLL_OPERATION = "scheduler_poll_ready_tasks"
 PHASE_ORDER = (
     "db_add",
@@ -123,6 +125,14 @@ class Run:
         per_job_parallelism = self.per_job_parallelism()
         return self.optimal_latency_for_parallelism(worker_slots, active_jobs, per_job_parallelism)
 
+    def jobs_per_node_distribution(self) -> list[int]:
+        base_jobs = self.job_count // self.nodes
+        extra_jobs = self.job_count % self.nodes
+        return [
+            base_jobs + (1 if node_index < extra_jobs else 0)
+            for node_index in range(self.nodes)
+        ]
+
     def optimal_latency_for_parallelism(
         self,
         worker_slots: int,
@@ -131,8 +141,8 @@ class Run:
     ) -> float:
         if per_job_parallelism <= 0:
             return 0.0
-        slots_per_active_job = max(1, min(per_job_parallelism, worker_slots // active_jobs))
-        task_waves = math.ceil(self.task_count / slots_per_active_job)
+        slots_per_job = max(1, min(per_job_parallelism, worker_slots // active_jobs))
+        task_waves = math.ceil(self.task_count / slots_per_job)
         return task_waves * self.task_sleep_ms / 1000
 
     def per_job_parallelism(self) -> int:
@@ -191,9 +201,14 @@ def main() -> int:
     draw_request_latency_chart(runs, request_metrics, phase_metrics, chart_paths[2])
 
     for operation in request_operations(request_metrics):
+        if operation == WORKER_POLL_RETURNED_OPERATION:
+            continue
         path = args.output_dir / f"aws_request_{operation}.png"
         draw_request_component_chart(operation, request_metrics, phase_metrics, path)
         chart_paths.append(path)
+    stale_returned_chart = args.output_dir / f"aws_request_{WORKER_POLL_RETURNED_OPERATION}.png"
+    if stale_returned_chart.exists():
+        stale_returned_chart.unlink()
 
     report_path = args.output_dir / "aws_scalability_report.md"
     write_report(report_path, runs, request_metrics, phase_metrics)
@@ -245,6 +260,9 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
             if operation == "poll_ready_tasks":
                 operation = WORKER_POLL_OPERATION
                 server_row = scheduler_by_key.get((client_row["category"], operation))
+            elif operation == "poll_ready_tasks_returned":
+                operation = WORKER_POLL_RETURNED_OPERATION
+                server_row = scheduler_by_key.get((client_row["category"], operation))
             elif operation == "scheduler_poll_ready_tasks":
                 operation = SCHEDULER_STORAGE_POLL_OPERATION
                 server_row = server_by_key.get(("blocking", "poll_ready_tasks"))
@@ -280,7 +298,7 @@ def load_results(input_dir: pathlib.Path) -> tuple[list[Run], list[RequestMetric
                     avg_us=float(row["avg_us"]),
                 )
             )
-        client_avg, request_count = weighted_average(data["request_latency"])
+        client_avg, request_count = weighted_average(non_derived_request_rows(data["request_latency"]))
         server_avg, _ = weighted_average(
             row
             for row in data["server_metrics"].get("request_latency", [])
@@ -333,6 +351,16 @@ def weighted_average(rows: object) -> tuple[float, int]:
         total += float(row["avg_us"]) * row_count
         count += row_count
     return (total / count if count else 0.0), count
+
+
+def non_derived_request_rows(rows: object) -> list[object]:
+    return [
+        row
+        for row in rows
+        if row.get("category") != "phase"
+        and row.get("operation") != "poll_ready_tasks_returned"
+        and row.get("operation") != WORKER_POLL_RETURNED_OPERATION
+    ]
 
 
 def average_job_latency_us(data: dict[str, object]) -> float:
@@ -678,6 +706,9 @@ def draw_request_component_chart(
     phase_metrics: list[PhaseMetric],
     output: pathlib.Path,
 ) -> None:
+    if operation == WORKER_POLL_OPERATION:
+        draw_worker_poll_component_chart(request_metrics, phase_metrics, output)
+        return
     rows = request_component_rows(operation, request_metrics, phase_metrics)
     if not rows:
         return
@@ -747,16 +778,120 @@ def draw_request_component_chart(
     surface.write_to_png(str(output))
 
 
+def draw_worker_poll_component_chart(
+    request_metrics: list[RequestMetric],
+    phase_metrics: list[PhaseMetric],
+    output: pathlib.Path,
+) -> None:
+    rows = []
+    for operation, variant in [
+        (WORKER_POLL_OPERATION, "all"),
+        (WORKER_POLL_RETURNED_OPERATION, "returned task"),
+    ]:
+        for row in request_component_rows(operation, request_metrics, phase_metrics):
+            row = dict(row)
+            row["variant"] = variant
+            rows.append(row)
+    if not rows:
+        return
+    components = component_order(rows)
+    nodes = sorted({int(row["nodes"]) for row in rows})
+    width = 2100
+    height = 940
+    margin_left = 115
+    margin_right = 385
+    margin_top = 105
+    margin_bottom = 150
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+    y_max = nice_upper_bound(max(float(row["client_avg_ms"]) for row in rows))
+    group_width = plot_width / len(nodes)
+    bar_width = min(44, group_width / 5.8)
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surface)
+    paint_background(ctx)
+    draw_axes(
+        ctx,
+        "AWS Worker To Scheduler Poll Latency Components",
+        "Each node group shows all worker polls and only polls that returned a task.",
+        "Milliseconds",
+        margin_left,
+        margin_top,
+        plot_width,
+        plot_height,
+        nodes,
+        y_max,
+        x_positions=[margin_left + group_width * index + group_width / 2 for index in range(len(nodes))],
+    )
+
+    row_by_key = {
+        (int(row["nodes"]), str(row["protocol"]), str(row["variant"])): row
+        for row in rows
+    }
+    bar_specs = [
+        ("Grpc", "all", -1.65, "g all"),
+        ("Grpc", "returned task", -0.55, "g task"),
+        ("Rest", "all", 0.55, "r all"),
+        ("Rest", "returned task", 1.65, "r task"),
+    ]
+    active_specs = [
+        spec
+        for spec in bar_specs
+        if any(row["protocol"] == spec[0] and row["variant"] == spec[1] for row in rows)
+    ]
+    if len(active_specs) == 2:
+        active_specs = [
+            (protocol, variant, offset, label)
+            for (protocol, variant, _offset, label), offset in zip(active_specs, [-0.6, 0.6])
+        ]
+    for index, nodes_value in enumerate(nodes):
+        center = margin_left + group_width * index + group_width / 2
+        for protocol, variant, offset, label in active_specs:
+            row = row_by_key.get((nodes_value, protocol, variant))
+            if row is None:
+                continue
+            x = center + offset * bar_width
+            y_base = margin_top + plot_height
+            for component in components:
+                value_ms = float(row["components"].get(component, 0.0))
+                if value_ms <= 0:
+                    continue
+                bar_height = plot_height * value_ms / y_max
+                y_base -= bar_height
+                set_color(ctx, component_color(component))
+                ctx.rectangle(x - bar_width / 2, y_base, bar_width, bar_height)
+                ctx.fill()
+            select_font(ctx, 11)
+            set_color(ctx, COLORS["text"])
+            extents = ctx.text_extents(label)
+            ctx.move_to(x - extents.width / 2, margin_top + plot_height + 48)
+            ctx.show_text(label)
+    draw_component_legend(ctx, components, width - margin_right + 30, margin_top)
+    draw_note(
+        ctx,
+        [
+            "all = every worker poll request",
+            "task = only polls that returned a task",
+            "scheduler response = scheduler handler latency",
+        ],
+        width - margin_right + 30,
+        height - 132,
+    )
+    surface.write_to_png(str(output))
+
+
 def operation_label(operation: str) -> str:
     labels = {
         WORKER_POLL_OPERATION: "Worker To Scheduler Poll",
+        WORKER_POLL_RETURNED_OPERATION: "Worker To Scheduler Poll Returned Task",
         SCHEDULER_STORAGE_POLL_OPERATION: "Scheduler To Storage Poll",
     }
     return labels.get(operation, operation)
 
 
 def request_chart_subtitle(operation: str) -> str:
-    if operation == WORKER_POLL_OPERATION:
+    if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
         return "Worker calls to the scheduler cache. Stacked bars show scheduler handler time and client overhead."
     if operation == SCHEDULER_STORAGE_POLL_OPERATION:
         return "Scheduler batch polling against the storage server. Lower is better."
@@ -764,7 +899,7 @@ def request_chart_subtitle(operation: str) -> str:
 
 
 def request_chart_notes(operation: str) -> list[str]:
-    if operation == WORKER_POLL_OPERATION:
+    if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
         return ["g = gRPC, r = REST", "scheduler response = scheduler handler latency"]
     return ["g = gRPC, r = REST", "client overhead = client avg - server avg", "server other = server avg - measured phases"]
 
@@ -800,14 +935,14 @@ def request_component_rows(
             }
             server_avg_ms = server_avg_us / 1000
             phase_sum = sum(components.values())
-            if operation == WORKER_POLL_OPERATION:
+            if operation in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
                 components["scheduler response"] = server_avg_ms
                 components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             elif components:
                 components["server other"] = max(server_avg_ms - phase_sum, 0.0)
             else:
                 components["server total"] = server_avg_ms
-            if operation != WORKER_POLL_OPERATION:
+            if operation not in {WORKER_POLL_OPERATION, WORKER_POLL_RETURNED_OPERATION}:
                 components["client overhead"] = max((client_avg_us - server_avg_us) / 1000, 0.0)
             rows.append(
                 {
@@ -1090,6 +1225,7 @@ def setup_paragraph(runs: list[Run]) -> str:
     total_tasks = sorted({run.total_tasks for run in runs})
     task_count = sorted({run.task_count for run in runs})
     task_sleep_ms = sorted({run.task_sleep_ms for run in runs})
+    jobs_per_node = sorted({format_jobs_per_node(run) for run in runs})
     submitters = sorted({run.submitter_count for run in runs})
     workers = sorted({run.worker_count for run in runs})
     workloads = sorted({run.workload for run in runs})
@@ -1097,7 +1233,8 @@ def setup_paragraph(runs: list[Run]) -> str:
         f"The AWS benchmark data covers {format_set(node_counts)} worker-node runs for "
         f"{format_set(workloads)} workload. Each job has {format_set(task_count)} tasks with "
         f"{format_set(task_sleep_ms)} ms simulated sleep per task, and the run size scales from {format_set(job_counts)} jobs "
-        f"({format_set(total_tasks)} total tasks). Each run uses one dedicated submitter node "
+        f"({format_set(total_tasks)} total tasks), or {format_set(jobs_per_node)} jobs per worker node. "
+        "Each run uses one dedicated submitter node "
         f"with {format_set(submitters)} submitter clients and {format_set(workers)} worker "
         "processes per worker node. The optimal E2E time is the ideal per-active-job compute "
         "lower bound: `ceil(task_count / min(per_job_parallelism, "
@@ -1107,6 +1244,14 @@ def setup_paragraph(runs: list[Run]) -> str:
         "scheduling, polling, and transport overhead. Results compare gRPC "
         "and REST against the same storage server and RDS-backed storage layer."
     )
+
+
+def format_jobs_per_node(run: Run) -> str:
+    distribution = run.jobs_per_node_distribution()
+    values = sorted(set(distribution))
+    if len(values) == 1:
+        return str(values[0])
+    return f"{values[0]}-{values[-1]}"
 
 
 def throughput_table(runs: list[Run]) -> list[str]:
@@ -1136,6 +1281,9 @@ def speedup_table(runs: list[Run]) -> list[str]:
     )
     baseline = {run.protocol: run.throughput_jobs_per_s for run in runs if run.nodes == 1}
     for run in sorted(runs, key=lambda row: (row.nodes, row.protocol)):
+        if run.protocol not in baseline or baseline[run.protocol] <= 0:
+            lines.append(f"| {run.nodes} | {run.protocol} | n/a | n/a |")
+            continue
         speedup = run.throughput_jobs_per_s / baseline[run.protocol]
         lines.append(f"| {run.nodes} | {run.protocol} | {speedup:.2f}x | {speedup / run.nodes:.1%} |")
     return lines
