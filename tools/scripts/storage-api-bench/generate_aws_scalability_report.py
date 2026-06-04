@@ -1229,6 +1229,16 @@ def setup_paragraph(runs: list[Run]) -> str:
     submitters = sorted({run.submitter_count for run in runs})
     workers = sorted({run.worker_count for run in runs})
     workloads = sorted({run.workload for run in runs})
+    protocols = sorted({run.protocol for run in runs})
+    if len(protocols) == 1:
+        protocol_sentence = (
+            f"Results cover {protocols[0]} against the RDS-backed storage layer."
+        )
+    else:
+        protocol_sentence = (
+            f"Results compare {format_set(protocols)} against the same storage server "
+            "and RDS-backed storage layer."
+        )
     return (
         f"The AWS benchmark data covers {format_set(node_counts)} worker-node runs for "
         f"{format_set(workloads)} workload. Each job has {format_set(task_count)} tasks with "
@@ -1241,10 +1251,8 @@ def setup_paragraph(runs: list[Run]) -> str:
         "floor(worker_nodes * workers_per_node / active_jobs))) * task_sleep_ms`, where "
         "`active_jobs = min(job_count, submitter_clients)`. Flat jobs can expose `task_count` "
         "runnable tasks, and deep jobs can expose one runnable task. This excludes storage, "
-        "scheduling, polling, and transport overhead. Results compare gRPC "
-        "and REST against the same storage server and RDS-backed storage layer."
+        f"scheduling, polling, and transport overhead. {protocol_sentence}"
     )
-
 
 def format_jobs_per_node(run: Run) -> str:
     distribution = run.jobs_per_node_distribution()

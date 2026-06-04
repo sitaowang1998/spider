@@ -155,12 +155,20 @@ pub struct BenchmarkConfig {
     pub worker_count: usize,
     pub worker_poll_wait_ms: u64,
     pub job_poll_wait_ms: u64,
-    #[serde(default = "default_scheduler_poll_batch")]
-    pub scheduler_poll_batch: usize,
-    #[serde(default = "default_scheduler_refill_interval_ms")]
-    pub scheduler_refill_interval_ms: u64,
-    #[serde(default = "default_scheduler_poll_wait_ms")]
-    pub scheduler_poll_wait_ms: u64,
+    #[serde(default = "default_scheduler_active_job_pool_capacity")]
+    pub scheduler_active_job_pool_capacity: usize,
+    #[serde(default = "default_scheduler_dispatch_queue_capacity")]
+    pub scheduler_dispatch_queue_capacity: usize,
+    #[serde(default = "default_scheduler_ready_task_capacity")]
+    pub scheduler_ready_task_capacity: usize,
+    #[serde(default = "default_scheduler_commit_ready_task_capacity")]
+    pub scheduler_commit_ready_task_capacity: usize,
+    #[serde(default = "default_scheduler_cleanup_ready_task_capacity")]
+    pub scheduler_cleanup_ready_task_capacity: usize,
+    #[serde(default = "default_scheduler_tick_interval_ms")]
+    pub scheduler_tick_interval_ms: u64,
+    #[serde(default = "default_scheduler_storage_poll_wait_ms")]
+    pub scheduler_storage_poll_wait_ms: u64,
     pub warmup_sec: u64,
     pub duration_sec: u64,
     pub flat_percent: u8,
@@ -171,15 +179,31 @@ const fn default_task_sleep_ms() -> u64 {
     3
 }
 
-const fn default_scheduler_poll_batch() -> usize {
+const fn default_scheduler_active_job_pool_capacity() -> usize {
     1024
 }
 
-const fn default_scheduler_refill_interval_ms() -> u64 {
+const fn default_scheduler_dispatch_queue_capacity() -> usize {
+    1024
+}
+
+const fn default_scheduler_ready_task_capacity() -> usize {
+    1024
+}
+
+const fn default_scheduler_commit_ready_task_capacity() -> usize {
+    1024
+}
+
+const fn default_scheduler_cleanup_ready_task_capacity() -> usize {
+    1024
+}
+
+const fn default_scheduler_tick_interval_ms() -> u64 {
     10
 }
 
-const fn default_scheduler_poll_wait_ms() -> u64 {
+const fn default_scheduler_storage_poll_wait_ms() -> u64 {
     20
 }
 
@@ -208,8 +232,20 @@ impl BenchmarkConfig {
         if self.worker_count == 0 {
             anyhow::bail!("worker_count must be greater than 0");
         }
-        if self.scheduler_poll_batch == 0 {
-            anyhow::bail!("scheduler_poll_batch must be greater than 0");
+        if self.scheduler_active_job_pool_capacity == 0 {
+            anyhow::bail!("scheduler_active_job_pool_capacity must be greater than 0");
+        }
+        if self.scheduler_dispatch_queue_capacity == 0 {
+            anyhow::bail!("scheduler_dispatch_queue_capacity must be greater than 0");
+        }
+        if self.scheduler_ready_task_capacity == 0 {
+            anyhow::bail!("scheduler_ready_task_capacity must be greater than 0");
+        }
+        if self.scheduler_commit_ready_task_capacity == 0 {
+            anyhow::bail!("scheduler_commit_ready_task_capacity must be greater than 0");
+        }
+        if self.scheduler_cleanup_ready_task_capacity == 0 {
+            anyhow::bail!("scheduler_cleanup_ready_task_capacity must be greater than 0");
         }
         Ok(())
     }
@@ -243,6 +279,37 @@ mod tests {
         assert!(
             err.to_string().contains("flat_percent"),
             "error should mention flat_percent"
+        );
+    }
+
+    #[test]
+    fn default_config_exposes_scheduler_core_settings() -> anyhow::Result<()> {
+        let config = BenchConfig::load("config/default.toml".as_ref())?;
+        assert_eq!(1024, config.benchmark.scheduler_active_job_pool_capacity);
+        assert_eq!(32, config.benchmark.scheduler_dispatch_queue_capacity);
+        assert_eq!(11_000, config.benchmark.scheduler_ready_task_capacity);
+        assert_eq!(1024, config.benchmark.scheduler_commit_ready_task_capacity);
+        assert_eq!(1024, config.benchmark.scheduler_cleanup_ready_task_capacity);
+        assert_eq!(10, config.benchmark.scheduler_tick_interval_ms);
+        assert_eq!(20, config.benchmark.scheduler_storage_poll_wait_ms);
+        Ok(())
+    }
+
+    #[test]
+    fn scheduler_core_settings_reject_zero_capacities() {
+        let mut config =
+            BenchConfig::load("config/default.toml".as_ref()).expect("default config should load");
+
+        config.benchmark.scheduler_dispatch_queue_capacity = 0;
+
+        let err = config
+            .benchmark
+            .validate()
+            .expect_err("zero scheduler dispatch queue capacity should fail");
+        assert!(
+            err.to_string()
+                .contains("scheduler_dispatch_queue_capacity"),
+            "error should mention scheduler dispatch queue capacity"
         );
     }
 

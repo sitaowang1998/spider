@@ -13,14 +13,15 @@ jobs_per_worker = 16
 tasks_per_job = 1000
 payload_bytes = 1024
 task_sleep_ms = 3
-submitter_count = 8
+submitter_count = 16
 worker_count = 16
 flat_percent = 50
 worker_poll_wait_ms = 1
-job_poll_wait_ms = 10
-scheduler_poll_batch = 10240
-scheduler_refill_interval_ms = 10
-scheduler_poll_wait_ms = 10
+scheduler_active_job_pool_capacity = 8
+scheduler_commit_ready_task_capacity = 1
+scheduler_cleanup_ready_task_capacity = 1
+scheduler_tick_interval_ms = 5
+scheduler_storage_poll_wait_ms = 1
 
 [instances]
 worker_count = 64
@@ -76,5 +77,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "report-5-31"
+s3_folder_name = "real-scheduler"
 remote_data_dir = "/var/lib/spider-bench/data"

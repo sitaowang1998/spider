@@ -147,9 +147,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
-    parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
-    parser.add_argument("--scheduler-refill-interval-ms", type=int, default=10)
-    parser.add_argument("--scheduler-poll-wait-ms", type=int, default=20)
+    parser.add_argument("--scheduler-active-job-pool-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-commit-ready-task-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-cleanup-ready-task-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-tick-interval-ms", type=int, default=10)
+    parser.add_argument("--scheduler-storage-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--workloads", default="flat,deep,mixed")
     parser.add_argument("--rest-port", type=int, default=8091)
@@ -288,12 +290,16 @@ def make_config(
             str(args.worker_poll_wait_ms),
             "--job-poll-wait-ms",
             str(args.job_poll_wait_ms),
-            "--scheduler-poll-batch",
-            str(args.scheduler_poll_batch),
-            "--scheduler-refill-interval-ms",
-            str(args.scheduler_refill_interval_ms),
-            "--scheduler-poll-wait-ms",
-            str(args.scheduler_poll_wait_ms),
+            "--scheduler-active-job-pool-capacity",
+            str(args.scheduler_active_job_pool_capacity),
+            "--scheduler-commit-ready-task-capacity",
+            str(args.scheduler_commit_ready_task_capacity),
+            "--scheduler-cleanup-ready-task-capacity",
+            str(args.scheduler_cleanup_ready_task_capacity),
+            "--scheduler-tick-interval-ms",
+            str(args.scheduler_tick_interval_ms),
+            "--scheduler-storage-poll-wait-ms",
+            str(args.scheduler_storage_poll_wait_ms),
             "--flat-percent",
             str(args.flat_percent),
             "--rest-port",

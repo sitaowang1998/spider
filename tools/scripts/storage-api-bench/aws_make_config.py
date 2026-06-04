@@ -75,9 +75,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
-    parser.add_argument("--scheduler-poll-batch", type=int, default=1024)
-    parser.add_argument("--scheduler-refill-interval-ms", type=int, default=10)
-    parser.add_argument("--scheduler-poll-wait-ms", type=int, default=20)
+    parser.add_argument("--scheduler-active-job-pool-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-commit-ready-task-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-cleanup-ready-task-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-tick-interval-ms", type=int, default=10)
+    parser.add_argument("--scheduler-storage-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
     parser.add_argument("--agent-timeout-sec", type=int, default=7200)
     parser.add_argument("--poll-interval-ms", type=int, default=1000)
@@ -128,6 +130,9 @@ def render_config(
     worker_ips: list[str],
 ) -> str:
     job_count = len(worker_ips) * args.jobs_per_worker
+    total_worker_count = len(worker_ips) * args.worker_count
+    scheduler_dispatch_queue_capacity = total_worker_count * 2
+    scheduler_ready_task_capacity = (job_count + 1) * args.tasks_per_job
     lines = [
         "[server]",
         f'rest_bind = "0.0.0.0:{args.rest_port}"',
@@ -153,9 +158,13 @@ def render_config(
         f"worker_count = {args.worker_count}",
         f"worker_poll_wait_ms = {args.worker_poll_wait_ms}",
         f"job_poll_wait_ms = {args.job_poll_wait_ms}",
-        f"scheduler_poll_batch = {args.scheduler_poll_batch}",
-        f"scheduler_refill_interval_ms = {args.scheduler_refill_interval_ms}",
-        f"scheduler_poll_wait_ms = {args.scheduler_poll_wait_ms}",
+        f"scheduler_active_job_pool_capacity = {args.scheduler_active_job_pool_capacity}",
+        f"scheduler_dispatch_queue_capacity = {scheduler_dispatch_queue_capacity}",
+        f"scheduler_ready_task_capacity = {scheduler_ready_task_capacity}",
+        f"scheduler_commit_ready_task_capacity = {args.scheduler_commit_ready_task_capacity}",
+        f"scheduler_cleanup_ready_task_capacity = {args.scheduler_cleanup_ready_task_capacity}",
+        f"scheduler_tick_interval_ms = {args.scheduler_tick_interval_ms}",
+        f"scheduler_storage_poll_wait_ms = {args.scheduler_storage_poll_wait_ms}",
         "warmup_sec = 5",
         "duration_sec = 30",
         f"flat_percent = {args.flat_percent}",

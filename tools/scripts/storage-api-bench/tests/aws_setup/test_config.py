@@ -45,6 +45,11 @@ class AwsSetupConfigTest(unittest.TestCase):
                     worker_count = 24
                     worker_poll_wait_ms = 25
                     job_poll_wait_ms = 50
+                    scheduler_active_job_pool_capacity = 64
+                    scheduler_commit_ready_task_capacity = 16
+                    scheduler_cleanup_ready_task_capacity = 32
+                    scheduler_tick_interval_ms = 11
+                    scheduler_storage_poll_wait_ms = 22
                     flat_percent = 60
 
                     [instances]
@@ -79,6 +84,11 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(7, config.benchmark.task_sleep_ms)
         self.assertEqual(25, config.benchmark.worker_poll_wait_ms)
         self.assertEqual(50, config.benchmark.job_poll_wait_ms)
+        self.assertEqual(64, config.benchmark.scheduler_active_job_pool_capacity)
+        self.assertEqual(16, config.benchmark.scheduler_commit_ready_task_capacity)
+        self.assertEqual(32, config.benchmark.scheduler_cleanup_ready_task_capacity)
+        self.assertEqual(11, config.benchmark.scheduler_tick_interval_ms)
+        self.assertEqual(22, config.benchmark.scheduler_storage_poll_wait_ms)
         self.assertEqual("preferred", config.database.ssl_mode)
         self.assertEqual(128, config.instances.worker_count)
         self.assertEqual("", config.network.placement_group)

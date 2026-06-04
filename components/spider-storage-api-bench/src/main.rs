@@ -25,6 +25,8 @@ use spider_storage_api_bench::{
         RegisterJobRequest,
         StartMetricsSessionRequest,
         SucceedTaskInstanceRequest,
+        SucceedTerminationTaskInstanceRequest,
+        TaskIdDto,
     },
     client::StorageApiClient,
     config::BenchConfig,
@@ -182,9 +184,13 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) channel_count: usize,
     pub(crate) worker_poll_wait_ms: u64,
     pub(crate) job_poll_wait_ms: u64,
-    pub(crate) scheduler_poll_batch: usize,
-    pub(crate) scheduler_refill_interval_ms: u64,
-    pub(crate) scheduler_poll_wait_ms: u64,
+    pub(crate) scheduler_active_job_pool_capacity: usize,
+    pub(crate) scheduler_dispatch_queue_capacity: usize,
+    pub(crate) scheduler_ready_task_capacity: usize,
+    pub(crate) scheduler_commit_ready_task_capacity: usize,
+    pub(crate) scheduler_cleanup_ready_task_capacity: usize,
+    pub(crate) scheduler_tick_interval_ms: u64,
+    pub(crate) scheduler_storage_poll_wait_ms: u64,
     pub(crate) database_host: String,
     pub(crate) database_port: u16,
     pub(crate) database_name: String,
@@ -373,9 +379,17 @@ impl BenchmarkSetup {
             channel_count: total_connection_count(config),
             worker_poll_wait_ms: config.benchmark.worker_poll_wait_ms,
             job_poll_wait_ms: config.benchmark.job_poll_wait_ms,
-            scheduler_poll_batch: config.benchmark.scheduler_poll_batch,
-            scheduler_refill_interval_ms: config.benchmark.scheduler_refill_interval_ms,
-            scheduler_poll_wait_ms: config.benchmark.scheduler_poll_wait_ms,
+            scheduler_active_job_pool_capacity: config.benchmark.scheduler_active_job_pool_capacity,
+            scheduler_dispatch_queue_capacity: config.benchmark.scheduler_dispatch_queue_capacity,
+            scheduler_ready_task_capacity: config.benchmark.scheduler_ready_task_capacity,
+            scheduler_commit_ready_task_capacity: config
+                .benchmark
+                .scheduler_commit_ready_task_capacity,
+            scheduler_cleanup_ready_task_capacity: config
+                .benchmark
+                .scheduler_cleanup_ready_task_capacity,
+            scheduler_tick_interval_ms: config.benchmark.scheduler_tick_interval_ms,
+            scheduler_storage_poll_wait_ms: config.benchmark.scheduler_storage_poll_wait_ms,
             database_host: config.database.host.clone(),
             database_port: config.database.port,
             database_name: config.database.name.clone(),
@@ -631,7 +645,7 @@ impl SchedulerReadyTasksClient {
     async fn poll_ready_task(
         &self,
         wait_ms: u64,
-    ) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
+    ) -> spider_storage_api_bench::api::ApiResult<Option<ScheduledTaskDto>> {
         let response = self
             .http
             .post(format!(
@@ -659,8 +673,27 @@ pub(crate) struct SchedulerPollReadyTaskRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ScheduledTaskDto {
+    pub(crate) resource_group: String,
+    pub(crate) job: String,
+    pub(crate) task: TaskIdDto,
+}
+
+impl From<ReadyTaskEntryDto> for ScheduledTaskDto {
+    fn from(task: ReadyTaskEntryDto) -> Self {
+        Self {
+            resource_group: task.resource_group_id,
+            job: task.job_id,
+            task: TaskIdDto::Index {
+                task_index: task.task_index,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SchedulerReadyTaskResponse {
-    pub(crate) task: Option<ReadyTaskEntryDto>,
+    pub(crate) task: Option<ScheduledTaskDto>,
 }
 
 struct WorkerRunResult {
@@ -925,7 +958,7 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
     loop_started_at: Instant,
     request_latency_samples: &mut Vec<RequestLatencySample>,
     activity: &mut WorkerActivityTracker,
-) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
+) -> spider_storage_api_bench::api::ApiResult<Option<ScheduledTaskDto>> {
     let poll_started_at = Instant::now();
     let result = poll_ready_task(worker).await;
     let poll_latency = poll_started_at.elapsed();
@@ -957,7 +990,7 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
 
 async fn poll_ready_task<ClientType: StorageApiClient>(
     worker: &ClientWorker<ClientType>,
-) -> spider_storage_api_bench::api::ApiResult<Option<ReadyTaskEntryDto>> {
+) -> spider_storage_api_bench::api::ApiResult<Option<ScheduledTaskDto>> {
     if let Some(scheduler) = &worker.scheduler {
         scheduler.poll_ready_task(worker.worker_poll_wait_ms).await
     } else {
@@ -968,21 +1001,21 @@ async fn poll_ready_task<ClientType: StorageApiClient>(
                 wait_ms: worker.worker_poll_wait_ms,
             })
             .await
-            .map(|mut ready| ready.tasks.pop())
+            .map(|mut ready| ready.tasks.pop().map(Into::into))
     }
 }
 
 async fn execute_ready_task<ClientType: StorageApiClient>(
     worker: &ClientWorker<ClientType>,
-    task: ReadyTaskEntryDto,
+    task: ScheduledTaskDto,
     outputs: &[u8],
     loop_started_at: Instant,
     request_latency_samples: &mut Vec<RequestLatencySample>,
     activity: &mut WorkerActivityTracker,
 ) -> anyhow::Result<()> {
     let create_started_at = Instant::now();
-    let job_id = task.job_id.clone();
-    let task_index = task.task_index;
+    let job_id = task.job.clone();
+    let task_id = task.task.clone();
     let (context, create_latency) = record_timed_request(
         request_latency_samples,
         "create_task_instance",
@@ -991,10 +1024,8 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
             .client
             .create_task_instance(CreateTaskInstanceRequest {
                 session_id: worker.session_id,
-                job_id: task.job_id.clone(),
-                task_id: spider_storage_api_bench::api::TaskIdDto::Index {
-                    task_index: task.task_index,
-                },
+                job_id: task.job.clone(),
+                task_id: task.task.clone(),
                 execution_manager_id: worker.execution_manager_id.clone(),
             }),
     )
@@ -1005,7 +1036,7 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
             worker.agent_id,
             worker.worker_index,
             job_id,
-            task_index
+            format_task_id(&task_id)
         )
     })?;
     activity.record_valid_request(loop_started_at, create_started_at, create_latency);
@@ -1013,32 +1044,81 @@ async fn execute_ready_task<ClientType: StorageApiClient>(
     let succeed_started_at = Instant::now();
     let (_state, succeed_latency) = record_timed_request(
         request_latency_samples,
-        "succeed_task_instance",
+        succeed_task_operation(&task_id),
         RequestCategory::NonBlocking,
-        worker
-            .client
-            .succeed_task_instance(SucceedTaskInstanceRequest {
-                session_id: worker.session_id,
-                job_id: task.job_id,
-                task_instance_id: context.task_instance_id,
-                task_index: task.task_index,
-                serialized_outputs: outputs.to_vec(),
-            }),
+        succeed_scheduled_task(worker, task, context.task_instance_id, outputs),
     )
     .await
     .map_err(|error| {
         anyhow::anyhow!(
-            "worker {}:{} succeed_task_instance failed for job={} task_index={} \
-             task_instance_id={}: {error}",
+            "worker {}:{} succeed task failed for job={} task_id={} task_instance_id={}: {error}",
             worker.agent_id,
             worker.worker_index,
             job_id,
-            task_index,
+            format_task_id(&task_id),
             context.task_instance_id
         )
     })?;
     activity.record_valid_request(loop_started_at, succeed_started_at, succeed_latency);
     Ok(())
+}
+
+async fn succeed_scheduled_task<ClientType: StorageApiClient>(
+    worker: &ClientWorker<ClientType>,
+    task: ScheduledTaskDto,
+    task_instance_id: u64,
+    outputs: &[u8],
+) -> spider_storage_api_bench::api::ApiResult<spider_storage_api_bench::api::JobStateResponse> {
+    match task.task {
+        TaskIdDto::Index { task_index } => {
+            worker
+                .client
+                .succeed_task_instance(SucceedTaskInstanceRequest {
+                    session_id: worker.session_id,
+                    job_id: task.job,
+                    task_instance_id,
+                    task_index,
+                    serialized_outputs: outputs.to_vec(),
+                })
+                .await
+        }
+        TaskIdDto::Commit => {
+            worker
+                .client
+                .succeed_commit_task_instance(SucceedTerminationTaskInstanceRequest {
+                    session_id: worker.session_id,
+                    job_id: task.job,
+                    task_instance_id,
+                })
+                .await
+        }
+        TaskIdDto::Cleanup => {
+            worker
+                .client
+                .succeed_cleanup_task_instance(SucceedTerminationTaskInstanceRequest {
+                    session_id: worker.session_id,
+                    job_id: task.job,
+                    task_instance_id,
+                })
+                .await
+        }
+    }
+}
+
+const fn succeed_task_operation(task_id: &TaskIdDto) -> &'static str {
+    match task_id {
+        TaskIdDto::Index { .. } => "succeed_task_instance",
+        TaskIdDto::Commit => "succeed_commit_task_instance",
+        TaskIdDto::Cleanup => "succeed_cleanup_task_instance",
+    }
+}
+
+fn format_task_id(task_id: &TaskIdDto) -> String {
+    match task_id {
+        TaskIdDto::Index { task_index } => format!("index:{task_index}"),
+        TaskIdDto::Commit => "commit".to_owned(),
+        TaskIdDto::Cleanup => "cleanup".to_owned(),
+    }
 }
 
 async fn record_task_execution(

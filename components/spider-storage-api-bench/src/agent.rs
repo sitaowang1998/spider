@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    str::FromStr,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -16,21 +17,43 @@ use axum::{
     routing::{get, post},
 };
 use serde::Serialize;
+use spider_core::{
+    job::JobState,
+    types::id::{JobId, SessionId},
+};
+use spider_scheduler::{
+    DispatchQueueSource,
+    SchedulerCore,
+    SchedulerStorageClient,
+    StorageClientError,
+    TaskAssignment,
+    core_impl::RoundRobinConfig,
+    dispatch_queue::{DispatchQueueReader, DispatchQueueWriter, create_dispatch_queue},
+};
+use spider_storage::cache::TaskId;
 use spider_storage_api_bench::{
-    api::{PollReadyTasksRequest, ReadyTaskEntryDto},
+    api::{
+        GetSessionRequest,
+        JobIdRequest,
+        PollReadyTasksRequest,
+        ReadyTaskEntryDto,
+        TaskIdDto,
+        TerminationTaskEntryDto,
+    },
     client::StorageApiClient,
     metrics::{RequestCategory, RequestLatencySample, summarize_requests},
 };
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     AgentArgs,
     BenchmarkReport,
+    ScheduledTaskDto,
     SchedulerPollReadyTaskRequest,
     SchedulerReadyTaskResponse,
     SchedulerReadyTasksClient,
     distributed::{AgentRole, AgentRunAccepted, AgentRunRequest, AgentRunState, AgentRunStatus},
-    record_timed_request,
     run_submitter_workload,
     run_worker_workload,
 };
@@ -53,9 +76,10 @@ struct AgentRunRecord {
 }
 
 struct SchedulerQueue {
-    sender: async_channel::Sender<ReadyTaskEntryDto>,
-    receiver: async_channel::Receiver<ReadyTaskEntryDto>,
+    writer: DispatchQueueWriter,
+    reader: DispatchQueueReader,
     worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
+    storage_poll_latency: Arc<Mutex<Vec<RequestLatencySample>>>,
 }
 
 #[derive(Serialize)]
@@ -125,16 +149,7 @@ async fn start_run(
     } else {
         None
     };
-    let scheduler = if request.role == AgentRole::Scheduler {
-        let (sender, receiver) = async_channel::unbounded();
-        Some(Arc::new(SchedulerQueue {
-            sender,
-            receiver,
-            worker_poll_latency: Mutex::new(Vec::new()),
-        }))
-    } else {
-        None
-    };
+    let scheduler = create_scheduler_queue_for_run(&state, request.role)?;
     runs.insert(
         request.run_id.clone(),
         AgentRunRecord {
@@ -191,6 +206,31 @@ async fn start_run(
     }))
 }
 
+fn create_scheduler_queue_for_run(
+    state: &AgentState,
+    role: AgentRole,
+) -> Result<Option<Arc<SchedulerQueue>>, AgentError> {
+    if role != AgentRole::Scheduler {
+        return Ok(None);
+    }
+    let config = spider_storage_api_bench::config::BenchConfig::load(&state.config_path)
+        .map_err(|err| AgentError::bad_request(format!("scheduler config load failed: {err}")))?;
+    config
+        .benchmark
+        .validate()
+        .map_err(|err| AgentError::bad_request(format!("scheduler config invalid: {err}")))?;
+    let (writer, reader) = create_dispatch_queue(
+        config.benchmark.scheduler_dispatch_queue_capacity,
+        SessionId::default(),
+    );
+    Ok(Some(Arc::new(SchedulerQueue {
+        writer,
+        reader,
+        worker_poll_latency: Mutex::new(Vec::new()),
+        storage_poll_latency: Arc::new(Mutex::new(Vec::new())),
+    })))
+}
+
 fn run_id_is_active(runs: &HashMap<String, AgentRunRecord>, run_id: &str) -> bool {
     runs.get(run_id).is_some_and(|run| {
         matches!(
@@ -236,21 +276,27 @@ async fn run_scheduler_report(
         drop(runs);
         (stop_requested, scheduler)
     };
-    let request_latency = match request.protocol {
+    match request.protocol {
         spider_storage_api_bench::server::ServerProtocol::Rest => {
             let client =
                 spider_storage_api_bench::rest::RestStorageApiClient::new(&request.target)?;
-            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
+            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?;
         }
         spider_storage_api_bench::server::ServerProtocol::Grpc => {
-            let client = crate::connect_grpc_clients(&request.target, 1)
-                .await?
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("missing scheduler gRPC client"))?;
-            run_scheduler_loop(client, &config, scheduler.clone(), stop_requested).await?
+            run_scheduler_loop(
+                crate::connect_grpc_clients(&request.target, 1)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing scheduler gRPC client"))?,
+                &config,
+                scheduler.clone(),
+                stop_requested,
+            )
+            .await?;
         }
-    };
+    }
+    let request_latency = scheduler.storage_poll_latency.lock().await.clone();
     Ok(BenchmarkReport {
         setup: crate::BenchmarkSetup::new(
             request.protocol,
@@ -274,40 +320,212 @@ async fn run_scheduler_loop<ClientType: StorageApiClient>(
     config: &spider_storage_api_bench::config::BenchConfig,
     scheduler: Arc<SchedulerQueue>,
     stop_requested: Arc<AtomicBool>,
-) -> anyhow::Result<Vec<RequestLatencySample>> {
-    let mut request_latency = Vec::new();
-    let refill_interval = Duration::from_millis(config.benchmark.scheduler_refill_interval_ms);
-    while !stop_requested.load(Ordering::Relaxed) {
-        let (ready, _) = record_timed_request(
-            &mut request_latency,
-            "scheduler_poll_ready_tasks",
-            RequestCategory::Blocking,
-            client.poll_ready_tasks(PollReadyTasksRequest {
-                max_tasks: config.benchmark.scheduler_poll_batch,
-                wait_ms: config.benchmark.scheduler_poll_wait_ms,
-            }),
-        )
-        .await?;
-        if !ready.tasks.is_empty() {
-            scheduler_push_tasks(&scheduler, ready.tasks).await?;
+) -> anyhow::Result<()> {
+    let cancellation_token = CancellationToken::new();
+    let stop_token = cancellation_token.clone();
+    let stop_handle = tokio::spawn(async move {
+        while !stop_requested.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(refill_interval).await;
+        stop_token.cancel();
+    });
+    let storage_client = BenchSchedulerStorageClient {
+        client,
+        request_latency: scheduler.storage_poll_latency.clone(),
+    };
+    let core = RoundRobinConfig::new(
+        config.benchmark.scheduler_active_job_pool_capacity,
+        config.benchmark.scheduler_dispatch_queue_capacity,
+        config.benchmark.scheduler_ready_task_capacity,
+        config.benchmark.scheduler_commit_ready_task_capacity,
+        config.benchmark.scheduler_cleanup_ready_task_capacity,
+        config.benchmark.scheduler_storage_poll_wait_ms,
+        config.benchmark.scheduler_tick_interval_ms,
+    );
+    let result = core
+        .run(storage_client, scheduler.writer.clone(), cancellation_token)
+        .await;
+    stop_handle.abort();
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => Err(anyhow::anyhow!("scheduler core failed: {err}")),
     }
-    Ok(request_latency)
 }
 
-async fn scheduler_push_tasks(
-    scheduler: &SchedulerQueue,
-    tasks: Vec<ReadyTaskEntryDto>,
-) -> anyhow::Result<()> {
-    for task in tasks {
-        scheduler
-            .sender
-            .send(task)
-            .await
-            .map_err(|_| anyhow::anyhow!("scheduler ready-task queue is closed"))?;
+#[derive(Clone)]
+struct BenchSchedulerStorageClient<ClientType: StorageApiClient> {
+    client: ClientType,
+    request_latency: Arc<Mutex<Vec<RequestLatencySample>>>,
+}
+
+#[async_trait::async_trait]
+impl<ClientType: StorageApiClient> SchedulerStorageClient
+    for BenchSchedulerStorageClient<ClientType>
+{
+    async fn poll_ready(
+        &self,
+        max_items: usize,
+        wait: Duration,
+    ) -> Result<(SessionId, Vec<spider_scheduler::InboundEntry>), StorageClientError> {
+        let session_id = self.get_session_id().await?;
+        let start_time = Instant::now();
+        let result = self
+            .client
+            .poll_ready_tasks(PollReadyTasksRequest {
+                max_tasks: max_items,
+                wait_ms: duration_millis_u64(wait),
+            })
+            .await;
+        let latency = start_time.elapsed();
+        self.record_storage_poll("scheduler_poll_ready_tasks", result.is_ok(), latency)
+            .await;
+        let response = result.map_err(|err| storage_api_error(&err))?;
+        let entries = response
+            .tasks
+            .iter()
+            .map(ready_task_to_inbound_entry)
+            .collect::<Result<_, _>>()?;
+        Ok((session_id, entries))
     }
-    Ok(())
+
+    async fn poll_commit_ready(
+        &self,
+        max_items: usize,
+        wait: Duration,
+    ) -> Result<(SessionId, Vec<spider_scheduler::InboundEntry>), StorageClientError> {
+        let session_id = self.get_session_id().await?;
+        let start_time = Instant::now();
+        let result = self
+            .client
+            .poll_commit_ready_tasks(PollReadyTasksRequest {
+                max_tasks: max_items,
+                wait_ms: duration_millis_u64(wait),
+            })
+            .await;
+        let latency = start_time.elapsed();
+        self.record_storage_poll("scheduler_poll_commit_ready_tasks", result.is_ok(), latency)
+            .await;
+        let response = result.map_err(|err| storage_api_error(&err))?;
+        let entries = response
+            .tasks
+            .iter()
+            .map(|task| termination_task_to_inbound_entry(task, TaskId::Commit))
+            .collect::<Result<_, _>>()?;
+        Ok((session_id, entries))
+    }
+
+    async fn poll_cleanup_ready(
+        &self,
+        max_items: usize,
+        wait: Duration,
+    ) -> Result<(SessionId, Vec<spider_scheduler::InboundEntry>), StorageClientError> {
+        let session_id = self.get_session_id().await?;
+        let start_time = Instant::now();
+        let result = self
+            .client
+            .poll_cleanup_ready_tasks(PollReadyTasksRequest {
+                max_tasks: max_items,
+                wait_ms: duration_millis_u64(wait),
+            })
+            .await;
+        let latency = start_time.elapsed();
+        self.record_storage_poll(
+            "scheduler_poll_cleanup_ready_tasks",
+            result.is_ok(),
+            latency,
+        )
+        .await;
+        let response = result.map_err(|err| storage_api_error(&err))?;
+        let entries = response
+            .tasks
+            .iter()
+            .map(|task| termination_task_to_inbound_entry(task, TaskId::Cleanup))
+            .collect::<Result<_, _>>()?;
+        Ok((session_id, entries))
+    }
+
+    async fn job_state(&self, job_id: JobId) -> Result<JobState, StorageClientError> {
+        let response = self
+            .client
+            .get_job_state(JobIdRequest {
+                job_id: job_id.to_string(),
+            })
+            .await
+            .map_err(|err| storage_api_error(&err))?;
+        parse_job_state(&response.state)
+    }
+}
+
+impl<ClientType: StorageApiClient> BenchSchedulerStorageClient<ClientType> {
+    async fn get_session_id(&self) -> Result<SessionId, StorageClientError> {
+        self.client
+            .get_session(GetSessionRequest {})
+            .await
+            .map(|response| response.session_id)
+            .map_err(|err| storage_api_error(&err))
+    }
+
+    async fn record_storage_poll(&self, operation: &'static str, success: bool, latency: Duration) {
+        let sample = if success {
+            RequestLatencySample::success(operation, RequestCategory::Blocking, latency)
+        } else {
+            RequestLatencySample::failure(operation, RequestCategory::Blocking, latency)
+        };
+        self.request_latency.lock().await.push(sample);
+    }
+}
+
+fn ready_task_to_inbound_entry(
+    task: &ReadyTaskEntryDto,
+) -> Result<spider_scheduler::InboundEntry, StorageClientError> {
+    Ok(spider_scheduler::InboundEntry {
+        resource_group_id: parse_scheduler_id(&task.resource_group_id)?,
+        job_id: parse_scheduler_id(&task.job_id)?,
+        task_id: TaskId::Index(task.task_index),
+    })
+}
+
+fn termination_task_to_inbound_entry(
+    task: &TerminationTaskEntryDto,
+    task_id: TaskId,
+) -> Result<spider_scheduler::InboundEntry, StorageClientError> {
+    Ok(spider_scheduler::InboundEntry {
+        resource_group_id: parse_scheduler_id(&task.resource_group_id)?,
+        job_id: parse_scheduler_id(&task.job_id)?,
+        task_id,
+    })
+}
+
+fn parse_scheduler_id<IdType>(value: &str) -> Result<IdType, StorageClientError>
+where
+    IdType: FromStr,
+    IdType::Err: std::fmt::Display, {
+    IdType::from_str(value).map_err(|err| {
+        StorageClientError::Internal(format!("invalid scheduler id `{value}`: {err}"))
+    })
+}
+
+fn parse_job_state(value: &str) -> Result<JobState, StorageClientError> {
+    match value {
+        "Ready" => Ok(JobState::Ready),
+        "Running" => Ok(JobState::Running),
+        "CommitReady" => Ok(JobState::CommitReady),
+        "CleanupReady" => Ok(JobState::CleanupReady),
+        "Succeeded" => Ok(JobState::Succeeded),
+        "Failed" => Ok(JobState::Failed),
+        "Cancelled" => Ok(JobState::Cancelled),
+        _ => Err(StorageClientError::Internal(format!(
+            "invalid job state `{value}`"
+        ))),
+    }
+}
+
+fn storage_api_error(error: &spider_storage_api_bench::api::ApiError) -> StorageClientError {
+    StorageClientError::Internal(error.to_string())
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn run_submitter_report(
@@ -469,7 +687,9 @@ async fn poll_scheduler_ready_tasks(
         scheduler
     };
     let start_time = Instant::now();
-    let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms)).await;
+    let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms))
+        .await
+        .map_err(|err| AgentError::internal(format!("scheduler dispatch failed: {err}")))?;
     let latency = start_time.elapsed();
     let mut worker_poll_latency = scheduler.worker_poll_latency.lock().await;
     worker_poll_latency.push(RequestLatencySample::success(
@@ -491,20 +711,23 @@ async fn poll_scheduler_ready_tasks(
 async fn scheduler_poll_ready_task(
     scheduler: &SchedulerQueue,
     wait: Duration,
-) -> Option<ReadyTaskEntryDto> {
-    match scheduler.receiver.try_recv() {
-        Ok(task) => Some(task),
-        Err(async_channel::TryRecvError::Closed) => None,
-        Err(async_channel::TryRecvError::Empty) => {
-            if wait.is_zero() {
-                None
-            } else {
-                match tokio::time::timeout(wait, scheduler.receiver.recv()).await {
-                    Ok(Ok(task)) => Some(task),
-                    Ok(Err(_)) | Err(_) => None,
-                }
-            }
-        }
+) -> Result<Option<ScheduledTaskDto>, spider_scheduler::SchedulerError> {
+    scheduler
+        .reader
+        .dequeue(wait)
+        .await
+        .map(|assignment| assignment.map(|(_session_id, task)| task_assignment_to_dto(task)))
+}
+
+fn task_assignment_to_dto(task: TaskAssignment) -> ScheduledTaskDto {
+    ScheduledTaskDto {
+        resource_group: task.resource_group_id.to_string(),
+        job: task.job_id.to_string(),
+        task: match task.task_id {
+            TaskId::Index(task_index) => TaskIdDto::Index { task_index },
+            TaskId::Commit => TaskIdDto::Commit,
+            TaskId::Cleanup => TaskIdDto::Cleanup,
+        },
     }
 }
 
@@ -559,6 +782,13 @@ impl AgentError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
             message: message.into(),
         }
     }

@@ -2289,6 +2289,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "spider-scheduler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "dashmap",
+ "serde",
+ "spider-core",
+ "spider-storage",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "spider-storage"
 version = "0.1.0"
 dependencies = [
@@ -2332,11 +2348,13 @@ dependencies = [
  "serde",
  "serde_json",
  "spider-core",
+ "spider-scheduler",
  "spider-storage",
  "spider-tdl",
  "tabled",
  "thiserror",
  "tokio",
+ "tokio-util",
  "toml",
  "tonic",
  "tonic-build",
