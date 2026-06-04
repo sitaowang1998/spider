@@ -20,6 +20,7 @@ job_poll_wait_ms = 10
 scheduler_active_job_pool_capacity = 1024
 scheduler_commit_ready_task_capacity = 1024
 scheduler_cleanup_ready_task_capacity = 1024
+scheduler_max_serving_requests = 1024
 scheduler_tick_interval_ms = 10
 scheduler_storage_poll_wait_ms = 20
 flat_percent = 50

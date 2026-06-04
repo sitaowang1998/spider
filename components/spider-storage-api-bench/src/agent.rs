@@ -43,7 +43,7 @@ use spider_storage_api_bench::{
     client::StorageApiClient,
     metrics::{RequestCategory, RequestLatencySample, summarize_requests},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -78,6 +78,7 @@ struct AgentRunRecord {
 struct SchedulerQueue {
     writer: DispatchQueueWriter,
     reader: DispatchQueueReader,
+    serving_requests: Semaphore,
     worker_poll_latency: Mutex<Vec<RequestLatencySample>>,
     storage_poll_latency: Arc<Mutex<Vec<RequestLatencySample>>>,
 }
@@ -226,6 +227,7 @@ fn create_scheduler_queue_for_run(
     Ok(Some(Arc::new(SchedulerQueue {
         writer,
         reader,
+        serving_requests: Semaphore::new(config.benchmark.scheduler_max_serving_requests),
         worker_poll_latency: Mutex::new(Vec::new()),
         storage_poll_latency: Arc::new(Mutex::new(Vec::new())),
     })))
@@ -687,6 +689,10 @@ async fn poll_scheduler_ready_tasks(
         scheduler
     };
     let start_time = Instant::now();
+    let _serving_request =
+        scheduler.serving_requests.acquire().await.map_err(|err| {
+            AgentError::internal(format!("scheduler request limiter closed: {err}"))
+        })?;
     let task = scheduler_poll_ready_task(&scheduler, Duration::from_millis(request.wait_ms))
         .await
         .map_err(|err| AgentError::internal(format!("scheduler dispatch failed: {err}")))?;
@@ -802,9 +808,13 @@ impl IntoResponse for AgentError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
-    use super::{AgentRunRecord, run_id_is_active};
+    use spider_core::types::id::SessionId;
+    use spider_scheduler::dispatch_queue::create_dispatch_queue;
+    use tokio::sync::{Mutex, Semaphore};
+
+    use super::{AgentRunRecord, SchedulerQueue, run_id_is_active};
     use crate::distributed::AgentRunState;
 
     #[test]
@@ -839,5 +849,42 @@ mod tests {
         );
 
         assert!(run_id_is_active(&runs, "grpc_flat_agent"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_serving_request_limit_queues_pending_request() {
+        let scheduler = create_test_scheduler_queue(1);
+        let first_permit = scheduler
+            .serving_requests
+            .acquire()
+            .await
+            .expect("first scheduler serving request should acquire permit");
+        let pending_permit = scheduler.serving_requests.acquire();
+        tokio::pin!(pending_permit);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut pending_permit)
+                .await
+                .is_err(),
+            "second scheduler serving request should queue while limit is reached"
+        );
+
+        drop(first_permit);
+        let second_permit = tokio::time::timeout(Duration::from_millis(100), &mut pending_permit)
+            .await
+            .expect("queued scheduler serving request should acquire after capacity is released")
+            .expect("queued scheduler serving request should acquire permit");
+        drop(second_permit);
+    }
+
+    fn create_test_scheduler_queue(max_serving_requests: usize) -> Arc<SchedulerQueue> {
+        let (writer, reader) = create_dispatch_queue(1, SessionId::default());
+        Arc::new(SchedulerQueue {
+            writer,
+            reader,
+            serving_requests: Semaphore::new(max_serving_requests),
+            worker_poll_latency: Mutex::new(Vec::new()),
+            storage_poll_latency: Arc::new(Mutex::new(Vec::new())),
+        })
     }
 }

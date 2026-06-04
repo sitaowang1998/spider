@@ -165,6 +165,8 @@ pub struct BenchmarkConfig {
     pub scheduler_commit_ready_task_capacity: usize,
     #[serde(default = "default_scheduler_cleanup_ready_task_capacity")]
     pub scheduler_cleanup_ready_task_capacity: usize,
+    #[serde(default = "default_scheduler_max_serving_requests")]
+    pub scheduler_max_serving_requests: usize,
     #[serde(default = "default_scheduler_tick_interval_ms")]
     pub scheduler_tick_interval_ms: u64,
     #[serde(default = "default_scheduler_storage_poll_wait_ms")]
@@ -196,6 +198,10 @@ const fn default_scheduler_commit_ready_task_capacity() -> usize {
 }
 
 const fn default_scheduler_cleanup_ready_task_capacity() -> usize {
+    1024
+}
+
+const fn default_scheduler_max_serving_requests() -> usize {
     1024
 }
 
@@ -247,6 +253,9 @@ impl BenchmarkConfig {
         if self.scheduler_cleanup_ready_task_capacity == 0 {
             anyhow::bail!("scheduler_cleanup_ready_task_capacity must be greater than 0");
         }
+        if self.scheduler_max_serving_requests == 0 {
+            anyhow::bail!("scheduler_max_serving_requests must be greater than 0");
+        }
         Ok(())
     }
 }
@@ -290,6 +299,7 @@ mod tests {
         assert_eq!(11_000, config.benchmark.scheduler_ready_task_capacity);
         assert_eq!(1024, config.benchmark.scheduler_commit_ready_task_capacity);
         assert_eq!(1024, config.benchmark.scheduler_cleanup_ready_task_capacity);
+        assert_eq!(1024, config.benchmark.scheduler_max_serving_requests);
         assert_eq!(10, config.benchmark.scheduler_tick_interval_ms);
         assert_eq!(20, config.benchmark.scheduler_storage_poll_wait_ms);
         Ok(())
@@ -310,6 +320,23 @@ mod tests {
             err.to_string()
                 .contains("scheduler_dispatch_queue_capacity"),
             "error should mention scheduler dispatch queue capacity"
+        );
+    }
+
+    #[test]
+    fn scheduler_serving_request_limit_rejects_zero() {
+        let mut config =
+            BenchConfig::load("config/default.toml".as_ref()).expect("default config should load");
+
+        config.benchmark.scheduler_max_serving_requests = 0;
+
+        let err = config
+            .benchmark
+            .validate()
+            .expect_err("zero scheduler max serving requests should fail");
+        assert!(
+            err.to_string().contains("scheduler_max_serving_requests"),
+            "error should mention scheduler max serving requests"
         );
     }
 

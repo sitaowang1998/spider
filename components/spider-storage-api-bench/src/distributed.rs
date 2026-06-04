@@ -335,6 +335,7 @@ mod tests {
             scheduler_ready_task_capacity: 1,
             scheduler_commit_ready_task_capacity: 1,
             scheduler_cleanup_ready_task_capacity: 1,
+            scheduler_max_serving_requests: 1,
             scheduler_tick_interval_ms: 1,
             scheduler_storage_poll_wait_ms: 1,
             database_host: "127.0.0.1".to_owned(),

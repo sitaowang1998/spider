@@ -44,6 +44,7 @@ class AwsMakeConfigTest(unittest.TestCase):
             scheduler_active_job_pool_capacity=64,
             scheduler_commit_ready_task_capacity=16,
             scheduler_cleanup_ready_task_capacity=32,
+            scheduler_max_serving_requests=128,
             scheduler_tick_interval_ms=11,
             scheduler_storage_poll_wait_ms=22,
             flat_percent=50,
@@ -65,6 +66,7 @@ class AwsMakeConfigTest(unittest.TestCase):
         self.assertIn("scheduler_ready_task_capacity = 21000", config)
         self.assertIn("scheduler_commit_ready_task_capacity = 16", config)
         self.assertIn("scheduler_cleanup_ready_task_capacity = 32", config)
+        self.assertIn("scheduler_max_serving_requests = 128", config)
         self.assertIn("scheduler_tick_interval_ms = 11", config)
         self.assertIn("scheduler_storage_poll_wait_ms = 22", config)
         self.assertNotIn("scheduler_poll_batch", config)
@@ -94,6 +96,7 @@ class AwsMakeConfigTest(unittest.TestCase):
             scheduler_active_job_pool_capacity=64,
             scheduler_commit_ready_task_capacity=16,
             scheduler_cleanup_ready_task_capacity=32,
+            scheduler_max_serving_requests=128,
             scheduler_tick_interval_ms=11,
             scheduler_storage_poll_wait_ms=22,
             flat_percent=50,

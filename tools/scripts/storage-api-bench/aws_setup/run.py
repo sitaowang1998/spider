@@ -105,6 +105,8 @@ def build_matrix_command(
         str(config.benchmark.scheduler_commit_ready_task_capacity),
         "--scheduler-cleanup-ready-task-capacity",
         str(config.benchmark.scheduler_cleanup_ready_task_capacity),
+        "--scheduler-max-serving-requests",
+        str(config.benchmark.scheduler_max_serving_requests),
         "--scheduler-tick-interval-ms",
         str(config.benchmark.scheduler_tick_interval_ms),
         "--scheduler-storage-poll-wait-ms",

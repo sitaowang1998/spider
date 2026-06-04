@@ -189,6 +189,7 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) scheduler_ready_task_capacity: usize,
     pub(crate) scheduler_commit_ready_task_capacity: usize,
     pub(crate) scheduler_cleanup_ready_task_capacity: usize,
+    pub(crate) scheduler_max_serving_requests: usize,
     pub(crate) scheduler_tick_interval_ms: u64,
     pub(crate) scheduler_storage_poll_wait_ms: u64,
     pub(crate) database_host: String,
@@ -388,6 +389,7 @@ impl BenchmarkSetup {
             scheduler_cleanup_ready_task_capacity: config
                 .benchmark
                 .scheduler_cleanup_ready_task_capacity,
+            scheduler_max_serving_requests: config.benchmark.scheduler_max_serving_requests,
             scheduler_tick_interval_ms: config.benchmark.scheduler_tick_interval_ms,
             scheduler_storage_poll_wait_ms: config.benchmark.scheduler_storage_poll_wait_ms,
             database_host: config.database.host.clone(),

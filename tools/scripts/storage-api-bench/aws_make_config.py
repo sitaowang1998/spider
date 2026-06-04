@@ -78,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scheduler-active-job-pool-capacity", type=int, default=1024)
     parser.add_argument("--scheduler-commit-ready-task-capacity", type=int, default=1024)
     parser.add_argument("--scheduler-cleanup-ready-task-capacity", type=int, default=1024)
+    parser.add_argument("--scheduler-max-serving-requests", type=int, default=1024)
     parser.add_argument("--scheduler-tick-interval-ms", type=int, default=10)
     parser.add_argument("--scheduler-storage-poll-wait-ms", type=int, default=20)
     parser.add_argument("--flat-percent", type=int, default=50)
@@ -163,6 +164,7 @@ def render_config(
         f"scheduler_ready_task_capacity = {scheduler_ready_task_capacity}",
         f"scheduler_commit_ready_task_capacity = {args.scheduler_commit_ready_task_capacity}",
         f"scheduler_cleanup_ready_task_capacity = {args.scheduler_cleanup_ready_task_capacity}",
+        f"scheduler_max_serving_requests = {args.scheduler_max_serving_requests}",
         f"scheduler_tick_interval_ms = {args.scheduler_tick_interval_ms}",
         f"scheduler_storage_poll_wait_ms = {args.scheduler_storage_poll_wait_ms}",
         "warmup_sec = 5",

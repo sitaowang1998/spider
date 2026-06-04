@@ -20,6 +20,7 @@ worker_poll_wait_ms = 1
 scheduler_active_job_pool_capacity = 8
 scheduler_commit_ready_task_capacity = 1
 scheduler_cleanup_ready_task_capacity = 1
+scheduler_max_serving_requests = 512
 scheduler_tick_interval_ms = 5
 scheduler_storage_poll_wait_ms = 1
 
@@ -77,5 +78,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "real-scheduler"
+s3_folder_name = "real-scheduler-rate-limit"
 remote_data_dir = "/var/lib/spider-bench/data"

@@ -35,6 +35,7 @@ class BenchmarkConfig:
     scheduler_active_job_pool_capacity: int = 1024
     scheduler_commit_ready_task_capacity: int = 1024
     scheduler_cleanup_ready_task_capacity: int = 1024
+    scheduler_max_serving_requests: int = 1024
     scheduler_tick_interval_ms: int = 10
     scheduler_storage_poll_wait_ms: int = 20
     flat_percent: int = 50
