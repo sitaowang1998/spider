@@ -44,6 +44,8 @@ class AwsSetupConfigTest(unittest.TestCase):
                     submitter_count = 12
                     worker_count = 24
                     worker_poll_wait_ms = 25
+                    worker_empty_poll_sleep_min_ms = 2
+                    worker_empty_poll_sleep_max_ms = 50
                     job_poll_wait_ms = 50
                     scheduler_active_job_pool_capacity = 64
                     scheduler_commit_ready_task_capacity = 16
@@ -84,6 +86,8 @@ class AwsSetupConfigTest(unittest.TestCase):
         self.assertEqual(2000, config.benchmark.tasks_per_job)
         self.assertEqual(7, config.benchmark.task_sleep_ms)
         self.assertEqual(25, config.benchmark.worker_poll_wait_ms)
+        self.assertEqual(2, config.benchmark.worker_empty_poll_sleep_min_ms)
+        self.assertEqual(50, config.benchmark.worker_empty_poll_sleep_max_ms)
         self.assertEqual(50, config.benchmark.job_poll_wait_ms)
         self.assertEqual(64, config.benchmark.scheduler_active_job_pool_capacity)
         self.assertEqual(16, config.benchmark.scheduler_commit_ready_task_capacity)

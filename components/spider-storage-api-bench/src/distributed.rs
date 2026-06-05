@@ -329,6 +329,8 @@ mod tests {
             worker_count: 1,
             channel_count: 1,
             worker_poll_wait_ms: 1,
+            worker_empty_poll_sleep_min_ms: 1,
+            worker_empty_poll_sleep_max_ms: 1,
             job_poll_wait_ms: 1,
             scheduler_active_job_pool_capacity: 1,
             scheduler_dispatch_queue_capacity: 1,

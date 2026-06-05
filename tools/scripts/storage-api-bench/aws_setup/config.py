@@ -31,6 +31,8 @@ class BenchmarkConfig:
     submitter_count: int = 8
     worker_count: int = 16
     worker_poll_wait_ms: int = 10
+    worker_empty_poll_sleep_min_ms: int = 1
+    worker_empty_poll_sleep_max_ms: int = 100
     job_poll_wait_ms: int = 10
     scheduler_active_job_pool_capacity: int = 1024
     scheduler_commit_ready_task_capacity: int = 1024
@@ -156,6 +158,15 @@ def validate_config(config: AwsBenchConfig) -> None:
         raise ValueError(msg)
     if config.benchmark.worker_poll_wait_ms < 0:
         msg = "worker_poll_wait_ms must be greater than or equal to 0"
+        raise ValueError(msg)
+    if config.benchmark.worker_empty_poll_sleep_min_ms <= 0:
+        msg = "worker_empty_poll_sleep_min_ms must be greater than 0"
+        raise ValueError(msg)
+    if (
+        config.benchmark.worker_empty_poll_sleep_max_ms
+        < config.benchmark.worker_empty_poll_sleep_min_ms
+    ):
+        msg = "worker_empty_poll_sleep_max_ms must be greater than or equal to worker_empty_poll_sleep_min_ms"
         raise ValueError(msg)
     if config.benchmark.job_poll_wait_ms < 0:
         msg = "job_poll_wait_ms must be greater than or equal to 0"

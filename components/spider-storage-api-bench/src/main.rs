@@ -183,6 +183,8 @@ pub(crate) struct BenchmarkSetup {
     pub(crate) worker_count: usize,
     pub(crate) channel_count: usize,
     pub(crate) worker_poll_wait_ms: u64,
+    pub(crate) worker_empty_poll_sleep_min_ms: u64,
+    pub(crate) worker_empty_poll_sleep_max_ms: u64,
     pub(crate) job_poll_wait_ms: u64,
     pub(crate) scheduler_active_job_pool_capacity: usize,
     pub(crate) scheduler_dispatch_queue_capacity: usize,
@@ -379,6 +381,8 @@ impl BenchmarkSetup {
             worker_count: config.benchmark.worker_count,
             channel_count: total_connection_count(config),
             worker_poll_wait_ms: config.benchmark.worker_poll_wait_ms,
+            worker_empty_poll_sleep_min_ms: config.benchmark.worker_empty_poll_sleep_min_ms,
+            worker_empty_poll_sleep_max_ms: config.benchmark.worker_empty_poll_sleep_max_ms,
             job_poll_wait_ms: config.benchmark.job_poll_wait_ms,
             scheduler_active_job_pool_capacity: config.benchmark.scheduler_active_job_pool_capacity,
             scheduler_dispatch_queue_capacity: config.benchmark.scheduler_dispatch_queue_capacity,
@@ -622,10 +626,31 @@ struct ClientWorker<ClientType: StorageApiClient> {
     execution_manager_id: String,
     job_count: usize,
     worker_poll_wait_ms: u64,
+    empty_poll_sleep_range: WorkerEmptyPollSleepRange,
     scheduler: Option<SchedulerReadyTasksClient>,
     task_sleep_ms: u64,
     session_id: u64,
     stop_requested: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Clone, Copy)]
+struct WorkerEmptyPollSleepRange {
+    min_sleep_ms: u64,
+    max_sleep_ms: u64,
+}
+
+impl WorkerEmptyPollSleepRange {
+    const fn new(min_sleep_ms: u64, max_sleep_ms: u64) -> Self {
+        Self {
+            min_sleep_ms,
+            max_sleep_ms,
+        }
+    }
+
+    fn random_sleep(self) -> Duration {
+        let sleep_ms = rand::random_range(self.min_sleep_ms..=self.max_sleep_ms);
+        Duration::from_millis(sleep_ms)
+    }
 }
 
 #[derive(Clone)]
@@ -783,6 +808,10 @@ fn spawn_worker_tasks<ClientType: StorageApiClient>(
             execution_manager_id: String::new(),
             job_count: options.job_count,
             worker_poll_wait_ms: options.config.benchmark.worker_poll_wait_ms,
+            empty_poll_sleep_range: WorkerEmptyPollSleepRange::new(
+                options.config.benchmark.worker_empty_poll_sleep_min_ms,
+                options.config.benchmark.worker_empty_poll_sleep_max_ms,
+            ),
             scheduler: options.scheduler.cloned(),
             task_sleep_ms: options.config.benchmark.task_sleep_ms,
             session_id: options.session_id,
@@ -979,6 +1008,7 @@ async fn poll_ready_task_for_worker<ClientType: StorageApiClient>(
     ));
     if task.is_none() {
         activity.record_empty_poll(poll_latency);
+        tokio::time::sleep(worker.empty_poll_sleep_range.random_sleep()).await;
     } else {
         request_latency_samples.push(RequestLatencySample::success(
             "poll_ready_tasks_returned",
@@ -1248,6 +1278,8 @@ pub(crate) async fn connect_grpc_clients(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use clap::Parser as _;
     use spider_storage_api_bench::{
         metrics::{
@@ -1265,6 +1297,7 @@ mod tests {
         BenchmarkSetup,
         Cli,
         ServerProtocol,
+        WorkerEmptyPollSleepRange,
         execution_manager_worker_count,
         total_connection_count,
     };
@@ -1277,6 +1310,19 @@ mod tests {
         assert_eq!(5, execution_manager_worker_count(&config));
         assert_eq!(8, total_connection_count(&config));
         Ok(())
+    }
+
+    #[test]
+    fn worker_empty_poll_sleep_range_samples_inside_bounds() {
+        let sleep_range = WorkerEmptyPollSleepRange::new(3, 7);
+
+        for _ in 0..100 {
+            let sleep = sleep_range.random_sleep();
+            assert!(
+                (Duration::from_millis(3)..=Duration::from_millis(7)).contains(&sleep),
+                "empty poll sleep should stay inside configured range"
+            );
+        }
     }
 
     #[test]

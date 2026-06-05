@@ -154,6 +154,10 @@ pub struct BenchmarkConfig {
     pub client_count: usize,
     pub worker_count: usize,
     pub worker_poll_wait_ms: u64,
+    #[serde(default = "default_worker_empty_poll_sleep_min_ms")]
+    pub worker_empty_poll_sleep_min_ms: u64,
+    #[serde(default = "default_worker_empty_poll_sleep_max_ms")]
+    pub worker_empty_poll_sleep_max_ms: u64,
     pub job_poll_wait_ms: u64,
     #[serde(default = "default_scheduler_active_job_pool_capacity")]
     pub scheduler_active_job_pool_capacity: usize,
@@ -179,6 +183,14 @@ pub struct BenchmarkConfig {
 
 const fn default_task_sleep_ms() -> u64 {
     3
+}
+
+const fn default_worker_empty_poll_sleep_min_ms() -> u64 {
+    1
+}
+
+const fn default_worker_empty_poll_sleep_max_ms() -> u64 {
+    100
 }
 
 const fn default_scheduler_active_job_pool_capacity() -> usize {
@@ -238,6 +250,15 @@ impl BenchmarkConfig {
         if self.worker_count == 0 {
             anyhow::bail!("worker_count must be greater than 0");
         }
+        if self.worker_empty_poll_sleep_min_ms == 0 {
+            anyhow::bail!("worker_empty_poll_sleep_min_ms must be greater than 0");
+        }
+        if self.worker_empty_poll_sleep_max_ms < self.worker_empty_poll_sleep_min_ms {
+            anyhow::bail!(
+                "worker_empty_poll_sleep_max_ms must be greater than or equal to \
+                 worker_empty_poll_sleep_min_ms"
+            );
+        }
         if self.scheduler_active_job_pool_capacity == 0 {
             anyhow::bail!("scheduler_active_job_pool_capacity must be greater than 0");
         }
@@ -272,6 +293,8 @@ mod tests {
         assert_eq!(3, config.benchmark.task_sleep_ms);
         assert_eq!(8, config.benchmark.client_count);
         assert_eq!(16, config.benchmark.worker_count);
+        assert_eq!(1, config.benchmark.worker_empty_poll_sleep_min_ms);
+        assert_eq!(100, config.benchmark.worker_empty_poll_sleep_max_ms);
         assert_eq!("spider-db", config.database.name);
         Ok(())
     }
@@ -288,6 +311,33 @@ mod tests {
         assert!(
             err.to_string().contains("flat_percent"),
             "error should mention flat_percent"
+        );
+    }
+
+    #[test]
+    fn worker_empty_poll_sleep_range_rejects_invalid_values() {
+        let mut config =
+            BenchConfig::load("config/default.toml".as_ref()).expect("default config should load");
+
+        config.benchmark.worker_empty_poll_sleep_min_ms = 0;
+        let err = config
+            .benchmark
+            .validate()
+            .expect_err("zero worker empty poll sleep min should fail");
+        assert!(
+            err.to_string().contains("worker_empty_poll_sleep_min_ms"),
+            "error should mention worker empty poll sleep min"
+        );
+
+        config.benchmark.worker_empty_poll_sleep_min_ms = 10;
+        config.benchmark.worker_empty_poll_sleep_max_ms = 5;
+        let err = config
+            .benchmark
+            .validate()
+            .expect_err("worker empty poll sleep max below min should fail");
+        assert!(
+            err.to_string().contains("worker_empty_poll_sleep_max_ms"),
+            "error should mention worker empty poll sleep max"
         );
     }
 

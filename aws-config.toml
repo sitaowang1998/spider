@@ -17,6 +17,8 @@ submitter_count = 16
 worker_count = 16
 flat_percent = 50
 worker_poll_wait_ms = 1
+worker_empty_poll_sleep_min_ms = 1
+worker_empty_poll_sleep_max_ms = 5
 scheduler_active_job_pool_capacity = 8
 scheduler_commit_ready_task_capacity = 1
 scheduler_cleanup_ready_task_capacity = 1
@@ -78,5 +80,5 @@ image_name_prefix = "spider-storage-bench"
 
 [results]
 s3_uri = ""
-s3_folder_name = "real-scheduler-rate-limit"
+s3_folder_name = "real-scheduler-random-sleep"
 remote_data_dir = "/var/lib/spider-bench/data"

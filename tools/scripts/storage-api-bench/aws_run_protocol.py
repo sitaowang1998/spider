@@ -146,6 +146,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--submitter-count", type=int, default=8)
     parser.add_argument("--worker-count", type=int, default=16)
     parser.add_argument("--worker-poll-wait-ms", type=int, default=10)
+    parser.add_argument("--worker-empty-poll-sleep-min-ms", type=int, default=1)
+    parser.add_argument("--worker-empty-poll-sleep-max-ms", type=int, default=100)
     parser.add_argument("--job-poll-wait-ms", type=int, default=10)
     parser.add_argument("--scheduler-active-job-pool-capacity", type=int, default=1024)
     parser.add_argument("--scheduler-commit-ready-task-capacity", type=int, default=1024)
@@ -289,6 +291,10 @@ def make_config(
             str(args.worker_count),
             "--worker-poll-wait-ms",
             str(args.worker_poll_wait_ms),
+            "--worker-empty-poll-sleep-min-ms",
+            str(args.worker_empty_poll_sleep_min_ms),
+            "--worker-empty-poll-sleep-max-ms",
+            str(args.worker_empty_poll_sleep_max_ms),
             "--job-poll-wait-ms",
             str(args.job_poll_wait_ms),
             "--scheduler-active-job-pool-capacity",

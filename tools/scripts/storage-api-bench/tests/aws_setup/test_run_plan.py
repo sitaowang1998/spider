@@ -34,6 +34,8 @@ class AwsRunPlanTest(unittest.TestCase):
         config.benchmark.submitter_count = 12
         config.benchmark.worker_count = 24
         config.benchmark.worker_poll_wait_ms = 25
+        config.benchmark.worker_empty_poll_sleep_min_ms = 2
+        config.benchmark.worker_empty_poll_sleep_max_ms = 50
         config.benchmark.job_poll_wait_ms = 50
         config.benchmark.scheduler_max_serving_requests = 128
         config.benchmark.flat_percent = 60
@@ -63,6 +65,10 @@ class AwsRunPlanTest(unittest.TestCase):
         self.assertIn("7", command)
         self.assertIn("--worker-poll-wait-ms", command)
         self.assertIn("25", command)
+        self.assertIn("--worker-empty-poll-sleep-min-ms", command)
+        self.assertIn("2", command)
+        self.assertIn("--worker-empty-poll-sleep-max-ms", command)
+        self.assertIn("50", command)
         self.assertIn("--job-poll-wait-ms", command)
         self.assertIn("50", command)
         self.assertIn("--scheduler-max-serving-requests", command)
