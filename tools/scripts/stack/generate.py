@@ -130,9 +130,9 @@ def _build_scheduler_config(config: dict) -> dict:
             "host": _require(storage_endpoint, "host", "storage_endpoint"),
             "port": _require(storage_endpoint, "port", "storage_endpoint"),
         },
-        "storage_connection_pool_size": _require(
+        "connection_pool_size": _require(
             scheduler,
-            "storage_connection_pool_size",
+            "connection_pool_size",
             "scheduler",
         ),
         "runtime": out_runtime,

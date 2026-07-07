@@ -82,8 +82,12 @@ storage:
 # NOTE: `runtime.scheduler` is a serde externally-tagged enum. The `yaml_serde` crate used by the
 # server deserializes such enums using a YAML `!tag`, so the round-robin variant is written as
 # `!round_robin`, not as a plain `{ round_robin: { ... } }` map.
+#
+# The scheduler's storage-client connection-pool size is `connection_pool_size` on this branch;
+# `huntsman-dev-e2e` later renamed it to `storage_connection_pool_size`, but the `e2e-nn` scheduler
+# binary still expects the older name.
 scheduler:
-  storage_connection_pool_size: 4
+  connection_pool_size: 4
   runtime:
     # em_registry:
     #   dead_em_cutoff_sec: 60
