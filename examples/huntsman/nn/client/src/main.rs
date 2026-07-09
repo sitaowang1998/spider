@@ -41,18 +41,18 @@ struct Activation {
     evaluate: fn(&[f64; NUM_INPUTS]) -> f64,
 }
 
-/// The three `nn::dense_*` activations.
+/// The three `neuron::dense_*` activations.
 const ACTIVATIONS: &[Activation] = &[
     Activation {
-        task_func: "nn::dense_relu",
+        task_func: "neuron::dense_relu",
         evaluate: huntsman_nn_core::dense_relu,
     },
     Activation {
-        task_func: "nn::dense_sigmoid",
+        task_func: "neuron::dense_sigmoid",
         evaluate: huntsman_nn_core::dense_sigmoid,
     },
     Activation {
-        task_func: "nn::dense_identity",
+        task_func: "neuron::dense_identity",
         evaluate: huntsman_nn_core::dense_identity,
     },
 ];
