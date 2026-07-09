@@ -1,32 +1,30 @@
 //! Spider client that builds a randomly-wired, neural-network-shaped `nn::dense_*` task graph and
 //! runs it on a live Spider instance.
 
-use std::{num::NonZeroUsize, time::Duration};
+use std::num::NonZeroUsize;
+use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
+use anyhow::anyhow;
 use clap::Parser;
 use huntsman_nn_core::NUM_INPUTS;
-use rand::{
-    CryptoRng,
-    Rng,
-    SeedableRng,
-    rngs::StdRng,
-    seq::{IndexedRandom, index},
-};
+use rand::CryptoRng;
+use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rand::seq::IndexedRandom;
+use rand::seq::index;
 use spider_client::SpiderClient;
-use spider_core::{
-    job::JobState,
-    task::{
-        DataTypeDescriptor,
-        TaskDescriptor,
-        TaskGraph,
-        TaskIndex,
-        TaskInputOutputIndex,
-        TdlContext,
-        ValueTypeDescriptor,
-    },
-    types::{id::JobId, io::TaskInput},
-};
+use spider_core::job::JobState;
+use spider_core::task::DataTypeDescriptor;
+use spider_core::task::TaskDescriptor;
+use spider_core::task::TaskGraph;
+use spider_core::task::TaskIndex;
+use spider_core::task::TaskInputOutputIndex;
+use spider_core::task::TdlContext;
+use spider_core::task::ValueTypeDescriptor;
+use spider_core::types::id::JobId;
+use spider_core::types::io::TaskInput;
 use spider_utils::logging::set_up_logging;
 use tonic::transport::Endpoint;
 
