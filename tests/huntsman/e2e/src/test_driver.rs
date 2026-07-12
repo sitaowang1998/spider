@@ -70,7 +70,7 @@ impl SpiderTestDriver {
             resource_group_id,
             job_submission,
             timeout,
-            async |_job_id: JobId| -> anyhow::Result<()> { Ok(()) },
+            async |_job_id: JobId, _client: &SpiderClient| -> anyhow::Result<()> { Ok(()) },
             outcome_assertion,
         )
         .await;
@@ -83,6 +83,7 @@ impl SpiderTestDriver {
     /// # Type Parameters
     ///
     /// * `FailureInjectionType` - A background task for injecting a failure into the running job.
+    ///   Receives the job id and a client handle so it can gate the failure on the job's state.
     /// * `OutcomeAssertionType` - The callback for asserting the terminal outcome of the job.
     ///
     /// # Errors
@@ -99,7 +100,7 @@ impl SpiderTestDriver {
         outcome_assertion: OutcomeAssertionType,
     ) -> anyhow::Result<()>
     where
-        FailureInjectionType: AsyncFnOnce(JobId) -> anyhow::Result<()>,
+        FailureInjectionType: AsyncFnOnce(JobId, &SpiderClient) -> anyhow::Result<()>,
         OutcomeAssertionType: AsyncFnOnce(JobId, TerminationResult) -> anyhow::Result<()>, {
         let driver = Self::instance().await?;
         let client_guard = driver.client.write().await;
@@ -221,12 +222,12 @@ async fn run_scenario<FailureInjectionType, OutcomeAssertionType>(
     outcome_assertion: OutcomeAssertionType,
 ) -> anyhow::Result<()>
 where
-    FailureInjectionType: AsyncFnOnce(JobId) -> anyhow::Result<()>,
+    FailureInjectionType: AsyncFnOnce(JobId, &SpiderClient) -> anyhow::Result<()>,
     OutcomeAssertionType: AsyncFnOnce(JobId, TerminationResult) -> anyhow::Result<()>, {
     let job_id = submit_and_start_job(&client, resource_group_id, job_submission).await?;
     let result = match tokio::time::timeout(timeout, async {
         let ((), termination) = tokio::try_join!(
-            failure_injection(job_id),
+            failure_injection(job_id, &client),
             poll_until_terminal(&client, job_id),
         )?;
         anyhow::Result::<TerminationResult>::Ok(termination)

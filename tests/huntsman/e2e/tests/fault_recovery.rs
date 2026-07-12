@@ -1,6 +1,6 @@
 //! End-to-end fault-recovery tests: a layered `neuron::dense_*` task graph must still complete and
-//! match the in-process simulation when an execution-manager worker (one, several, or all) or the
-//! scheduler is killed mid-job and restarted.
+//! match the in-process simulation when an execution-manager worker (one, several, or all), the
+//! scheduler, or the storage server is killed mid-job and restarted.
 
 use std::time::Duration;
 
@@ -16,6 +16,9 @@ use e2e::nn::Neuron;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use spider_client::SpiderClient;
+use spider_core::job::JobState;
+use spider_core::types::id::JobId;
 
 /// Relative-tolerance float comparison (matches `tests/nn.rs`).
 const REL_TOL: f64 = 1.0e-12;
@@ -26,17 +29,18 @@ const NUM_LAYERS: usize = 10;
 /// Neurons per layer in the test network (matches `tests/nn.rs`).
 const LAYER_SIZE: usize = 1000;
 
-/// Seconds to let the job run before killing any service, so tasks have dispatched across the
-/// workers.
-const PRE_FAILURE_DELAY_SEC: u64 = 3;
+/// Timeout for [`wait_until_job_active`]: a started job should reach an active execution phase well
+/// within this window.
+const JOB_ACTIVE_TIMEOUT_SEC: u64 = 60;
 
 /// Seconds the targeted service stays down. For a worker failure this must exceed the storage's
 /// `task_instance_pool_config.execution_manager_stale_cutoff_sec` (10) plus `gc_interval_sec` (2)
 /// so the storage garbage-collects the dead execution manager and reassigns its in-flight tasks
-/// before the worker restarts. For a scheduler failure it must stay under the scheduler's
-/// `em_registry.dead_em_cutoff_sec` (default 60) so the still-running execution managers are not
-/// marked dead on restart. 15 satisfies both (12 < 15 < 60). The down window starts after the last
-/// `stop` returns, so every targeted service is down for at least this long.
+/// before the worker restarts. For a scheduler or storage failure it must stay under the
+/// scheduler's `em_registry.dead_em_cutoff_sec` (default 60) so the still-running execution
+/// managers are not marked dead while the scheduler or storage is down. 15 satisfies both
+/// (12 < 15 < 60). The down window starts after the last `stop` returns, so every targeted service
+/// is down for at least this long.
 const OUTAGE_DURATION_SEC: u64 = 15;
 
 /// Distinct resource-group ids keep each scenario's jobs isolated in the shared persistent
@@ -45,6 +49,7 @@ const RESOURCE_GROUP_SINGLE: &str = "e2e-fault-single";
 const RESOURCE_GROUP_MULTI: &str = "e2e-fault-multi";
 const RESOURCE_GROUP_ALL: &str = "e2e-fault-all";
 const RESOURCE_GROUP_SCHEDULER: &str = "e2e-fault-scheduler";
+const RESOURCE_GROUP_STORAGE: &str = "e2e-fault-storage";
 
 #[tokio::test]
 #[serial_test::file_serial(compose_fault)]
@@ -70,6 +75,12 @@ async fn test_scheduler_failure_recovery() -> anyhow::Result<()> {
     run_fault_recovery_scenario(RESOURCE_GROUP_SCHEDULER, inject_scheduler_failure).await
 }
 
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_storage_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_STORAGE, inject_storage_failure).await
+}
+
 /// Runs the standard NN job, injects a failure mid-job via `inject_failure`, and asserts the job
 /// still completes with outputs matching the in-process simulation.
 async fn run_fault_recovery_scenario<InjectFailure>(
@@ -77,7 +88,8 @@ async fn run_fault_recovery_scenario<InjectFailure>(
     inject_failure: InjectFailure,
 ) -> anyhow::Result<()>
 where
-    InjectFailure: AsyncFnOnce(&ComposeFaultController) -> anyhow::Result<()>, {
+    InjectFailure: AsyncFnOnce(&ComposeFaultController, JobId, &SpiderClient) -> anyhow::Result<()>,
+{
     if std::env::var("SPIDER_ENDPOINT").is_err() {
         bail!("SPIDER_ENDPOINT is not set");
     }
@@ -87,7 +99,7 @@ where
     SpiderTestDriver::run_exclusive(
         job,
         Duration::from_secs(300),
-        async move |_job_id| inject_failure(&controller).await,
+        async move |job_id, client| inject_failure(&controller, job_id, client).await,
         async move |_job_id, result| check_nn_outputs(result, &expected),
     )
     .await?;
@@ -98,20 +110,35 @@ where
 /// Failure injection: kills `worker-1` mid-job, holds it down past the storage's stale-cutoff + gc
 /// interval so its execution manager is garbage-collected, then restarts it. The three surviving
 /// workers pick up its reassigned in-flight tasks during the outage.
-async fn inject_single_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+async fn inject_single_worker_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
     kill_then_restart(controller, &["worker-1"]).await
 }
 
 /// Failure injection: kills `worker-1` and `worker-2` mid-job, waits out the gc window, then
 /// restarts them. The two surviving workers pick up the reassigned in-flight tasks.
-async fn inject_multiple_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+async fn inject_multiple_worker_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
     kill_then_restart(controller, &["worker-1", "worker-2"]).await
 }
 
 /// Failure injection: kills all four workers mid-job, waits out the gc window, then restarts them.
 /// With no workers running, the job makes no progress during the outage and resumes once the
 /// workers return and re-register with the storage and scheduler.
-async fn inject_all_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+async fn inject_all_worker_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
     kill_then_restart(
         controller,
         &["worker-1", "worker-2", "worker-3", "worker-4"],
@@ -126,17 +153,78 @@ async fn inject_all_worker_failure(controller: &ComposeFaultController) -> anyho
 /// `em_registry.dead_em_cutoff_sec` so the scheduler does not mark the still-running execution
 /// managers dead on restart. Once the scheduler returns it re-polls storage's inbound queues,
 /// re-registers the execution managers from their heartbeats, and resumes dispatch and commit.
-async fn inject_scheduler_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+async fn inject_scheduler_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
     kill_then_restart(controller, &["scheduler"]).await
 }
 
-/// Lets tasks dispatch, then stops every `targets` service, holds it down for
-/// `OUTAGE_DURATION_SEC`, and restarts it.
+/// Failure injection: kills the storage server mid-job, holds it down, then restarts it. Storage
+/// is the source of truth (backed by MariaDB), so a storage restart re-loads recoverable jobs from
+/// the database and re-enqueues their ready tasks, and bumps a fresh session id so any in-flight
+/// task assignments whose outcomes the execution managers dropped during the outage (storage was
+/// unreachable) are invalidated and re-dispatched. Execution managers keep running their in-flight
+/// tasks but their outcome reports to storage fail and are dropped while storage is down; once
+/// storage returns the job re-executes the incomplete tasks from the recovered graph. The outage
+/// stays under the scheduler's `em_registry.dead_em_cutoff_sec` (default 60) so the still-running
+/// execution managers are not marked dead.
+async fn inject_storage_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
+    kill_then_restart(controller, &["storage"]).await
+}
+
+/// Polls the job until it enters an active execution phase (`Running`, `CommitReady`, or
+/// `CleanupReady`), then returns so the caller injects a failure mid-execution.
+///
+/// Gating on job state (instead of a fixed delay) guarantees the failure lands inside the job's
+/// running window -- which is ample for the 10x1000 task graph -- rather than during its dispatch
+/// ramp-up or after it has already terminated. If the job reaches a terminal state first, this
+/// bails loudly: a job too short to sustain a running phase cannot exercise mid-job failure and
+/// must not silently pass by injecting a no-op failure after completion.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * The job reaches a terminal state before any active state.
+/// * The job does not reach an active state within [`JOB_ACTIVE_TIMEOUT_SEC`].
+/// * Forwards [`SpiderClient::get_job_state`]'s return values on failure.
+async fn wait_until_job_active(client: &SpiderClient, job_id: JobId) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(JOB_ACTIVE_TIMEOUT_SEC);
+    loop {
+        let state = client.get_job_state(job_id).await?;
+        if matches!(
+            state,
+            JobState::Running | JobState::CommitReady | JobState::CleanupReady
+        ) {
+            return Ok(());
+        }
+        if state.is_terminal() {
+            bail!(
+                "job reached terminal state {state} before failure injection; the job is too \
+                 short to test mid-execution failure"
+            );
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("job did not reach an active execution state within {JOB_ACTIVE_TIMEOUT_SEC}s");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Stops every `targets` service, holds it down for `OUTAGE_DURATION_SEC`, and restarts it. The
+/// caller gates this on the job being mid-execution via [`wait_until_job_active`].
 async fn kill_then_restart(
     controller: &ComposeFaultController,
     targets: &[&str],
 ) -> anyhow::Result<()> {
-    tokio::time::sleep(Duration::from_secs(PRE_FAILURE_DELAY_SEC)).await;
     for service in targets {
         controller.stop(service).await?;
     }
