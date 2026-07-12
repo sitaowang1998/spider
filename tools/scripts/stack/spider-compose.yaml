@@ -1,0 +1,129 @@
+# Global Spider stack configuration for the docker-compose end-to-end test stack -- single source
+# of truth.
+#
+# `tools/scripts/stack/generate.py` derives the three per-service configs consumed by each Rust
+# binary (`gen-storage.yaml`, `gen-scheduler.yaml`, `gen-em.yaml`) from this file; the e2e compose
+# Taskfile runs generate.py at launch and mounts the generated files into each container via
+# `--config`. Edit this file to configure the stack; do not edit the generated files.
+#
+# This config mirrors `spider.yaml` (the host-process stack) but is docker-compose aware:
+#   * Every gRPC endpoint and MariaDB use `127.0.0.1` because the compose stack runs with
+#     `network_mode: host`, so every container (and the host test driver) shares the host loopback.
+#     The Rust config schema deserializes endpoint hosts as `IpAddr`, which rejects DNS service
+#     names, so host networking lets one shared loopback address reach every service.
+#   * `binary_dir` / `run_dir` / `package_dir` are in-container paths: the Dockerfile copies the
+#     release binaries into `/usr/local/bin`, the compose file mounts the staged TDL packages at
+#     `/spider/packages`, and a named volume backs `/spider/run` for per-executor logs.
+#
+# Shared values (MariaDB, gRPC endpoints, binary/run/package paths) are defined once here. Each
+# per-service section lists every knob for that binary; the ones with `#[serde(default)]` in the
+# Rust schema are commented out so serde applies its own defaults. Uncomment and edit to override.
+
+# Number of execution-manager worker containers the compose stack should launch. Documented here
+# for clarity; the compose file defines the actual worker services. Each worker reuses the same
+# generated EM config -- the storage service assigns each a fresh ExecutionManagerId on
+# registration, so identical configs do not collide.
+workers: 4
+
+# Log level for every Rust service in the stack. Forwarded to each binary as RUST_LOG via the
+# compose `environment`.
+log_level: "info"
+
+# In-container directory containing the release binaries. The worker Dockerfile target copies
+# `spider-task-executor` here, so the EM's `task_executor.bin_path` is `${binary_dir}/spider-task-executor`.
+binary_dir: "/usr/local/bin"
+
+# In-container directory for runtime artifacts (per-executor logs). The worker image runs as the
+# non-root `spider-user`, whose home directory (`/home/spider-user`, created by `useradd
+# --create-home` in the Dockerfile) is owned by that user. Placing `run_dir` under the home dir lets
+# the execution manager create its `em-logs` subdir (it calls `create_dir_all`) and write executor
+# logs without any docker volume -- the container's writable layer is already writable by
+# `spider-user`. A docker named volume at a root-owned path would instead be root-owned and the EM
+# could not write there (Permission denied).
+run_dir: "/home/spider-user/spider-run"
+
+# In-container directory where the e2e Taskfile stages compiled task libraries as
+# `<package>/lib<package>.so`. The compose file mounts the host-staged packages here read-only.
+package_dir: "/spider/packages"
+
+# MariaDB container settings. Feeds the storage service's `db_config`. The compose `mariadb`
+# service creates the configured database/user on first start; the storage service creates its
+# own tables on connect, so no schema initialization is performed. `name` is unused by generate.py
+# but kept for parity with the host-process config.
+mariadb:
+  name: "spider-compose-mariadb"
+  host: "127.0.0.1"
+  port: 3306
+  username: "spider-user"
+  password: "spider-password"
+  database: "spider-db"
+
+# Shared gRPC endpoints. With host networking, the storage service listens on `storage_endpoint`
+# and the scheduler on `scheduler_endpoint`; the execution managers and the host test driver
+# connect to `127.0.0.1`. `SPIDER_ENDPOINT` for the e2e test driver is `127.0.0.1:50051`.
+storage_endpoint:
+  host: "127.0.0.1"
+  port: 50051
+scheduler_endpoint:
+  host: "127.0.0.1"
+  port: 50052
+
+# --- storage (spider-storage) ----------------------------------------------------------
+# listen host/port <- storage_endpoint; db_config <- mariadb (+ storage.max_connections). The
+# three sub-configs below have `#[serde(default)]`; they are commented out so serde applies its
+# own defaults, except `task_instance_pool_config`, which is tuned for fault recovery: a short
+# stale cutoff + gc interval lets the storage garbage-collect a crashed worker's execution
+# manager quickly so its in-flight tasks are reassigned to surviving workers.
+storage:
+  max_connections: 64
+  # ready_queue_config:
+  #   task_capacity: 1048576
+  #   commit_capacity: 256
+  #   cleanup_capacity: 256
+  task_instance_pool_config:
+    execution_manager_stale_cutoff_sec: 10
+    gc_interval_sec: 2
+    # message_channel_capacity: 1024
+  # job_cache_gc_config:
+  #   terminated_job_retention_sec: 300
+  #   gc_interval_sec: 10
+
+# --- scheduler (spider-scheduler) ------------------------------------------------------
+# storage_endpoint <- shared; runtime.host/port <- scheduler_endpoint. `em_registry` and
+# `stop_timeout_sec` have `#[serde(default)]`; commented out.
+#
+# NOTE: `runtime.scheduler` is a serde externally-tagged enum. The `yaml_serde` crate used by the
+# server deserializes such enums using a YAML `!tag`, so the round-robin variant is written as
+# `!round_robin`, not as a plain `{ round_robin: { ... } }` map.
+scheduler:
+  connection_pool_size: 4
+  runtime:
+    # em_registry:
+    #   dead_em_cutoff_sec: 60
+    #   liveness_tracking_interval_ms: 1000
+    # stop_timeout_sec: 30
+    scheduler: !round_robin
+      active_job_queue_capacity: 64
+      dispatch_queue_capacity: 64
+      ready_task_capacity: 65536
+      commit_ready_task_capacity: 256
+      cleanup_ready_task_capacity: 256
+      storage_poll_timeout_ms: 10
+      tick_interval_ms: 5
+      finalizing_job_expiration_timeout_sec: 300
+
+# --- execution_manager (spider-execution-manager) --------------------------------------
+# storage/scheduler client endpoints <- shared; task_executor.bin_path <- binary_dir +
+# "/spider-task-executor"; task_executor.log_dir <- run_dir + "/em-logs"; task_executor.package_dir
+# <- shared package_dir. This config has no `#[serde(default)]` fields -- every field is required.
+# The same generated config is reused by every worker container; workers self-differentiate by a
+# storage-assigned ExecutionManagerId, so identical configs do not collide. `host` is the EM's
+# advertised IP to storage; it is recorded but not used to reach the EM (the EM polls the
+# scheduler), so `127.0.0.1` is safe across all worker containers.
+execution_manager:
+  host: "127.0.0.1"
+  connection_pool_size: 4
+  scheduler_poll_wait_ms: 1000
+  liveness:
+    storage_heartbeat_interval_sec: 5
+    scheduler_heartbeat_interval_sec: 5
