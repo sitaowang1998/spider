@@ -1,5 +1,6 @@
 //! End-to-end integration-test harness for the huntsman suites.
 
+pub mod fault;
 pub mod nn;
 pub mod payload_serde;
 pub mod test_driver;

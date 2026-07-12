@@ -253,3 +253,67 @@ tasks:
             echo ""
           fi
         done
+
+  # End-to-end fault-recovery test against the docker-compose Spider stack
+  # (`tools/docker/docker-compose.e2e.yml`). Stages the `nn` TDL package, generates per-service
+  # configs from `tools/scripts/stack/spider-compose.yaml`, brings the stack up on the host
+  # network, runs `test_single_worker_failure_recovery`, and tears the stack down.
+  #
+  # The compose stack uses `network_mode: host`, so the test driver (this process) reaches the
+  # storage gRPC server at `http://127.0.0.1:50051`. The fault controller shells out to
+  # `docker compose` to stop/start `worker-1` mid-job.
+  e2e-compose-fault:
+    vars:
+      COMPOSE_FILE: "{{.G_COMPOSE_FILE}}"
+      COMPOSE_PROJECT: "{{.G_COMPOSE_PROJECT}}"
+      G_RUST_RELEASE_DIR: "{{.G_RUST_BUILD_DIR}}/release"
+      G_TDL_PACKAGES_DIR: "{{.G_BUILD_DIR}}/tdl_packages"
+      G_COMPOSE_CONFIG_DIR: "{{.G_BUILD_DIR}}/spider-compose"
+    deps:
+      - ":build:rust"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - task: "compose-stage-packages"
+        vars:
+          G_RUST_RELEASE_DIR: "{{.G_RUST_RELEASE_DIR}}"
+          G_TDL_PACKAGES_DIR: "{{.G_TDL_PACKAGES_DIR}}"
+      - task: "compose-gen-configs"
+        vars:
+          G_COMPOSE_CONFIG_DIR: "{{.G_COMPOSE_CONFIG_DIR}}"
+      - cmd: >-
+          docker compose -f "{{.COMPOSE_FILE}}" -p "{{.COMPOSE_PROJECT}}" down -v || true
+      - cmd: >-
+          docker compose -f "{{.COMPOSE_FILE}}" -p "{{.COMPOSE_PROJECT}}" up -d --build --wait
+      - defer: >-
+          docker compose -f "{{.COMPOSE_FILE}}" -p "{{.COMPOSE_PROJECT}}" down -v
+      - |-
+        . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
+        SPIDER_ENDPOINT="http://127.0.0.1:50051" \
+        SPIDER_COMPOSE_FILE="{{.COMPOSE_FILE}}" \
+        SPIDER_COMPOSE_PROJECT="{{.COMPOSE_PROJECT}}" \
+        cargo nextest run -p e2e --test fault_recovery --release
+
+  # Stages the `nn` TDL package so the in-container task executor can dlopen it at
+  # `<package_dir>/nn/libnn.so`. `libnn.so` is the C-ABI cdylib built from the `huntsman-nn-tasks`
+  # crate (lib name `nn`).
+  compose-stage-packages:
+    internal: true
+    vars:
+      G_RUST_RELEASE_DIR: "{{.G_RUST_BUILD_DIR}}/release"
+      G_TDL_PACKAGES_DIR: "{{.G_BUILD_DIR}}/tdl_packages"
+    cmds:
+      - "mkdir -p '{{.G_TDL_PACKAGES_DIR}}/nn'"
+      - "cp '{{.G_RUST_RELEASE_DIR}}/libnn.so' '{{.G_TDL_PACKAGES_DIR}}/nn/libnn.so'"
+
+  # Derives `gen-storage.yaml`, `gen-scheduler.yaml`, and `gen-em.yaml` from the global
+  # `spider-compose.yaml` via `generate.py` (ported from the `integration-test-stack` branch).
+  compose-gen-configs:
+    internal: true
+    vars:
+      G_COMPOSE_CONFIG_DIR: "{{.G_BUILD_DIR}}/spider-compose"
+    cmds:
+      - "mkdir -p '{{.G_COMPOSE_CONFIG_DIR}}'"
+      - >-
+        uv run --script tools/scripts/stack/generate.py
+        --config tools/scripts/stack/spider-compose.yaml
+        --output-dir '{{.G_COMPOSE_CONFIG_DIR}}'

@@ -2,6 +2,9 @@ version: "3"
 
 vars:
   G_BUILD_SCRIPT: "{{.ROOT_DIR}}/tools/docker/build.sh"
+  # Compose stack for end-to-end tests with fault injection (see tools/docker/docker-compose.e2e.yml).
+  G_COMPOSE_FILE: "{{.ROOT_DIR}}/tools/docker/docker-compose.e2e.yml"
+  G_COMPOSE_PROJECT: "spider-e2e"
 
 tasks:
   build:
@@ -21,3 +24,21 @@ tasks:
   build-worker:
     deps: [":init"]
     cmd: "'{{.G_BUILD_SCRIPT}}' worker"
+
+  # Build (or rebuild, cached) the docker images for the e2e compose stack. Each spider service
+  # builds against the existing tools/docker/Dockerfile target.
+  compose-build:
+    cmd: >-
+      docker compose -f "{{.G_COMPOSE_FILE}}" -p "{{.G_COMPOSE_PROJECT}}" build
+
+  # Bring up the e2e compose stack, building images if needed and waiting for the storage and
+  # scheduler healthchecks to pass. Run `task test:e2e-compose-fault` instead of this directly to
+  # also generate configs and stage packages first.
+  compose-up:
+    cmd: >-
+      docker compose -f "{{.G_COMPOSE_FILE}}" -p "{{.G_COMPOSE_PROJECT}}" up -d --build --wait
+
+  # Tear down the e2e compose stack and remove named volumes (fresh DB on next `compose-up`).
+  compose-down:
+    cmd: >-
+      docker compose -f "{{.G_COMPOSE_FILE}}" -p "{{.G_COMPOSE_PROJECT}}" down -v
