@@ -254,14 +254,20 @@ tasks:
           fi
         done
 
-  # End-to-end fault-recovery test against the docker-compose Spider stack
+  # End-to-end fault-recovery tests against the docker-compose Spider stack
   # (`tools/docker/docker-compose.e2e.yml`). Stages the `nn` TDL package, generates per-service
-  # configs from `tools/scripts/stack/spider-compose.yaml`, brings the stack up on the host
-  # network, runs `test_single_worker_failure_recovery`, and tears the stack down.
+  # configs from `tools/scripts/stack/spider-compose.yaml`, brings one shared stack up on the host
+  # network, runs every `fault_recovery` test in a single nextest invocation, and tears the stack
+  # down.
   #
   # The compose stack uses `network_mode: host`, so the test driver (this process) reaches the
   # storage gRPC server at `http://127.0.0.1:50051`. The fault controller shells out to
-  # `docker compose` to stop/start `worker-1` mid-job.
+  # `docker compose` to stop/start workers mid-job. All fault tests share this one stack (one set of
+  # host-network ports), so they are serialized with `#[serial_test::file_serial(compose_fault)]`:
+  # nextest runs each test in its own process, and the `file_locks` feature serializes them across
+  # processes via a file lock keyed by the `compose_fault` group. No `--test-threads` flag is needed,
+  # and the named group lets tests using a different stack/config later run in parallel under a
+  # different group.
   e2e-compose-fault:
     vars:
       COMPOSE_FILE: "{{.G_COMPOSE_FILE}}"

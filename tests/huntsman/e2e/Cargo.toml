@@ -17,3 +17,10 @@ tokio = {
   features = ["macros", "rt-multi-thread", "sync", "time"]
 }
 tonic = "0.14.6"
+
+[dev-dependencies]
+# `file_serial` serializes tests across processes via a file lock, so nextest (one process per
+# test) still runs the compose-fault tests serially against the shared host-network stack. The
+# named group (`compose_fault`) lets tests sharing this stack serialize while tests using a
+# different stack/config could later run in parallel under a different group.
+serial_test = { version = "3.2.0", features = ["file_locks"] }

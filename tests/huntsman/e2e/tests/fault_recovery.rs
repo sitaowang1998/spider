@@ -1,6 +1,6 @@
-//! End-to-end fault-recovery test: a layered `neuron::dense_*` task graph must still complete and
-//! match the in-process simulation when a single execution-manager worker is killed mid-job and
-//! restarted.
+//! End-to-end fault-recovery tests: a layered `neuron::dense_*` task graph must still complete and
+//! match the in-process simulation when one, several, or all execution-manager workers are killed
+//! mid-job and restarted.
 
 use std::time::Duration;
 
@@ -26,31 +26,112 @@ const NUM_LAYERS: usize = 10;
 /// Neurons per layer in the test network (matches `tests/nn.rs`).
 const LAYER_SIZE: usize = 1000;
 
-/// Seconds to let the job run before killing the worker, so tasks have dispatched to `worker-1`.
+/// Seconds to let the job run before killing any worker, so tasks have dispatched across the
+/// workers.
 const PRE_FAILURE_DELAY_SEC: u64 = 3;
 
-/// Seconds `worker-1` stays down. Must exceed the storage's
+/// Seconds the targeted workers stay down. Must exceed the storage's
 /// `task_instance_pool_config.execution_manager_stale_cutoff_sec` (10) plus `gc_interval_sec` (2)
-/// so the storage garbage-collects the dead execution manager and reassigns its in-flight tasks to
-/// the surviving workers before the worker is restarted.
+/// so the storage garbage-collects the dead execution managers and reassigns their in-flight
+/// tasks before the workers are restarted. The down window starts after the last `stop` returns,
+/// so every targeted worker is down for at least this long.
 const EM_DOWN_DURATION_SEC: u64 = 15;
 
-/// The worker service that gets killed and restarted. Keep in sync with the compose file's
-/// `worker-1` service name.
-const FAULT_TARGET: &str = "worker-1";
-
-/// Distinct resource-group id so this test does not collide with other fault tests sharing one
-/// persistent database (see `add_resource_group` returning `ALREADY_EXISTS` for a duplicate
-/// external id).
-const RESOURCE_GROUP_ID: &str = "e2e-fault-single";
+/// Distinct resource-group ids keep each scenario's jobs isolated when several share one
+/// persistent database (`add_resource_group` returns `ALREADY_EXISTS` for a duplicate external
+/// id). Each scenario is normally driven by its own fresh compose stack, but distinct ids make
+/// running several scenarios against one stack safe too.
+const RESOURCE_GROUP_SINGLE: &str = "e2e-fault-single";
+const RESOURCE_GROUP_MULTI: &str = "e2e-fault-multi";
+const RESOURCE_GROUP_ALL: &str = "e2e-fault-all";
 
 #[tokio::test]
+#[serial_test::file_serial(compose_fault)]
 async fn test_single_worker_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_SINGLE, inject_single_worker_failure).await
+}
+
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_multiple_worker_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_MULTI, inject_multiple_worker_failure).await
+}
+
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_all_worker_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_ALL, inject_all_worker_failure).await
+}
+
+/// Runs the standard NN job, injects a failure mid-job via `inject_failure`, and asserts the job
+/// still completes with outputs matching the in-process simulation.
+async fn run_fault_recovery_scenario<InjectFailure>(
+    resource_group_id: &'static str,
+    inject_failure: InjectFailure,
+) -> anyhow::Result<()>
+where
+    InjectFailure: AsyncFnOnce(&ComposeFaultController) -> anyhow::Result<()>, {
     if std::env::var("SPIDER_ENDPOINT").is_err() {
         bail!("SPIDER_ENDPOINT is not set");
     }
     let controller = ComposeFaultController::from_env()?;
+    let (job, expected) = build_nn_fault_job(resource_group_id)?;
 
+    SpiderTestDriver::run_exclusive(
+        job,
+        Duration::from_secs(300),
+        async move |_job_id| inject_failure(&controller).await,
+        async move |_job_id, result| check_nn_outputs(result, &expected),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Failure injection: kills `worker-1` mid-job, holds it down past the storage's stale-cutoff + gc
+/// interval so its execution manager is garbage-collected, then restarts it. The three surviving
+/// workers pick up its reassigned in-flight tasks during the outage.
+async fn inject_single_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+    kill_then_restart(controller, &["worker-1"]).await
+}
+
+/// Failure injection: kills `worker-1` and `worker-2` mid-job, waits out the gc window, then
+/// restarts them. The two surviving workers pick up the reassigned in-flight tasks.
+async fn inject_multiple_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+    kill_then_restart(controller, &["worker-1", "worker-2"]).await
+}
+
+/// Failure injection: kills all four workers mid-job, waits out the gc window, then restarts them.
+/// With no workers running, the job makes no progress during the outage and resumes once the
+/// workers return and re-register with the storage and scheduler.
+async fn inject_all_worker_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+    kill_then_restart(
+        controller,
+        &["worker-1", "worker-2", "worker-3", "worker-4"],
+    )
+    .await
+}
+
+/// Lets tasks dispatch across the workers, then stops every `targets` worker, holds them down past
+/// the storage's stale-cutoff + gc interval, and restarts them.
+async fn kill_then_restart(
+    controller: &ComposeFaultController,
+    targets: &[&str],
+) -> anyhow::Result<()> {
+    tokio::time::sleep(Duration::from_secs(PRE_FAILURE_DELAY_SEC)).await;
+    for service in targets {
+        controller.stop(service).await?;
+    }
+    tokio::time::sleep(Duration::from_secs(EM_DOWN_DURATION_SEC)).await;
+    for service in targets {
+        controller.start(service).await?;
+    }
+    Ok(())
+}
+
+/// Builds the standard 10×1000 NN job and its expected outputs for a fault test, keyed by
+/// `resource_group_id`.
+fn build_nn_fault_job(resource_group_id: &str) -> anyhow::Result<(JobSubmission, Vec<f64>)> {
     let layer_specs = (0..NUM_LAYERS)
         .map(|i| {
             (
@@ -68,56 +149,41 @@ async fn test_single_worker_failure_recovery() -> anyhow::Result<()> {
     let expected = nn.simulate(&inputs)?;
     let task_graph = nn.to_task_graph()?;
     let job = JobSubmission {
-        resource_group_id: RESOURCE_GROUP_ID.to_owned(),
+        resource_group_id: resource_group_id.to_owned(),
         task_graph,
         inputs: inputs
             .iter()
             .map(encode_input)
             .collect::<anyhow::Result<Vec<_>>>()?,
     };
+    Ok((job, expected))
+}
 
-    SpiderTestDriver::run_exclusive(
-        job,
-        Duration::from_secs(300),
-        async move |_job_id| {
-            // Let tasks dispatch across the workers before killing one.
-            tokio::time::sleep(Duration::from_secs(PRE_FAILURE_DELAY_SEC)).await;
-            controller.stop(FAULT_TARGET).await?;
-            // Hold the worker down past the storage's stale-cutoff + gc interval so its
-            // execution manager is garbage-collected and its in-flight tasks are reassigned.
-            tokio::time::sleep(Duration::from_secs(EM_DOWN_DURATION_SEC)).await;
-            controller.start(FAULT_TARGET).await?;
-            Ok(())
-        },
-        async move |_job_id, result| {
-            let outputs = match result {
-                TerminationResult::Success(outputs) => outputs,
-                TerminationResult::Failure(message) => bail!("job failed: {message}"),
-                TerminationResult::Cancelled => bail!("job cancelled"),
-            };
-            let actual: Vec<f64> = outputs
-                .iter()
-                .map(decode_output)
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            anyhow::ensure!(
-                actual.len() == expected.len(),
-                "expected {} outputs, got {}",
-                expected.len(),
-                actual.len(),
-            );
-            for (&got, &exp) in actual.iter().zip(expected.iter()) {
-                let diff = (got - exp).abs();
-                let tol = REL_TOL * (1.0 + exp.abs());
-                assert!(
-                    got.is_finite() && exp.is_finite() && diff <= tol,
-                    "output mismatch: got={got}, expected={exp}, diff={diff}, tol={tol}",
-                );
-            }
-            Ok(())
-        },
-    )
-    .await?;
-
+/// Asserts a job terminated successfully with outputs matching `expected` within `REL_TOL`.
+fn check_nn_outputs(result: TerminationResult, expected: &[f64]) -> anyhow::Result<()> {
+    let outputs = match result {
+        TerminationResult::Success(outputs) => outputs,
+        TerminationResult::Failure(message) => bail!("job failed: {message}"),
+        TerminationResult::Cancelled => bail!("job cancelled"),
+    };
+    let actual: Vec<f64> = outputs
+        .iter()
+        .map(decode_output)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        actual.len() == expected.len(),
+        "expected {} outputs, got {}",
+        expected.len(),
+        actual.len(),
+    );
+    for (&got, &exp) in actual.iter().zip(expected.iter()) {
+        let diff = (got - exp).abs();
+        let tol = REL_TOL * (1.0 + exp.abs());
+        assert!(
+            got.is_finite() && exp.is_finite() && diff <= tol,
+            "output mismatch: got={got}, expected={exp}, diff={diff}, tol={tol}",
+        );
+    }
     Ok(())
 }
 
