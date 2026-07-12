@@ -1,6 +1,6 @@
 //! End-to-end fault-recovery tests: a layered `neuron::dense_*` task graph must still complete and
-//! match the in-process simulation when one, several, or all execution-manager workers are killed
-//! mid-job and restarted.
+//! match the in-process simulation when an execution-manager worker (one, several, or all) or the
+//! scheduler is killed mid-job and restarted.
 
 use std::time::Duration;
 
@@ -26,24 +26,25 @@ const NUM_LAYERS: usize = 10;
 /// Neurons per layer in the test network (matches `tests/nn.rs`).
 const LAYER_SIZE: usize = 1000;
 
-/// Seconds to let the job run before killing any worker, so tasks have dispatched across the
+/// Seconds to let the job run before killing any service, so tasks have dispatched across the
 /// workers.
 const PRE_FAILURE_DELAY_SEC: u64 = 3;
 
-/// Seconds the targeted workers stay down. Must exceed the storage's
+/// Seconds the targeted service stays down. For a worker failure this must exceed the storage's
 /// `task_instance_pool_config.execution_manager_stale_cutoff_sec` (10) plus `gc_interval_sec` (2)
-/// so the storage garbage-collects the dead execution managers and reassigns their in-flight
-/// tasks before the workers are restarted. The down window starts after the last `stop` returns,
-/// so every targeted worker is down for at least this long.
-const EM_DOWN_DURATION_SEC: u64 = 15;
+/// so the storage garbage-collects the dead execution manager and reassigns its in-flight tasks
+/// before the worker restarts. For a scheduler failure it must stay under the scheduler's
+/// `em_registry.dead_em_cutoff_sec` (default 60) so the still-running execution managers are not
+/// marked dead on restart. 15 satisfies both (12 < 15 < 60). The down window starts after the last
+/// `stop` returns, so every targeted service is down for at least this long.
+const OUTAGE_DURATION_SEC: u64 = 15;
 
-/// Distinct resource-group ids keep each scenario's jobs isolated when several share one
-/// persistent database (`add_resource_group` returns `ALREADY_EXISTS` for a duplicate external
-/// id). Each scenario is normally driven by its own fresh compose stack, but distinct ids make
-/// running several scenarios against one stack safe too.
+/// Distinct resource-group ids keep each scenario's jobs isolated in the shared persistent
+/// database (`add_resource_group` returns `ALREADY_EXISTS` for a duplicate external id).
 const RESOURCE_GROUP_SINGLE: &str = "e2e-fault-single";
 const RESOURCE_GROUP_MULTI: &str = "e2e-fault-multi";
 const RESOURCE_GROUP_ALL: &str = "e2e-fault-all";
+const RESOURCE_GROUP_SCHEDULER: &str = "e2e-fault-scheduler";
 
 #[tokio::test]
 #[serial_test::file_serial(compose_fault)]
@@ -61,6 +62,12 @@ async fn test_multiple_worker_failure_recovery() -> anyhow::Result<()> {
 #[serial_test::file_serial(compose_fault)]
 async fn test_all_worker_failure_recovery() -> anyhow::Result<()> {
     run_fault_recovery_scenario(RESOURCE_GROUP_ALL, inject_all_worker_failure).await
+}
+
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_scheduler_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_SCHEDULER, inject_scheduler_failure).await
 }
 
 /// Runs the standard NN job, injects a failure mid-job via `inject_failure`, and asserts the job
@@ -112,8 +119,19 @@ async fn inject_all_worker_failure(controller: &ComposeFaultController) -> anyho
     .await
 }
 
-/// Lets tasks dispatch across the workers, then stops every `targets` worker, holds them down past
-/// the storage's stale-cutoff + gc interval, and restarts them.
+/// Failure injection: kills the scheduler mid-job, holds it down, then restarts it. Execution
+/// managers keep heartbeating to storage and finish any in-flight task, reporting its outcome
+/// directly to storage (the storage service is still up), but cannot fetch new tasks while the
+/// scheduler is down -- so the job stalls. The outage stays under the scheduler's
+/// `em_registry.dead_em_cutoff_sec` so the scheduler does not mark the still-running execution
+/// managers dead on restart. Once the scheduler returns it re-polls storage's inbound queues,
+/// re-registers the execution managers from their heartbeats, and resumes dispatch and commit.
+async fn inject_scheduler_failure(controller: &ComposeFaultController) -> anyhow::Result<()> {
+    kill_then_restart(controller, &["scheduler"]).await
+}
+
+/// Lets tasks dispatch, then stops every `targets` service, holds it down for
+/// `OUTAGE_DURATION_SEC`, and restarts it.
 async fn kill_then_restart(
     controller: &ComposeFaultController,
     targets: &[&str],
@@ -122,7 +140,7 @@ async fn kill_then_restart(
     for service in targets {
         controller.stop(service).await?;
     }
-    tokio::time::sleep(Duration::from_secs(EM_DOWN_DURATION_SEC)).await;
+    tokio::time::sleep(Duration::from_secs(OUTAGE_DURATION_SEC)).await;
     for service in targets {
         controller.start(service).await?;
     }
