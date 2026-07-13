@@ -7,10 +7,16 @@
 # `--config`. Edit this file to configure the stack; do not edit the generated files.
 #
 # This config mirrors `spider.yaml` (the host-process stack) but is docker-compose aware:
-#   * Every gRPC endpoint and MariaDB use `127.0.0.1` because the compose stack runs with
-#     `network_mode: host`, so every container (and the host test driver) shares the host loopback.
-#     The Rust config schema deserializes endpoint hosts as `IpAddr`, which rejects DNS service
-#     names, so host networking lets one shared loopback address reach every service.
+#   * Every gRPC endpoint and MariaDB use a static bridge IP because the compose stack attaches each
+#     service to the `spider_net` user-defined bridge network with a static `ipv4_address` (defined
+#     in `docker-compose.e2e.yml`). The Rust config schema deserializes endpoint hosts as `IpAddr`,
+#     which rejects DNS service names, so static IPs -- not hostnames -- are used: storage listens on
+#     `storage_endpoint.host` and the scheduler/EMs/host driver connect to it; the scheduler listens
+#     on `scheduler_endpoint.host` and the EMs connect to it; storage connects to `mariadb.host`.
+#     Each container has its own network namespace, so a stopped+restarted service gets a fresh port
+#     space (no lingering TIME_WAIT) and the scheduler's listen port can never become an EM connect's
+#     source port (different IPs), eliminating the self-connect that wedged restarts under host
+#     networking.
 #   * `binary_dir` / `run_dir` / `package_dir` are in-container paths: the Dockerfile copies the
 #     release binaries into `/usr/local/bin`, the compose file mounts the staged TDL packages at
 #     `/spider/packages`, and a named volume backs `/spider/run` for per-executor logs.
@@ -49,23 +55,25 @@ package_dir: "/spider/packages"
 # MariaDB container settings. Feeds the storage service's `db_config`. The compose `mariadb`
 # service creates the configured database/user on first start; the storage service creates its
 # own tables on connect, so no schema initialization is performed. `name` is unused by generate.py
-# but kept for parity with the host-process config.
+# but kept for parity with the host-process config. `host` is the mariadb container's static bridge
+# IP (matches `ipv4_address` in docker-compose.e2e.yml); storage connects to it at `host:port`.
 mariadb:
   name: "spider-compose-mariadb"
-  host: "127.0.0.1"
+  host: "172.40.0.20"
   port: 3306
   username: "spider-user"
   password: "spider-password"
   database: "spider-db"
 
-# Shared gRPC endpoints. With host networking, the storage service listens on `storage_endpoint`
-# and the scheduler on `scheduler_endpoint`; the execution managers and the host test driver
-# connect to `127.0.0.1`. `SPIDER_ENDPOINT` for the e2e test driver is `127.0.0.1:50051`.
+# Shared gRPC endpoints. Each host is a service's static bridge IP (matches `ipv4_address` in
+# docker-compose.e2e.yml): the storage service listens on `storage_endpoint` and the
+# scheduler/EMs/host test driver connect to it; the scheduler listens on `scheduler_endpoint` and
+# the EMs connect to it. `SPIDER_ENDPOINT` for the e2e test driver is `http://172.40.0.30:50051`.
 storage_endpoint:
-  host: "127.0.0.1"
+  host: "172.40.0.30"
   port: 50051
 scheduler_endpoint:
-  host: "127.0.0.1"
+  host: "172.40.0.40"
   port: 50052
 
 # --- storage (spider-storage) ----------------------------------------------------------
@@ -119,7 +127,8 @@ scheduler:
 # The same generated config is reused by every worker container; workers self-differentiate by a
 # storage-assigned ExecutionManagerId, so identical configs do not collide. `host` is the EM's
 # advertised IP to storage; it is recorded but not used to reach the EM (the EM polls the
-# scheduler), so `127.0.0.1` is safe across all worker containers.
+# scheduler), so it is left as a placeholder -- under the bridge network each worker has a dynamic
+# IP that is not known at config-generation time, and the value is unused anyway.
 execution_manager:
   host: "127.0.0.1"
   connection_pool_size: 4

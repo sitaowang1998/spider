@@ -6,11 +6,17 @@
 # which generates per-service configs from `tools/scripts/stack/spider-compose.yaml` via
 # `tools/scripts/stack/generate.py` before bringing this stack up.
 #
-# Network: every service uses `network_mode: host` so all containers (and the host test driver)
-# share the host loopback. This is required because the Rust config schema deserializes every
-# endpoint `host` as `IpAddr`, which rejects DNS service names -- with host networking, every
-# service reachable at `127.0.0.1` matches the single global config exactly. Linux-only. This
-# binds storage:50051, scheduler:50052, and mariadb:3306 on the host; ensure those ports are free.
+# Network: every service attaches to the `spider_net` user-defined bridge network with static
+# IPv4 addresses. This is required because the Rust config schema deserializes every endpoint
+# `host` as `IpAddr`, which rejects DNS service names -- static bridge IPs satisfy `IpAddr`, so the
+# storage/scheduler listen on their own bridge IP and clients (other services and the host test
+# driver) connect to that IP. Each container gets its OWN network namespace, which is what makes
+# fault recovery work: when the scheduler/storage container is stopped and restarted mid-job it
+# gets a fresh namespace with no lingering TIME_WAIT sockets, and execution managers connect to
+# the scheduler's bridge IP (not a shared loopback), so the listen port can never be handed out as
+# an outbound connect's source port -- eliminating the self-connect that wedged restarts under
+# `network_mode: host`. Workers use a dynamic bridge IP (nothing connects to them; they poll). The
+# host test driver reaches storage at `http://172.40.0.30:50051` (the host routes to the bridge).
 #
 # Images: each spider service builds against the existing `tools/docker/Dockerfile` target
 # (`storage` / `scheduler` / `worker`), which copies the release binaries into `/usr/local/bin`.
@@ -25,14 +31,17 @@
 services:
   mariadb:
     image: mariadb:11
-    network_mode: host
     restart: unless-stopped
+    networks:
+      spider_net:
+        ipv4_address: 172.40.0.20
     environment:
       MYSQL_DATABASE: spider-db
       MYSQL_USER: spider-user
       MYSQL_PASSWORD: spider-password
       MYSQL_ROOT_PASSWORD: spider-root-password
-    # The storage service connects to 127.0.0.1:3306 (host loopback, shared by this container).
+    # The storage service connects to this container's bridge IP (172.40.0.20:3306, set in
+    # spider-compose.yaml). MariaDB binds 0.0.0.0 by default, so it is reachable at that IP.
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
@@ -45,8 +54,10 @@ services:
       context: "../.."
       dockerfile: "tools/docker/Dockerfile"
       target: storage
-    network_mode: host
     restart: unless-stopped
+    networks:
+      spider_net:
+        ipv4_address: 172.40.0.30
     depends_on:
       mariadb:
         condition: service_healthy
@@ -57,7 +68,7 @@ services:
       - ../../build/spider-compose:/spider/config:ro
     command: ["spider-storage", "--config", "/spider/config/gen-storage.yaml"]
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/50051'"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/172.40.0.30/50051'"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -68,8 +79,10 @@ services:
       context: "../.."
       dockerfile: "tools/docker/Dockerfile"
       target: scheduler
-    network_mode: host
     restart: unless-stopped
+    networks:
+      spider_net:
+        ipv4_address: 172.40.0.40
     depends_on:
       storage:
         condition: service_healthy
@@ -79,7 +92,7 @@ services:
       - ../../build/spider-compose:/spider/config:ro
     command: ["spider-scheduler", "--config", "/spider/config/gen-scheduler.yaml"]
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/50052'"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/172.40.0.40/50052'"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -91,8 +104,9 @@ services:
       context: "../.."
       dockerfile: "tools/docker/Dockerfile"
       target: worker
-    network_mode: host
     restart: unless-stopped
+    networks:
+      - spider_net
     depends_on:
       scheduler:
         condition: service_healthy
@@ -118,3 +132,16 @@ services:
     <<: *worker
   worker-4:
     <<: *worker
+
+# User-defined bridge network with static IPv4 addresses for the services that are connect
+# targets (mariadb, storage, scheduler); workers attach without a static address and get a
+# dynamic IP from the pool (nothing connects to them -- they poll the scheduler). The static IPs
+# match the endpoint hosts in `tools/scripts/stack/spider-compose.yaml` so `generate.py` emits
+# configs that both listen on and connect to these addresses.
+networks:
+  spider_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.40.0.0/24
+          gateway: 172.40.0.1
