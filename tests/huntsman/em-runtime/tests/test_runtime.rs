@@ -60,9 +60,9 @@ fn assignment_with_session(session_id: u64) -> SchedulerResponse {
             resource_group_id: ResourceGroupId::random(),
             job_id: JobId::random(),
             task_id: TaskId::Index(0),
+            session_id,
         },
         scheduler_id: SchedulerId::random(),
-        session_id,
     }
 }
 
@@ -92,7 +92,7 @@ fn execution_context(task_func: &str, inputs: Vec<TaskInput>) -> ExecutionContex
             soft_timeout_ms: 1_000,
             hard_timeout_ms: 5_000,
         },
-        serialized_inputs: serializer.release(),
+        serialized_task_io: serializer.release(),
     }
 }
 
@@ -133,6 +133,7 @@ fn runtime_config(heartbeat_interval: Duration) -> RuntimeConfig {
         executor_binary_path: task_executor_bin(),
         package_dir: tdl_package_dir(),
         log_dir,
+        inherited_env: Vec::new(),
     }
 }
 
