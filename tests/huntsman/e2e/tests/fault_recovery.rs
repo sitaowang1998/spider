@@ -1,6 +1,6 @@
 //! End-to-end fault-recovery tests: a layered `neuron::dense_*` task graph must still complete and
 //! match the in-process simulation when an execution-manager worker (one, several, or all), the
-//! scheduler, or the storage server is killed mid-job and restarted.
+//! scheduler, the storage server, or the MariaDB database is killed mid-job and restarted.
 
 use std::time::Duration;
 
@@ -43,6 +43,17 @@ const JOB_ACTIVE_TIMEOUT_SEC: u64 = 60;
 /// is down for at least this long.
 const OUTAGE_DURATION_SEC: u64 = 15;
 
+/// Seconds the MariaDB database stays down in the database failure scenario. This exceeds the
+/// storage's `sqlx::MySqlPool` acquire timeout (default 30s), so a database operation inside the
+/// task-instance pool's coroutine fails while MariaDB is down and the coroutine dies; the next
+/// `register_task_instance` then surfaces a cache-internal error that storage's strict error
+/// handler treats as fatal, cancelling and restarting the storage service. Storage crash-loops
+/// until MariaDB is healthy and then recovers via `recover_job_cache` -- exercising the same
+/// restart recovery path as [`inject_storage_failure`]. It must stay under the scheduler's
+/// `em_registry.dead_em_cutoff_sec` (default 60) so the still-running execution managers are not
+/// marked dead while the database and storage are down. 40 satisfies both (30 < 40 < 60).
+const DATABASE_OUTAGE_DURATION_SEC: u64 = 40;
+
 /// Distinct resource-group ids keep each scenario's jobs isolated in the shared persistent
 /// database (`add_resource_group` returns `ALREADY_EXISTS` for a duplicate external id).
 const RESOURCE_GROUP_SINGLE: &str = "e2e-fault-single";
@@ -50,6 +61,7 @@ const RESOURCE_GROUP_MULTI: &str = "e2e-fault-multi";
 const RESOURCE_GROUP_ALL: &str = "e2e-fault-all";
 const RESOURCE_GROUP_SCHEDULER: &str = "e2e-fault-scheduler";
 const RESOURCE_GROUP_STORAGE: &str = "e2e-fault-storage";
+const RESOURCE_GROUP_DATABASE: &str = "e2e-fault-database";
 
 #[tokio::test]
 #[serial_test::file_serial(compose_fault)]
@@ -79,6 +91,12 @@ async fn test_scheduler_failure_recovery() -> anyhow::Result<()> {
 #[serial_test::file_serial(compose_fault)]
 async fn test_storage_failure_recovery() -> anyhow::Result<()> {
     run_fault_recovery_scenario(RESOURCE_GROUP_STORAGE, inject_storage_failure).await
+}
+
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_database_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(RESOURCE_GROUP_DATABASE, inject_database_failure).await
 }
 
 /// Runs the standard NN job, injects a failure mid-job via `inject_failure`, and asserts the job
@@ -116,7 +134,12 @@ async fn inject_single_worker_failure(
     client: &SpiderClient,
 ) -> anyhow::Result<()> {
     wait_until_job_active(client, job_id).await?;
-    kill_then_restart(controller, &["worker-1"]).await
+    kill_then_restart(
+        controller,
+        &["worker-1"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
+    )
+    .await
 }
 
 /// Failure injection: kills `worker-1` and `worker-2` mid-job, waits out the gc window, then
@@ -127,7 +150,12 @@ async fn inject_multiple_worker_failure(
     client: &SpiderClient,
 ) -> anyhow::Result<()> {
     wait_until_job_active(client, job_id).await?;
-    kill_then_restart(controller, &["worker-1", "worker-2"]).await
+    kill_then_restart(
+        controller,
+        &["worker-1", "worker-2"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
+    )
+    .await
 }
 
 /// Failure injection: kills all four workers mid-job, waits out the gc window, then restarts them.
@@ -142,6 +170,7 @@ async fn inject_all_worker_failure(
     kill_then_restart(
         controller,
         &["worker-1", "worker-2", "worker-3", "worker-4"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
     )
     .await
 }
@@ -159,7 +188,12 @@ async fn inject_scheduler_failure(
     client: &SpiderClient,
 ) -> anyhow::Result<()> {
     wait_until_job_active(client, job_id).await?;
-    kill_then_restart(controller, &["scheduler"]).await
+    kill_then_restart(
+        controller,
+        &["scheduler"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
+    )
+    .await
 }
 
 /// Failure injection: kills the storage server mid-job, holds it down, then restarts it. Storage
@@ -177,7 +211,42 @@ async fn inject_storage_failure(
     client: &SpiderClient,
 ) -> anyhow::Result<()> {
     wait_until_job_active(client, job_id).await?;
-    kill_then_restart(controller, &["storage"]).await
+    kill_then_restart(
+        controller,
+        &["storage"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
+    )
+    .await
+}
+
+/// Failure injection: kills the MariaDB database mid-job, holds it down past the storage's
+/// `sqlx::MySqlPool` acquire timeout (default 30s; see [`DATABASE_OUTAGE_DURATION_SEC`]), then
+/// restarts it. While MariaDB is down a database operation inside the task-instance pool's
+/// coroutine fails and the coroutine dies (its channel closes); the execution managers' next
+/// `register_task_instance` calls then surface this as a cache-internal error
+/// (`task instance pool corrupted: ... coroutine is dead: channel closed`), which the
+/// task-instance-management service maps through its strict error handler, cancelling the storage
+/// service. `restart: unless-stopped` then revives storage, but its `connect` fails while MariaDB
+/// is still down, so storage crash-loops until the database returns. Once MariaDB is healthy,
+/// storage reconnects, re-runs `recover_job_cache` to reload recoverable jobs, and resends their
+/// ready tasks when the scheduler re-registers -- the same restart recovery path as
+/// [`inject_storage_failure`]. The job-orchestration `get_job_state` path serves from the in-memory
+/// cache while the job is cached, so the test driver's state poller keeps reporting the cached
+/// state through the outage rather than surfacing database errors. The outage stays under the
+/// scheduler's `em_registry.dead_em_cutoff_sec` (default 60) so the still-running execution
+/// managers are not marked dead while the database and storage are down.
+async fn inject_database_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
+    kill_then_restart(
+        controller,
+        &["mariadb"],
+        Duration::from_secs(DATABASE_OUTAGE_DURATION_SEC),
+    )
+    .await
 }
 
 /// Polls the job until it enters an active execution phase (`Running`, `CommitReady`, or
@@ -219,16 +288,19 @@ async fn wait_until_job_active(client: &SpiderClient, job_id: JobId) -> anyhow::
     }
 }
 
-/// Stops every `targets` service, holds it down for `OUTAGE_DURATION_SEC`, and restarts it. The
-/// caller gates this on the job being mid-execution via [`wait_until_job_active`].
+/// Stops every `targets` service, holds it down for `outage`, and restarts it. The caller gates
+/// this on the job being mid-execution via [`wait_until_job_active`] and picks an `outage` that
+/// satisfies the scenario's recovery constraints (see [`OUTAGE_DURATION_SEC`] and
+/// [`DATABASE_OUTAGE_DURATION_SEC`]).
 async fn kill_then_restart(
     controller: &ComposeFaultController,
     targets: &[&str],
+    outage: Duration,
 ) -> anyhow::Result<()> {
     for service in targets {
         controller.stop(service).await?;
     }
-    tokio::time::sleep(Duration::from_secs(OUTAGE_DURATION_SEC)).await;
+    tokio::time::sleep(outage).await;
     for service in targets {
         controller.start(service).await?;
     }
