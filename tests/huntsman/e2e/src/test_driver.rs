@@ -160,6 +160,15 @@ impl SpiderTestDriver {
         let concurrency = read_concurrency()?;
         let client = SpiderClient::builder(endpoint)
             .pool_size(concurrency)
+            // The fault-recovery scenarios crash storage (and cascade the scheduler/workers)
+            // mid-job, so the poller's gRPC calls hit transient transport errors until
+            // storage revives. The default retry budget (~15s) is shorter than
+            // storage's crash-recovery window, which flakes the suite: a single
+            // `get_job_state` call exhausts its retries and bails the poller before
+            // storage returns. Raise the per-call retry window to ~78s so it rides
+            // out the full outage (MariaDB down up to 40s plus storage startup) with margin.
+            .max_retries(30)
+            .max_backoff(Duration::from_secs(3))
             .connect()
             .await?;
         Ok(Self {

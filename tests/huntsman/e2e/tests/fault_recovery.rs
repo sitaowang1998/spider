@@ -1,6 +1,7 @@
 //! End-to-end fault-recovery tests: a layered `neuron::dense_*` task graph must still complete and
 //! match the in-process simulation when an execution-manager worker (one, several, or all), the
-//! scheduler, the storage server, or the MariaDB database is killed mid-job and restarted.
+//! scheduler, the storage server, the MariaDB database, or the storage server and scheduler
+//! together is killed mid-job and restarted.
 
 use std::time::Duration;
 
@@ -62,6 +63,7 @@ const RESOURCE_GROUP_ALL: &str = "e2e-fault-all";
 const RESOURCE_GROUP_SCHEDULER: &str = "e2e-fault-scheduler";
 const RESOURCE_GROUP_STORAGE: &str = "e2e-fault-storage";
 const RESOURCE_GROUP_DATABASE: &str = "e2e-fault-database";
+const RESOURCE_GROUP_STORAGE_AND_SCHEDULER: &str = "e2e-fault-storage-scheduler";
 
 #[tokio::test]
 #[serial_test::file_serial(compose_fault)]
@@ -97,6 +99,16 @@ async fn test_storage_failure_recovery() -> anyhow::Result<()> {
 #[serial_test::file_serial(compose_fault)]
 async fn test_database_failure_recovery() -> anyhow::Result<()> {
     run_fault_recovery_scenario(RESOURCE_GROUP_DATABASE, inject_database_failure).await
+}
+
+#[tokio::test]
+#[serial_test::file_serial(compose_fault)]
+async fn test_storage_and_scheduler_failure_recovery() -> anyhow::Result<()> {
+    run_fault_recovery_scenario(
+        RESOURCE_GROUP_STORAGE_AND_SCHEDULER,
+        inject_storage_and_scheduler_failure,
+    )
+    .await
 }
 
 /// Runs the standard NN job, injects a failure mid-job via `inject_failure`, and asserts the job
@@ -245,6 +257,30 @@ async fn inject_database_failure(
         controller,
         &["mariadb"],
         Duration::from_secs(DATABASE_OUTAGE_DURATION_SEC),
+    )
+    .await
+}
+
+/// Failure injection: kills the storage server and the scheduler simultaneously mid-job, holds them
+/// both down, then restarts them together. This takes down the entire control plane at once: while
+/// storage is down the execution managers lose their storage gRPC connection (their outcome reports
+/// are dropped and they restart-loop until storage returns) and the scheduler is unavailable to
+/// dispatch new tasks, so the job makes no progress during the outage. On restart, storage re-loads
+/// recoverable jobs from the database via `recover_job_cache` and re-enqueues their ready tasks via
+/// the startup resend, and the scheduler re-registers and re-polls storage's inbound queues; the
+/// revived execution managers re-register from their heartbeats, and dispatch and commit resume.
+/// The outage stays under the scheduler's `em_registry.dead_em_cutoff_sec` (default 60) so the
+/// execution managers are not marked dead while the control plane is down.
+async fn inject_storage_and_scheduler_failure(
+    controller: &ComposeFaultController,
+    job_id: JobId,
+    client: &SpiderClient,
+) -> anyhow::Result<()> {
+    wait_until_job_active(client, job_id).await?;
+    kill_then_restart(
+        controller,
+        &["storage", "scheduler"],
+        Duration::from_secs(OUTAGE_DURATION_SEC),
     )
     .await
 }
