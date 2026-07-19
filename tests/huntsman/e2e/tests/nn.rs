@@ -26,9 +26,12 @@ const LAYER_SIZE: usize = 1000;
 
 #[tokio::test]
 async fn test_nn() -> anyhow::Result<()> {
+    const RUN_ID_ENV_VAR: &str = "SPIDER_E2E_RUN_ID";
     if std::env::var("SPIDER_ENDPOINT").is_err() {
         bail!("SPIDER_ENDPOINT is not set");
     }
+    let run_id = std::env::var(RUN_ID_ENV_VAR)
+        .map_err(|_| anyhow::anyhow!("{RUN_ID_ENV_VAR} is not set"))?;
 
     let layer_specs = (0..NUM_LAYERS)
         .map(|i| {
@@ -47,7 +50,7 @@ async fn test_nn() -> anyhow::Result<()> {
     let expected = nn.simulate(&inputs)?;
     let task_graph = nn.to_task_graph()?;
     let job = JobSubmission {
-        resource_group_id: "e2e-nn".to_owned(),
+        resource_group_id: format!("e2e-nn-{run_id}"),
         task_graph,
         inputs: inputs
             .iter()

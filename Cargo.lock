@@ -461,6 +461,7 @@ dependencies = [
  "rand 0.9.4",
  "rmp-serde",
  "serde",
+ "serial_test",
  "spider-client",
  "spider-core",
  "tokio",

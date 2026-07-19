@@ -22,6 +22,8 @@ tasks:
         {{.HELM_NAMESPACE | default "spider-e2e"}}
       HELM_RELEASE_NAME: >-
         {{.HELM_RELEASE_NAME | default "spider"}}
+      E2E_RUN_ID:
+        sh: "uuidgen | tr '[:upper:]' '[:lower:]'"
       STORAGE_FORWARD_PORT:
         sh: "tools/scripts/get_free_port.py"
     deps:
@@ -45,13 +47,20 @@ tasks:
           test -r /opt/spider/packages/nn/libnn.so
       - |-
         port_forward_log="$(mktemp)"
-        kubectl \
-          --context "kind-{{.KIND_CLUSTER_NAME}}" \
-          --namespace "{{.HELM_NAMESPACE}}" \
-          port-forward "service/{{.HELM_RELEASE_NAME}}-storage" \
-          "{{.STORAGE_FORWARD_PORT}}:50051" >"${port_forward_log}" 2>&1 &
+        maintain_port_forward() {
+          while true; do
+            kubectl \
+              --context "kind-{{.KIND_CLUSTER_NAME}}" \
+              --namespace "{{.HELM_NAMESPACE}}" \
+              port-forward "service/{{.HELM_RELEASE_NAME}}-storage" \
+              "{{.STORAGE_FORWARD_PORT}}:50051" >>"${port_forward_log}" 2>&1 || true
+            sleep 1
+          done
+        }
+        maintain_port_forward &
         port_forward_pid="$!"
         cleanup_port_forward() {
+          pkill -TERM -P "${port_forward_pid}" 2>/dev/null || true
           kill "${port_forward_pid}" 2>/dev/null || true
           rm -f "${port_forward_log}"
         }
@@ -72,9 +81,23 @@ tasks:
         fi
 
         . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
-        SPIDER_ENDPOINT="http://127.0.0.1:{{.STORAGE_FORWARD_PORT}}" \
-        SPIDER_CONCURRENCY="1" \
-          cargo test --release --package e2e --test nn -- --nocapture
+        export SPIDER_CONCURRENCY="1"
+        export SPIDER_E2E_RUN_ID="{{.E2E_RUN_ID}}"
+        export SPIDER_ENDPOINT="http://127.0.0.1:{{.STORAGE_FORWARD_PORT}}"
+        export SPIDER_HELM_RELEASE="{{.HELM_RELEASE_NAME}}"
+        export SPIDER_KUBERNETES_CONTEXT="kind-{{.KIND_CLUSTER_NAME}}"
+        export SPIDER_KUBERNETES_NAMESPACE="{{.HELM_NAMESPACE}}"
+        cargo test --release --package e2e --test nn -- --nocapture
+        for failure_test in \
+          test_single_execution_manager_failure_recovery \
+          test_all_execution_managers_failure_recovery \
+          test_scheduler_failure_recovery \
+          test_storage_failure_recovery \
+          test_database_failure_recovery \
+          test_mixed_component_failure_recovery; do
+          cargo test --release --package e2e --test fault_recovery \
+            "${failure_test}" -- --nocapture --test-threads=1
+        done
 
   cpp-unit-tests:
     cmds:
