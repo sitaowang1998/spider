@@ -35,3 +35,11 @@ COPY --from=builder --link /spider/build/rust-targets/release/spider-scheduler /
 FROM runtime-base AS worker
 COPY --from=builder --link /spider/build/rust-targets/release/spider-execution-manager /usr/local/bin/
 COPY --from=builder --link /spider/build/rust-targets/release/spider-task-executor /usr/local/bin/
+
+FROM builder AS worker-e2e-builder
+RUN . /spider/build/toolchains/rust/env \
+    && cargo build --release --package huntsman-nn-tasks
+
+FROM worker AS worker-e2e
+COPY --from=worker-e2e-builder --link --chown=spider-user:spider-user \
+    /spider/build/rust-targets/release/libnn.so /opt/spider/packages/nn/libnn.so

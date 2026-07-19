@@ -1,0 +1,75 @@
+version: "3"
+
+vars:
+  G_HELM_CHART_DIR: "{{.ROOT_DIR}}/tools/deployment/spider-helm"
+  G_HELM_TOOLCHAIN_ENV_FILE: "{{.ROOT_DIR}}/build/toolchains/helm/env"
+
+tasks:
+  helm-kind:
+    vars:
+      EXECUTION_MANAGER_REPLICAS: >-
+        {{.EXECUTION_MANAGER_REPLICAS | default "1"}}
+      HELM_NAMESPACE: >-
+        {{.HELM_NAMESPACE | default "spider"}}
+      HELM_RELEASE_NAME: >-
+        {{.HELM_RELEASE_NAME | default "spider"}}
+      KIND_CLUSTER_NAME: >-
+        {{.KIND_CLUSTER_NAME | default "spider"}}
+      WORKER_IMAGE_SERVICE: >-
+        {{.WORKER_IMAGE_SERVICE | default "worker"}}
+    deps:
+      - ":toolchains:helm"
+    preconditions:
+      - sh: "command -v docker"
+        msg: "Docker is required to deploy Spider on kind."
+      - sh: "command -v kind"
+        msg: "kind is required to deploy Spider on kind."
+      - sh: "command -v kubectl"
+        msg: "kubectl is required to deploy Spider on kind."
+    cmds:
+      - task: ":docker:build-storage"
+      - task: ":docker:build-scheduler"
+      - task: ":docker:build-{{.WORKER_IMAGE_SERVICE}}"
+      - |-
+        if ! kind get clusters | grep --fixed-strings --line-regexp --quiet \
+          "{{.KIND_CLUSTER_NAME}}"; then
+          kind create cluster --name "{{.KIND_CLUSTER_NAME}}" --wait "5m"
+        fi
+      - |-
+        storage_image_id="$(cat "{{.G_BUILD_DIR}}/spider-storage-image.id")"
+        scheduler_image_id="$(cat "{{.G_BUILD_DIR}}/spider-scheduler-image.id")"
+        worker_image_id="$(cat \
+          "{{.G_BUILD_DIR}}/spider-{{.WORKER_IMAGE_SERVICE}}-image.id")"
+        storage_image_tag="kind-$(printf "%s" "${storage_image_id#sha256:}" | cut -c 1-12)"
+        scheduler_image_tag="kind-$(printf "%s" "${scheduler_image_id#sha256:}" | cut -c 1-12)"
+        worker_image_tag="kind-$(printf "%s" "${worker_image_id#sha256:}" | cut -c 1-12)"
+
+        docker tag "${storage_image_id}" "spider-storage:${storage_image_tag}"
+        docker tag "${scheduler_image_id}" "spider-scheduler:${scheduler_image_tag}"
+        docker tag "${worker_image_id}" "spider-worker:${worker_image_tag}"
+
+        kind load docker-image "spider-storage:${storage_image_tag}" \
+          --name "{{.KIND_CLUSTER_NAME}}"
+        kind load docker-image "spider-scheduler:${scheduler_image_tag}" \
+          --name "{{.KIND_CLUSTER_NAME}}"
+        kind load docker-image "spider-worker:${worker_image_tag}" \
+          --name "{{.KIND_CLUSTER_NAME}}"
+
+        . "{{.G_HELM_TOOLCHAIN_ENV_FILE}}"
+        helm upgrade --install "{{.HELM_RELEASE_NAME}}" "{{.G_HELM_CHART_DIR}}" \
+          --kube-context "kind-{{.KIND_CLUSTER_NAME}}" \
+          --namespace "{{.HELM_NAMESPACE}}" \
+          --create-namespace \
+          --set image.database.pullPolicy=IfNotPresent \
+          --set image.scheduler.repository=spider-scheduler \
+          --set image.scheduler.tag="${scheduler_image_tag}" \
+          --set image.scheduler.pullPolicy=Never \
+          --set image.storage.repository=spider-storage \
+          --set image.storage.tag="${storage_image_tag}" \
+          --set image.storage.pullPolicy=Never \
+          --set image.worker.repository=spider-worker \
+          --set image.worker.tag="${worker_image_tag}" \
+          --set image.worker.pullPolicy=Never \
+          --set spiderConfig.execution_manager.replicas={{.EXECUTION_MANAGER_REPLICAS}} \
+          --wait \
+          --timeout "5m"

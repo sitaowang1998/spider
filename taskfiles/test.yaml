@@ -14,6 +14,68 @@ vars:
   G_MARIADB_PASSWORD: "spider-password"
 
 tasks:
+  helm-kind-e2e:
+    vars:
+      KIND_CLUSTER_NAME: >-
+        {{.KIND_CLUSTER_NAME | default "spider-helm-e2e"}}
+      HELM_NAMESPACE: >-
+        {{.HELM_NAMESPACE | default "spider-e2e"}}
+      HELM_RELEASE_NAME: >-
+        {{.HELM_RELEASE_NAME | default "spider"}}
+      STORAGE_FORWARD_PORT:
+        sh: "tools/scripts/get_free_port.py"
+    deps:
+      - "toolchains:rust"
+    preconditions:
+      - sh: "command -v kind"
+        msg: "kind is required to run the Helm end-to-end test."
+      - sh: "command -v kubectl"
+        msg: "kubectl is required to run the Helm end-to-end test."
+    cmds:
+      - task: ":deploy:helm-kind"
+        vars:
+          EXECUTION_MANAGER_REPLICAS: "4"
+          HELM_NAMESPACE: "{{.HELM_NAMESPACE}}"
+          HELM_RELEASE_NAME: "{{.HELM_RELEASE_NAME}}"
+          KIND_CLUSTER_NAME: "{{.KIND_CLUSTER_NAME}}"
+          WORKER_IMAGE_SERVICE: "worker-e2e"
+      - |-
+        docker run --rm \
+          "$(cat "{{.G_BUILD_DIR}}/spider-worker-e2e-image.id")" \
+          test -r /opt/spider/packages/nn/libnn.so
+      - |-
+        port_forward_log="$(mktemp)"
+        kubectl \
+          --context "kind-{{.KIND_CLUSTER_NAME}}" \
+          --namespace "{{.HELM_NAMESPACE}}" \
+          port-forward "service/{{.HELM_RELEASE_NAME}}-storage" \
+          "{{.STORAGE_FORWARD_PORT}}:50051" >"${port_forward_log}" 2>&1 &
+        port_forward_pid="$!"
+        cleanup_port_forward() {
+          kill "${port_forward_pid}" 2>/dev/null || true
+          rm -f "${port_forward_log}"
+        }
+        trap cleanup_port_forward EXIT
+
+        port_forward_ready="0"
+        for _ in $(seq 1 20); do
+          if timeout 1 bash -c \
+            ":</dev/tcp/127.0.0.1/{{.STORAGE_FORWARD_PORT}}" 2>/dev/null; then
+            port_forward_ready="1"
+            break
+          fi
+          sleep 1
+        done
+        if [ "1" != "${port_forward_ready}" ]; then
+          cat "${port_forward_log}"
+          exit 1
+        fi
+
+        . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
+        SPIDER_ENDPOINT="http://127.0.0.1:{{.STORAGE_FORWARD_PORT}}" \
+        SPIDER_CONCURRENCY="1" \
+          cargo test --release --package e2e --test nn -- --nocapture
+
   cpp-unit-tests:
     cmds:
       - task: "wolf-mariadb-storage-task-executor"

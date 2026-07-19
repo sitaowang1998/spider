@@ -21,3 +21,7 @@ tasks:
   build-worker:
     deps: [":init"]
     cmd: "'{{.G_BUILD_SCRIPT}}' worker"
+
+  build-worker-e2e:
+    deps: [":init"]
+    cmd: "'{{.G_BUILD_SCRIPT}}' worker-e2e"
