@@ -36,7 +36,7 @@ tasks:
     cmds:
       - task: ":deploy:helm-kind"
         vars:
-          EXECUTION_MANAGER_REPLICAS: "4"
+          WORKER_REPLICAS: "4"
           HELM_NAMESPACE: "{{.HELM_NAMESPACE}}"
           HELM_RELEASE_NAME: "{{.HELM_RELEASE_NAME}}"
           KIND_CLUSTER_NAME: "{{.KIND_CLUSTER_NAME}}"

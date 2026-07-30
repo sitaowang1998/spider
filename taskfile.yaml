@@ -8,6 +8,7 @@ includes:
   deploy: "taskfiles/deploy.yaml"
   docker: "taskfiles/docker.yaml"
   docs: "taskfiles/docs.yaml"
+  helm: "taskfiles/helm.yaml"
   lint: "taskfiles/lint.yaml"
   test: "taskfiles/test.yaml"
   toolchains: "taskfiles/toolchains.yaml"

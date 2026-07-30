@@ -7,8 +7,8 @@ vars:
 tasks:
   helm-kind:
     vars:
-      EXECUTION_MANAGER_REPLICAS: >-
-        {{.EXECUTION_MANAGER_REPLICAS | default "1"}}
+      WORKER_REPLICAS: >-
+        {{.WORKER_REPLICAS | default "1"}}
       HELM_NAMESPACE: >-
         {{.HELM_NAMESPACE | default "spider"}}
       HELM_RELEASE_NAME: >-
@@ -70,6 +70,6 @@ tasks:
           --set image.worker.repository=spider-worker \
           --set image.worker.tag="${worker_image_tag}" \
           --set image.worker.pullPolicy=Never \
-          --set spiderConfig.execution_manager.replicas={{.EXECUTION_MANAGER_REPLICAS}} \
+          --set spiderConfig.worker.replicas={{.WORKER_REPLICAS}} \
           --wait \
           --timeout "5m"

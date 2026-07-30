@@ -6,7 +6,7 @@ metadata:
     {{- include "spider.labels" . | nindent 4 }}
     app.kubernetes.io/component: "worker"
 spec:
-  replicas: {{ .Values.spiderConfig.execution_manager.replicas }}
+  replicas: {{ .Values.spiderConfig.worker.replicas }}
   selector:
     matchLabels:
       {{- include "spider.selectorLabels" . | nindent 6 }}
@@ -22,12 +22,22 @@ spec:
           image: {{ include "spider.imageRef" (dict "root" . "component" "worker") | quote }}
           imagePullPolicy: {{ .Values.image.worker.pullPolicy | quote }}
           command: ["spider-execution-manager", "--config", "/etc/spider/execution-manager.yaml"]
+          {{- with .Values.spiderConfig.worker.extra_envs }}
+          env:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: "config"
               mountPath: "/etc/spider/execution-manager.yaml"
               subPath: "execution-manager.yaml"
               readOnly: true
+            {{- with .Values.spiderConfig.worker.extra_volume_mounts }}
+            {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- end }}
       volumes:
         - name: "config"
           configMap:
             name: {{ include "spider.componentFullname" (dict "root" . "component" "config") }}
+        {{- with .Values.spiderConfig.worker.extra_volumes }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- end }}

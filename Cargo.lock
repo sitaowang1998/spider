@@ -2471,6 +2471,7 @@ dependencies = [
  "tabled",
  "test-utils",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
