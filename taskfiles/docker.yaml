@@ -2,6 +2,7 @@ version: "3"
 
 vars:
   G_BUILD_SCRIPT: "{{.ROOT_DIR}}/tools/docker/build.sh"
+  G_SPIDER_COMPOSE_BUILD_DIR: "{{.G_BUILD_DIR}}/spider-compose"
   G_SPIDER_COMPOSE_DIR: "{{.ROOT_DIR}}/tools/deployment/spider-compose"
 
 tasks:
@@ -26,6 +27,41 @@ tasks:
   compose:validate:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml config --quiet"
+
+  compose:package:
+    requires:
+      vars: ["REVISION", "VERSION"]
+    vars:
+      ARCHIVE_NAME: "spider-compose-{{.VERSION}}.tar.gz"
+      BUILD_DIR: "{{.G_BUILD_DIR}}/spider-compose-build"
+      OUTPUT_DIR: "{{.G_SPIDER_COMPOSE_BUILD_DIR}}"
+    deps: [":init"]
+    cmds:
+      - task: ":utils:misc:make-or-clear-dir"
+        vars:
+          DIR_PATH: "{{.OUTPUT_DIR}}"
+      - task: ":utils:misc:make-or-clear-dir"
+        vars:
+          DIR_PATH: "{{.BUILD_DIR}}"
+      - "mkdir -p '{{.BUILD_DIR}}/spider-compose'"
+      - "cp -R '{{.G_SPIDER_COMPOSE_DIR}}/.' '{{.BUILD_DIR}}/spider-compose/'"
+      - "printf '%s\\n' '{{.REVISION}}' > '{{.BUILD_DIR}}/spider-compose/SOURCE_REVISION'"
+      - >-
+        tar
+        --sort=name
+        --mtime='UTC 1970-01-01'
+        --owner=0
+        --group=0
+        --numeric-owner
+        --create
+        --gzip
+        --file='{{.OUTPUT_DIR}}/{{.ARCHIVE_NAME}}'
+        --directory='{{.BUILD_DIR}}'
+        spider-compose
+      - |-
+        cd '{{.OUTPUT_DIR}}'
+        sha256sum '{{.ARCHIVE_NAME}}' > '{{.ARCHIVE_NAME}}.sha256'
+      - "rm -rf '{{.BUILD_DIR}}'"
 
   compose:up:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
