@@ -1,11 +1,12 @@
-name: "spider-helm"
+name: "spider-deployment-artifacts"
 
 on:
   pull_request:
     paths: &monitored_paths
-      - ".github/workflows/spider-helm.yaml"
+      - ".github/workflows/spider-deployment-artifacts.yaml"
       - "taskfile.yaml"
       - "taskfiles/**"
+      - "tools/deployment/spider-compose/**"
       - "tools/deployment/spider-helm/**"
       - "tools/yscope-dev-utils"
   push:
@@ -18,7 +19,7 @@ concurrency:
   group: "${{github.workflow}}-${{github.ref}}"
 
   # Cancel in-progress jobs for efficiency. Exclude the `main` branch to allow uninterrupted
-  # publishing of Helm charts.
+  # publishing of deployment artifacts.
   cancel-in-progress: >-
     ${{
       github.ref != 'refs/heads/main'
@@ -49,6 +50,39 @@ jobs:
         shell: "bash"
         run: "task lint:check-helm"
 
+      - name: "Lint YAML"
+        shell: "bash"
+        run: "task lint:yml-check"
+
+      - name: "Validate Compose model"
+        shell: "bash"
+        env:
+          SPIDER_DATABASE_ROOT_PASSWORD: "spider-root-password"
+          SPIDER_STORAGE_DB_PASSWORD: "spider-password"
+          SPIDER_STORAGE_DB_USERNAME: "spider-user"
+        run: "task docker:compose:validate"
+
+      - name: "Get Compose artifact version"
+        id: "get-compose-version"
+        shell: "bash"
+        run: >-
+          echo "version=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: "Package Compose artifact"
+        shell: "bash"
+        run: >-
+          task docker:compose:package
+          VERSION='${{steps.get-compose-version.outputs.version}}'
+          REVISION='${{github.sha}}'
+
+      - name: "Inspect Compose artifact"
+        shell: "bash"
+        working-directory: "build/spider-compose"
+        run: |-
+          archive="spider-compose-${{steps.get-compose-version.outputs.version}}.tar.gz"
+          sha256sum --check "${archive}.sha256"
+          tar --list --gzip --file "${archive}"
+
   publish:
     # Publish from `main` and `spider-huntsman-vA.B.C` release branches.
     if: >-
@@ -77,6 +111,19 @@ jobs:
         shell: "bash"
         run: "task helm:package"
 
+      - name: "Get Compose artifact version"
+        id: "get-compose-version"
+        shell: "bash"
+        run: >-
+          echo "version=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: "Package Compose artifact"
+        shell: "bash"
+        run: >-
+          task docker:compose:package
+          VERSION='${{steps.get-compose-version.outputs.version}}'
+          REVISION='${{github.sha}}'
+
       - name: "Checkout branch `gh-pages`"
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"  # v7.0.1
         with:
@@ -90,7 +137,6 @@ jobs:
           cmd: "yq '.version' 'tools/deployment/spider-helm/Chart.yaml'"
 
       - name: "Update Helm repository"
-        id: "update-helm-repo"
         shell: "bash"
         run: |-
           chart_tgz="spider-${{steps.get-chart-version.outputs.result}}.tgz"
@@ -98,7 +144,6 @@ jobs:
           # Skip if this chart version already exists.
           if [[ -f "gh-pages/${chart_tgz}" ]]; then
             echo "Chart ${chart_tgz} already exists, skipping publish."
-            echo "skip_publish=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -113,15 +158,27 @@ jobs:
             helm repo index "gh-pages" --url "${url}"
           fi
 
+      - name: "Add Compose artifact"
+        shell: "bash"
+        run: |-
+          archive="spider-compose-${{steps.get-compose-version.outputs.version}}.tar.gz"
+
+          if [[ -e "gh-pages/${archive}" || -e "gh-pages/${archive}.sha256" ]]; then
+            echo "Compose artifact ${archive} already exists." >&2
+            exit 1
+          fi
+
+          cp "build/spider-compose/${archive}" "gh-pages/"
+          cp "build/spider-compose/${archive}.sha256" "gh-pages/"
+
       - name: "Push to gh-pages branch"
-        if: "steps.update-helm-repo.outputs.skip_publish != 'true'"
         shell: "bash"
         working-directory: "gh-pages"
         run: |-
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-          git add "*.tgz" "index.yaml"
-          commit_message="ci(helm): Publish spider-${{steps.get-chart-version.outputs.result}}"
+          git add "*.tgz" "*.tar.gz" "*.sha256" "index.yaml"
+          commit_message="ci(deployment): Publish Spider deployment artifacts"
           commit_message+=" from ${{github.ref_name}} (${{github.sha}})."
           git commit -m "$commit_message"
           git push
