@@ -32,9 +32,21 @@ tasks:
     cmd: "docker compose --file compose.yaml up --detach --wait"
 
   compose:down:
+    aliases: ["compose:local:down"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml down"
 
   compose:clean:
+    aliases: ["compose:local:clean"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml down --volumes --remove-orphans"
+
+  compose:local:up:
+    deps: ["build"]
+    dir: "{{.G_SPIDER_COMPOSE_DIR}}"
+    cmd: >-
+      SPIDER_PULL_POLICY="never"
+      SPIDER_SCHEDULER_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-scheduler-image.id')"
+      SPIDER_STORAGE_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-storage-image.id')"
+      SPIDER_WORKER_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-worker-image.id')"
+      docker compose up --detach --wait
