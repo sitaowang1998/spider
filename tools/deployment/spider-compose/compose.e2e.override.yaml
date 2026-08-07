@@ -1,0 +1,7 @@
+services:
+  spider-worker:
+    volumes:
+      - type: "bind"
+        source: "../../../build/rust-targets/release/libnn.so"
+        target: "/opt/spider/packages/nn/libnn.so"
+        read_only: true

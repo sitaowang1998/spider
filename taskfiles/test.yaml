@@ -40,6 +40,21 @@ tasks:
         vars:
           STORAGE_TASK: "spider-huntsman-unit-tests-executor"
 
+  e2e:
+    deps:
+      - ":build:rust"
+    cmds:
+      - task: ":docker:compose:e2e:validate"
+      - task: ":docker:compose:e2e:clean"
+      - defer:
+          task: ":docker:compose:e2e:clean"
+      - task: ":docker:compose:e2e:up"
+      - |-
+        . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
+        SPIDER_ENDPOINT="http://127.0.0.1:50051" \
+        SPIDER_CONCURRENCY="1" \
+          cargo test --release --package e2e --test nn -- --nocapture
+
   build-unit-test:
     internal: true
     deps:

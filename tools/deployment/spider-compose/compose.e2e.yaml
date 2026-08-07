@@ -1,0 +1,6 @@
+name: "spider-e2e"
+
+include:
+  - path:
+      - "./compose.yaml"
+      - "./compose.e2e.override.yaml"
