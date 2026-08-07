@@ -23,6 +23,10 @@ tasks:
     deps: [":init"]
     cmd: "'{{.G_BUILD_SCRIPT}}' worker"
 
+  build-worker-e2e:
+    deps: [":init"]
+    cmd: "'{{.G_BUILD_SCRIPT}}' worker-e2e"
+
   compose:validate:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml config --quiet"

@@ -4,7 +4,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-service="${1:?Usage: build.sh <storage|scheduler|worker>}"
+service="${1:?Usage: build.sh <storage|scheduler|worker|worker-e2e>}"
 
 remove_temp_file_and_prev_image() {
     rm -f "$temp_iid_file"
