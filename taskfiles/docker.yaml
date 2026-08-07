@@ -32,12 +32,10 @@ tasks:
     cmd: "docker compose --file compose.yaml up --detach --wait"
 
   compose:down:
-    aliases: ["compose:local:down"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml down"
 
   compose:clean:
-    aliases: ["compose:local:clean"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: "docker compose --file compose.yaml down --volumes --remove-orphans"
 
@@ -49,4 +47,14 @@ tasks:
       SPIDER_SCHEDULER_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-scheduler-image.id')"
       SPIDER_STORAGE_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-storage-image.id')"
       SPIDER_WORKER_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-worker-image.id')"
-      docker compose up --detach --wait
+      docker compose --env-file .env.example up --detach --wait
+
+  compose:local:down:
+    dir: "{{.G_SPIDER_COMPOSE_DIR}}"
+    cmd: "docker compose --env-file .env.example --file compose.yaml down"
+
+  compose:local:clean:
+    dir: "{{.G_SPIDER_COMPOSE_DIR}}"
+    cmd: >-
+      docker compose --env-file .env.example --file compose.yaml
+      down --volumes --remove-orphans
