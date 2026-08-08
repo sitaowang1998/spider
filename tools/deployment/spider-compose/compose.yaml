@@ -124,8 +124,6 @@ services:
       spider-storage:
         condition: "service_healthy"
         restart: true
-    deploy:
-      replicas: "${SPIDER_WORKER_REPLICAS:-4}"
 
 configs:
   spider-scheduler-config:

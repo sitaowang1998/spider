@@ -25,11 +25,16 @@ tasks:
 
   compose:validate:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.yaml config --quiet"
+    cmd: >-
+      docker compose --env-file .env.example --file compose.yaml publish
+      --dry-run --yes ghcr.io/y-scope/spider/compose:validation
 
   compose:up:
+    dotenv: ["{{.G_SPIDER_COMPOSE_DIR}}/.env"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.yaml up --detach --wait"
+    cmd: >-
+      docker compose --file compose.yaml up --detach --wait
+      --scale "spider-worker=${SPIDER_WORKER_REPLICAS:-1}"
 
   compose:down:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
@@ -41,6 +46,7 @@ tasks:
 
   compose:local:up:
     deps: ["build"]
+    dotenv: ["{{.G_SPIDER_COMPOSE_DIR}}/.env.example"]
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
     cmd: >-
       SPIDER_PULL_POLICY="never"
@@ -48,6 +54,7 @@ tasks:
       SPIDER_STORAGE_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-storage-image.id')"
       SPIDER_WORKER_IMAGE_REF="$(cat '{{.ROOT_DIR}}/build/spider-worker-image.id')"
       docker compose --env-file .env.example up --detach --wait
+      --scale "spider-worker=${SPIDER_WORKER_REPLICAS:-1}"
 
   compose:local:down:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
