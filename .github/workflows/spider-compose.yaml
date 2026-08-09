@@ -1,0 +1,72 @@
+name: "spider-compose"
+
+on:
+  pull_request:
+    paths: &monitored_paths
+      - ".github/workflows/spider-compose.yaml"
+      - "taskfile.yaml"
+      - "taskfiles/docker.yaml"
+      - "tools/deployment/spider-compose/**"
+      - "tools/yscope-dev-utils"
+  push:
+    branches: ["main"]
+    paths: *monitored_paths
+    tags: ["spider-huntsman-v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: "${{github.workflow}}-${{github.ref}}"
+
+  # Cancel in-progress jobs for efficiency. Exclude published refs to allow uninterrupted
+  # publishing of Compose applications.
+  cancel-in-progress: >-
+    ${{
+      github.ref != 'refs/heads/main'
+      && !startsWith(github.ref, 'refs/tags/spider-huntsman-v')
+    }}
+
+jobs:
+  validate:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"  # v7.0.1
+        with:
+          submodules: "recursive"
+
+      - uses: "./tools/yscope-dev-utils/exports/github/actions/install-go-task"
+        with:
+          version: "3.48.0"
+
+      - name: "Validate OCI Compose application"
+        run: "task docker:compose:validate"
+
+  publish:
+    if: "github.event_name != 'pull_request'"
+    needs: "validate"
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: "read"
+      packages: "write"
+    steps:
+      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"  # v7.0.1
+
+      - uses: "docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121"  # v4.1.0
+        with:
+          registry: "ghcr.io"
+          username: "${{github.actor}}"
+          password: "${{secrets.GITHUB_TOKEN}}"
+
+      - name: "Publish Compose application"
+        shell: "bash"
+        working-directory: "tools/deployment/spider-compose"
+        run: |-
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}/compose"
+          if [[ "$GITHUB_REF" == refs/tags/spider-huntsman-v* ]]; then
+            artifact_tag="$GITHUB_REF_NAME"
+          else
+            artifact_tag="nightly"
+          fi
+          docker compose --env-file .env.example --file compose.yaml publish \
+            --yes "${repository}:${artifact_tag}"
