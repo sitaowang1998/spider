@@ -3,5 +3,5 @@ services:
     volumes:
       - type: "bind"
         source: "../../../build/rust-targets/release/libnn.so"
-        target: "/opt/spider/packages/nn/libnn.so"
+        target: "${SPIDER_WORKER_PACKAGE_DIR:?}/nn/libnn.so"
         read_only: true

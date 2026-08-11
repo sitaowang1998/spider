@@ -41,16 +41,17 @@ tasks:
 
   compose:e2e:validate:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.e2e.yaml config --quiet"
+    cmd: "docker compose --env-file .env --file compose.e2e.yaml config --quiet"
 
   compose:e2e:up:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.e2e.yaml up --detach --wait"
+    cmd: "docker compose --env-file .env --file compose.e2e.yaml up --detach --wait"
 
   compose:e2e:down:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.e2e.yaml down"
+    cmd: "docker compose --env-file .env --file compose.e2e.yaml down"
 
   compose:e2e:clean:
     dir: "{{.G_SPIDER_COMPOSE_DIR}}"
-    cmd: "docker compose --file compose.e2e.yaml down --volumes --remove-orphans"
+    cmd: >-
+      docker compose --env-file .env --file compose.e2e.yaml down --volumes --remove-orphans

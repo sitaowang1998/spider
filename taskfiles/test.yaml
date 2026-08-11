@@ -51,7 +51,8 @@ tasks:
       - task: ":docker:compose:e2e:up"
       - |-
         . "{{.G_RUST_TOOLCHAIN_ENV_FILE}}"
-        SPIDER_ENDPOINT="http://127.0.0.1:50051" \
+        . "{{.ROOT_DIR}}/tools/deployment/spider-compose/.env"
+        SPIDER_ENDPOINT="http://127.0.0.1:${SPIDER_STORAGE_PUBLISHED_PORT}" \
         SPIDER_CONCURRENCY="1" \
           cargo test --release --package e2e --test nn -- --nocapture
 
