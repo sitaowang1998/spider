@@ -18,15 +18,14 @@ task docker:build-worker-e2e
 docker tag "$(cat build/spider-worker-e2e-image.id)" spider-worker-e2e:local
 ```
 
-Create `tools/deployment/spider-compose/.env` from `.env.example`. Set the required database
-credentials and override the worker image:
+Copy the complete Compose environment template, then select the E2E worker image:
+
+```shell
+cp tools/deployment/spider-compose/.env.example tools/deployment/spider-compose/.env
+```
 
 ```dotenv
-SPIDER_DATABASE_ROOT_PASSWORD=spider-root-password
-SPIDER_STORAGE_DB_PASSWORD=spider-password
-SPIDER_STORAGE_DB_USERNAME=spider-user
-
-SPIDER_PULL_POLICY=never
+SPIDER_PULL_POLICY=missing
 SPIDER_WORKER_IMAGE_REF=spider-worker-e2e:local
 ```
 
@@ -42,7 +41,8 @@ Run the test from the repository root:
 
 ```shell
 . build/toolchains/rust/env
-SPIDER_ENDPOINT=http://127.0.0.1:50051 \
+. tools/deployment/spider-compose/.env
+SPIDER_ENDPOINT="http://127.0.0.1:${SPIDER_STORAGE_PUBLISHED_PORT}" \
 SPIDER_CONCURRENCY=1 \
   cargo test --release --package e2e --test nn -- --nocapture
 ```
