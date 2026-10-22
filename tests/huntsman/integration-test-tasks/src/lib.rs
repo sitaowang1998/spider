@@ -1,6 +1,6 @@
 //! Test TDL package used by the `task-executor` integration tests.
 //!
-//! Exposes six tasks that exercise distinct executor code paths:
+//! Exposes tasks that exercise distinct executor code paths:
 //!
 //! * [`task_decl::fibonacci`] — basic compute + correctness.
 //! * [`task_decl::always_fail`] — in-task error reporting.
@@ -21,6 +21,12 @@
 /// Exposed at crate scope so the overhead bench (linked dynamically, so it can't read the value
 /// through the cdylib) can reference the same number to keep them in sync if changed.
 pub const INSTRUMENT_SLEEP_US: u64 = 50;
+
+/// Configuration for naming a generated report.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ReportConfig {
+    pub label: String,
+}
 
 mod task_decl {
     use std::sync::atomic::AtomicBool;
@@ -119,6 +125,66 @@ mod task_decl {
         Ok(())
     }
 
+    /// Verifies the task-graph output sum and returns the configured report label.
+    ///
+    /// # Returns
+    ///
+    /// The configured report label on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`TdlError::ExecutionError`] if graph outputs are absent or have an unexpected sum.
+    /// * [`TdlError::DeserializationError`] if a graph output is not an `i64` value.
+    /// * Forwards [`TaskContext::get_task_graph_outputs`]'s return values on failure.
+    #[task(name = "verify_report")]
+    pub fn verify_report(
+        ctx: TaskContext,
+        config: crate::ReportConfig,
+        expected_sum: i64,
+    ) -> Result<String, TdlError> {
+        let outputs = ctx.get_task_graph_outputs()?.ok_or_else(|| {
+            TdlError::ExecutionError("task-graph outputs are required".to_owned())
+        })?;
+        let mut sum = 0_i64;
+        for output in outputs {
+            sum += rmp_serde::from_slice::<i64>(&output)
+                .map_err(|error| TdlError::DeserializationError(error.to_string()))?;
+        }
+        if sum != expected_sum {
+            return Err(TdlError::ExecutionError(format!(
+                "expected sum {expected_sum}, got {sum}"
+            )));
+        }
+        Ok(config.label)
+    }
+
+    /// Verifies that task-graph outputs are absent and returns the configured report label.
+    ///
+    /// # Returns
+    ///
+    /// The configured report label on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * [`TdlError::ExecutionError`] if the context contains task-graph outputs.
+    /// * Forwards [`TaskContext::get_task_graph_outputs`]'s return values on failure.
+    #[task(name = "report_cleanup")]
+    pub fn report_cleanup(
+        ctx: TaskContext,
+        config: crate::ReportConfig,
+    ) -> Result<String, TdlError> {
+        if ctx.get_task_graph_outputs()?.is_some() {
+            return Err(TdlError::ExecutionError(
+                "unexpected graph outputs".to_owned(),
+            ));
+        }
+        Ok(config.label)
+    }
+
     /// Succeeds only if the package's init hook set the [`INITIALIZED`] flag on load.
     ///
     /// # Errors
@@ -151,5 +217,7 @@ spider_tdl::register_tdl_package! {
         task_decl::sleep_and_echo,
         task_decl::assert_outputs_sum_zero,
         task_decl::assert_initialized,
+        task_decl::verify_report,
+        task_decl::report_cleanup,
     ],
 }

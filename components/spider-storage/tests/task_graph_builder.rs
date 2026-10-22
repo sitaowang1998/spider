@@ -111,6 +111,7 @@ pub fn build_flat_task_graph(
     });
     let commit_task = if with_commit {
         Some(TerminationTaskDescriptor {
+            inputs: vec![],
             tdl_context: TdlContext {
                 package: TDL_PACKAGE.to_owned(),
                 task_func: TDL_COMMIT_TASK.to_owned(),
@@ -122,6 +123,7 @@ pub fn build_flat_task_graph(
     };
     let cleanup_task = if with_cleanup {
         Some(TerminationTaskDescriptor {
+            inputs: vec![],
             tdl_context: TdlContext {
                 package: TDL_PACKAGE.to_owned(),
                 task_func: TDL_CLEANUP_TASK.to_owned(),

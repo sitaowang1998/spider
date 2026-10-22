@@ -62,9 +62,13 @@ mod tests {
         builder
             .append_task_input(value)
             .expect("appending a task input should succeed");
-        let [payload] =
-            <[TaskOutput; 1]>::try_from(builder.build().into_positional_inputs(|payload| payload))
-                .expect("the task graph input should hold exactly one positional input");
+        let [payload] = <[TaskOutput; 1]>::try_from(
+            builder
+                .build()
+                .into_inputs(|payload| payload)
+                .positional_inputs,
+        )
+        .expect("the task graph input should hold exactly one positional input");
         decode_output(&payload).expect("decode_output should succeed")
     }
 
@@ -109,7 +113,10 @@ mod tests {
         for value in &values {
             builder.append_task_input(value)?;
         }
-        let outputs: Vec<TaskOutput> = builder.build().into_positional_inputs(|payload| payload);
+        let outputs: Vec<TaskOutput> = builder
+            .build()
+            .into_inputs(|payload| payload)
+            .positional_inputs;
         let decoded: Vec<f64> = outputs
             .iter()
             .map(decode_output)

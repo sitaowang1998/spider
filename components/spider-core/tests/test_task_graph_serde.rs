@@ -120,6 +120,64 @@ fn test_schema_version_check_priority() {
     }
 }
 
+#[test]
+fn test_legacy_termination_descriptors_default_to_no_inputs() -> anyhow::Result<()> {
+    let graph = TaskGraph::from_json(TASK_GRAPH_IN_JSON)?;
+    assert_eq!(
+        graph
+            .get_commit_task_descriptor()
+            .expect("fixture has commit")
+            .inputs,
+        vec![]
+    );
+    assert_eq!(
+        graph
+            .get_cleanup_task_descriptor()
+            .expect("fixture has cleanup")
+            .inputs,
+        vec![]
+    );
+    let legacy: serde_json::Value = serde_json::from_str(TASK_GRAPH_IN_JSON)?;
+    let legacy_msgpack = rmp_serde::to_vec_named(&legacy)?;
+    let recovered = TaskGraph::from_msgpack(&legacy_msgpack)?;
+    assert_eq!(recovered, graph);
+    Ok(())
+}
+
+#[test]
+fn test_termination_descriptor_input_types_round_trip() -> anyhow::Result<()> {
+    use spider_core::task::DataTypeDescriptor;
+    use spider_core::task::ValueTypeDescriptor;
+
+    let inputs = vec![DataTypeDescriptor::Value(ValueTypeDescriptor::bool())];
+    let mut graph_json: serde_json::Value = serde_json::from_str(TASK_GRAPH_IN_JSON)?;
+    for task in ["commit_task", "cleanup_task"] {
+        graph_json[task]["inputs"] = serde_json::to_value(&inputs)?;
+    }
+    let graph = TaskGraph::from_json(&graph_json.to_string())?;
+    assert_eq!(
+        graph
+            .get_commit_task_descriptor()
+            .expect("fixture has commit")
+            .inputs,
+        inputs
+    );
+    assert_eq!(
+        graph
+            .get_cleanup_task_descriptor()
+            .expect("fixture has cleanup")
+            .inputs,
+        inputs
+    );
+    assert_eq!(TaskGraph::from_msgpack(&graph.to_msgpack()?)?, graph);
+    for task in ["commit_task", "cleanup_task"] {
+        let mut invalid = graph_json.clone();
+        invalid[task]["inputs"] = serde_json::json!([{"invalid_type": {}}]);
+        assert!(TaskGraph::from_json(&invalid.to_string()).is_err());
+    }
+    Ok(())
+}
+
 const TASK_GRAPH_IN_JSON: &str = r#"{
   "schema_version": "0.1.0",
   "commit_task": {

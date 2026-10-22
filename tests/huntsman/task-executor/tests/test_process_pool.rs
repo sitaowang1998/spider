@@ -103,7 +103,8 @@ fn make_request(task_func: &str, inputs: Vec<TaskInput>) -> ExecuteRequest {
                 soft_timeout_ms: 100,
                 hard_timeout_ms: 1000,
             },
-            serialized_task_io: serializer.release(),
+            serialized_task_inputs: serializer.release(),
+            serialized_task_graph_outputs: None,
         },
     }
 }
@@ -205,4 +206,62 @@ async fn hard_timeout_kills_then_respawns() {
         panic!("expected Success after respawn, got {outcome:?}");
     };
     assert_eq!(decode_single_output::<u64>(&outputs), 13);
+}
+
+#[tokio::test]
+#[ignore = "requires `integration-test-tasks` cdylib and `spider-task-executor` binary"]
+async fn test_termination_inputs_reach_real_executor() -> Result<(), Box<dyn std::error::Error>> {
+    let pool = build_pool();
+    let config = integration_test_tasks::ReportConfig {
+        label: "run-42".to_owned(),
+    };
+    let mut inputs = single_input(&config);
+    inputs.extend(single_input(&42_i64));
+    let mut commit = make_request("verify_report", inputs);
+    commit.task_id = TaskId::Commit;
+    let outputs = [rmp_serde::to_vec(&40_i64)?, rmp_serde::to_vec(&2_i64)?];
+    commit.ctx.serialized_task_graph_outputs = Some(
+        spider_core::types::io::SerializedTaskOutputs::serialize_with_size_hint(&outputs)?.to_raw(),
+    );
+    let outcome = pool.execute(commit, NORMAL_TIMEOUT).await?;
+    let Outcome::Success { outputs, .. } = outcome else {
+        panic!("expected successful commit, got {outcome:?}");
+    };
+    assert_eq!(decode_single_output::<String>(&outputs), config.label);
+
+    let mut cleanup = make_request("report_cleanup", single_input(&config));
+    cleanup.task_id = TaskId::Cleanup;
+    let outcome = pool.execute(cleanup, NORMAL_TIMEOUT).await?;
+    let Outcome::Success { outputs, .. } = outcome else {
+        panic!("expected successful cleanup, got {outcome:?}");
+    };
+    assert_eq!(decode_single_output::<String>(&outputs), config.label);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires `integration-test-tasks` cdylib and `spider-task-executor` binary"]
+async fn test_no_input_termination_tasks_reach_real_executor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let pool = build_pool();
+    let mut commit = make_request("assert_outputs_sum_zero", vec![]);
+    commit.task_id = TaskId::Commit;
+    let outputs = [rmp_serde::to_vec(&1_i64)?, rmp_serde::to_vec(&-1_i64)?];
+    commit.ctx.serialized_task_graph_outputs = Some(
+        spider_core::types::io::SerializedTaskOutputs::serialize_with_size_hint(&outputs)?.to_raw(),
+    );
+    let outcome = pool.execute(commit, NORMAL_TIMEOUT).await?;
+    assert!(
+        matches!(outcome, Outcome::Success { .. }),
+        "expected successful commit, got {outcome:?}"
+    );
+
+    let mut cleanup = make_request("assert_initialized", vec![]);
+    cleanup.task_id = TaskId::Cleanup;
+    let outcome = pool.execute(cleanup, NORMAL_TIMEOUT).await?;
+    assert!(
+        matches!(outcome, Outcome::Success { .. }),
+        "expected successful cleanup, got {outcome:?}"
+    );
+    Ok(())
 }

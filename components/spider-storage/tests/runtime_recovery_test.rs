@@ -2,10 +2,19 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use spider_core::job::JobState;
+use spider_core::task::DataTypeDescriptor;
+use spider_core::task::TaskDescriptor;
+use spider_core::task::TaskGraph;
 use spider_core::task::TaskIndex;
+use spider_core::task::TdlContext;
+use spider_core::task::TerminationTaskDescriptor;
+use spider_core::task::ValueTypeDescriptor;
 use spider_core::types::id::ExecutionManagerId;
 use spider_core::types::id::JobId;
 use spider_core::types::id::TaskInstanceId;
+use spider_core::types::io::TaskGraphInputBuilder;
+use spider_core::types::io::TaskInput;
+use spider_core::types::io::TaskInputsSerializer;
 use spider_core::types::io::TaskOutput;
 use spider_core::types::io::TaskOutputsSerializer;
 use spider_core::types::resource_group::ExternalResourceGroupCredentials;
@@ -25,7 +34,6 @@ use spider_storage::task_instance_pool::TaskInstancePoolConfig;
 
 use crate::mariadb_infra::create_mariadb_config;
 use crate::mariadb_infra::create_mariadb_connector;
-use crate::task_graph_builder::build_flat_task_graph;
 use crate::task_graph_builder::compress_job_inputs;
 use crate::task_graph_builder::compress_task_graph;
 
@@ -122,6 +130,11 @@ async fn restarted_storage_cache_recovers_commit_ready_job() -> anyhow::Result<(
             execution_manager_id,
         )
         .await?;
+    assert_eq!(
+        execution_context.serialized_task_inputs,
+        serialized_recovery_input()?
+    );
+    assert!(execution_context.serialized_task_graph_outputs.is_some());
     let state = recovered_service
         .succeed_commit_task_instance(
             recovered_service.session_id(),
@@ -179,6 +192,11 @@ async fn restarted_storage_cache_cancels_commit_ready_job_with_cleanup_task() ->
             execution_manager_id,
         )
         .await?;
+    assert_eq!(
+        execution_context.serialized_task_inputs,
+        serialized_recovery_input()?
+    );
+    assert_eq!(execution_context.serialized_task_graph_outputs, None);
     let state = recovered_service
         .succeed_cleanup_task_instance(
             recovered_service.session_id(),
@@ -270,6 +288,11 @@ async fn restarted_storage_cache_recovers_cleanup_ready_job() -> anyhow::Result<
             execution_manager_id,
         )
         .await?;
+    assert_eq!(
+        execution_context.serialized_task_inputs,
+        serialized_recovery_input()?
+    );
+    assert_eq!(execution_context.serialized_task_graph_outputs, None);
     let state = recovered_service
         .succeed_cleanup_task_instance(
             recovered_service.session_id(),
@@ -487,7 +510,38 @@ async fn register_job<
             b"test-password".to_vec(),
         ))
         .await?;
-    let (task_graph, task_graph_input) = build_flat_task_graph(1, 4, with_commit, with_cleanup);
+    let descriptor = TerminationTaskDescriptor {
+        tdl_context: TdlContext {
+            package: "test".to_owned(),
+            task_func: "finalize".to_owned(),
+        },
+        execution_policy: None,
+        inputs: vec![DataTypeDescriptor::Value(ValueTypeDescriptor::bytes())],
+    };
+    let mut task_graph = TaskGraph::new(
+        with_commit.then(|| descriptor.clone()),
+        with_cleanup.then(|| descriptor.clone()),
+    )?;
+    task_graph.insert_task(TaskDescriptor {
+        tdl_context: TdlContext {
+            package: "test".to_owned(),
+            task_func: "normal".to_owned(),
+        },
+        execution_policy: None,
+        inputs: descriptor.inputs.clone(),
+        outputs: descriptor.inputs,
+        input_sources: None,
+    })?;
+    let mut builder = TaskGraphInputBuilder::new();
+    let shared = builder.create_shared_input_payload(&vec![23u8; 4])?;
+    builder.append_shared_task_input(shared)?;
+    if with_commit {
+        builder.append_shared_commit_task_input(shared)?;
+    }
+    if with_cleanup {
+        builder.append_shared_cleanup_task_input(shared)?;
+    }
+    let task_graph_input = builder.build();
     let compressed_task_graph = compress_task_graph(&task_graph)?;
     let compressed_inputs = compress_job_inputs(&task_graph_input)?;
     Ok(service
@@ -528,6 +582,11 @@ async fn run_recovered_regular_task<
             execution_manager_id,
         )
         .await?;
+    assert_eq!(
+        execution_context.serialized_task_inputs,
+        serialized_recovery_input()?
+    );
+    assert_eq!(execution_context.serialized_task_graph_outputs, None);
     Ok(execution_context.task_instance_id)
 }
 
@@ -664,4 +723,22 @@ fn find_entry_for_job<TaskKind>(
 /// * Forwards [`TaskOutputsSerializer::from_tuple`]'s return values on failure.
 fn serialized_single_output() -> anyhow::Result<Vec<u8>> {
     Ok(TaskOutputsSerializer::from_tuple(&(vec![1u8; 4],))?)
+}
+
+/// Serializes the shared input supplied to all tasks in recovery tests.
+///
+/// # Returns
+///
+/// The expected input frame on success.
+///
+/// # Errors
+///
+/// Returns an error if:
+///
+/// * Forwards [`rmp_serde::to_vec`]'s return values on failure.
+/// * Forwards [`TaskInputsSerializer::append`]'s return values on failure.
+fn serialized_recovery_input() -> anyhow::Result<Vec<u8>> {
+    let mut serializer = TaskInputsSerializer::new();
+    serializer.append(TaskInput::ValuePayload(rmp_serde::to_vec(&vec![23u8; 4])?))?;
+    Ok(serializer.release())
 }

@@ -867,6 +867,8 @@ mod tests {
     use spider_core::types::id::ResourceGroupId;
     use spider_core::types::io::TaskGraphInput;
     use spider_core::types::io::TaskGraphInputBuilder;
+    use spider_core::types::io::TaskInput;
+    use spider_core::types::io::TaskInputsSerializer;
     use spider_core::types::io::TaskOutput;
 
     use super::*;
@@ -1086,6 +1088,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_termination_inputs_are_not_persisted() -> anyhow::Result<()> {
+        let db = MockDbConnector::default();
+        let service = create_test_service_with_db(db.clone());
+        for task_id in [TaskId::Commit, TaskId::Cleanup] {
+            let descriptor = TerminationTaskDescriptor {
+                tdl_context: TdlContext {
+                    package: "test_pkg".to_owned(),
+                    task_func: "finalize".to_owned(),
+                },
+                execution_policy: None,
+                inputs: vec![DataTypeDescriptor::Value(ValueTypeDescriptor::bytes())],
+            };
+            let graph = if task_id == TaskId::Commit {
+                create_test_task_graph_with_termination_tasks(Some(descriptor), None)
+            } else {
+                create_test_task_graph_with_termination_tasks(None, Some(descriptor))
+            };
+            let result = service
+                .register_job(
+                    ResourceGroupId::random(),
+                    compress_task_graph(&graph),
+                    compress_job_inputs(&create_test_task_graph_input()),
+                )
+                .await;
+            assert!(matches!(result, Err(StorageServerError::BadRequest(_))));
+            assert_eq!(db.states.len(), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn register_job_returns_error_on_empty_task_graph() -> anyhow::Result<()> {
         let service = create_test_service();
         let task_graph = SubmittedTaskGraph::new(None, None)
@@ -1214,6 +1247,7 @@ mod tests {
         let (service, sender) = create_test_service_with_inbound_queue(db.clone());
 
         let create_termination_task_descriptor = |task_func: &str| TerminationTaskDescriptor {
+            inputs: vec![],
             tdl_context: TdlContext {
                 package: "test_pkg".to_owned(),
                 task_func: task_func.to_owned(),
@@ -1560,6 +1594,95 @@ mod tests {
         assert!(
             service.inner.job_cache.get(job_id).await.is_some(),
             "JCB should remain in cache after terminal fail"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_inputs_survive_retryable_failure_and_cancellation() -> anyhow::Result<()> {
+        let db = MockDbConnector::default();
+        let (service, _sender) = create_test_service_with_inbound_queue(db.clone());
+        let bytes_type = DataTypeDescriptor::Value(ValueTypeDescriptor::bytes());
+        let mut graph = SubmittedTaskGraph::new(
+            None,
+            Some(TerminationTaskDescriptor {
+                tdl_context: TdlContext {
+                    package: "test_pkg".to_owned(),
+                    task_func: "cleanup".to_owned(),
+                },
+                execution_policy: None,
+                inputs: vec![bytes_type.clone()],
+            }),
+        )?;
+        graph.insert_task(TaskDescriptor {
+            tdl_context: TdlContext {
+                package: "test_pkg".to_owned(),
+                task_func: "normal".to_owned(),
+            },
+            execution_policy: Some(ExecutionPolicy {
+                max_num_retry: 1,
+                ..ExecutionPolicy::default()
+            }),
+            inputs: vec![bytes_type.clone()],
+            outputs: vec![bytes_type],
+            input_sources: None,
+        })?;
+        let mut builder = TaskGraphInputBuilder::new();
+        let config = vec![7u8; 128];
+        let shared = builder.create_shared_input_payload(&config)?;
+        builder.append_shared_task_input(shared)?;
+        builder.append_shared_cleanup_task_input(shared)?;
+        let job_id = service
+            .register_job(
+                ResourceGroupId::random(),
+                compress_task_graph(&graph),
+                compress_job_inputs(&builder.build()),
+            )
+            .await?;
+        service.start_job(job_id).await?;
+        let execution_manager_id = ExecutionManagerId::random();
+        let normal = service
+            .create_task_instance(
+                TEST_SESSION_ID,
+                job_id,
+                TaskId::Index(0),
+                execution_manager_id,
+            )
+            .await?;
+        let state = service
+            .fail_task_instance(
+                TEST_SESSION_ID,
+                job_id,
+                normal.task_instance_id,
+                TaskId::Index(0),
+                "failure before producing output".to_owned(),
+            )
+            .await?;
+        assert_eq!(state, JobState::Running);
+        assert_eq!(db.outputs.len(), 0);
+        assert_eq!(service.cancel_job(job_id).await?, JobState::CleanupReady);
+        let entries = service
+            .poll_cleanup_ready_tasks(1, Duration::from_millis(100))
+            .await?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].job_id, job_id);
+        let cleanup = service
+            .create_task_instance(
+                TEST_SESSION_ID,
+                job_id,
+                TaskId::Cleanup,
+                execution_manager_id,
+            )
+            .await?;
+        let mut expected = TaskInputsSerializer::new();
+        expected.append(TaskInput::ValuePayload(rmp_serde::to_vec(&config)?))?;
+        assert_eq!(cleanup.serialized_task_inputs, expected.release());
+        assert_eq!(cleanup.serialized_task_graph_outputs, None);
+        assert_eq!(
+            service
+                .succeed_cleanup_task_instance(TEST_SESSION_ID, job_id, cleanup.task_instance_id)
+                .await?,
+            JobState::Cancelled
         );
         Ok(())
     }

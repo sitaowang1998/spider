@@ -27,7 +27,8 @@ impl TryFrom<storage::ExecutionContext> for ExecutionContext {
                 soft_timeout_ms: timeout_policy.soft_timeout_ms,
                 hard_timeout_ms: timeout_policy.hard_timeout_ms,
             },
-            serialized_task_io: execution_context.serialized_task_io,
+            serialized_task_inputs: execution_context.serialized_task_inputs,
+            serialized_task_graph_outputs: execution_context.serialized_task_graph_outputs,
         })
     }
 }
@@ -48,7 +49,8 @@ mod tests {
                 soft_timeout_ms: 100,
                 hard_timeout_ms: 200,
             }),
-            serialized_task_io: vec![1, 2, 3],
+            serialized_task_inputs: vec![1, 2, 3],
+            serialized_task_graph_outputs: Some(vec![4, 5]),
         };
 
         let execution_context =
@@ -59,7 +61,11 @@ mod tests {
         assert_eq!(execution_context.tdl_context.task_func, "func");
         assert_eq!(execution_context.timeout_policy.soft_timeout_ms, 100);
         assert_eq!(execution_context.timeout_policy.hard_timeout_ms, 200);
-        assert_eq!(execution_context.serialized_task_io, vec![1, 2, 3]);
+        assert_eq!(execution_context.serialized_task_inputs, vec![1, 2, 3]);
+        assert_eq!(
+            execution_context.serialized_task_graph_outputs,
+            Some(vec![4, 5])
+        );
     }
 
     #[test]
@@ -71,7 +77,8 @@ mod tests {
                 soft_timeout_ms: 100,
                 hard_timeout_ms: 200,
             }),
-            serialized_task_io: Vec::new(),
+            serialized_task_inputs: Vec::new(),
+            serialized_task_graph_outputs: None,
         };
 
         assert!(matches!(

@@ -1,5 +1,6 @@
 use spider_core::task::TaskGraph;
 use spider_core::task::{self};
+use spider_core::types::id::TaskId;
 use spider_core::types::io::TaskGraphInput;
 
 /// Errors produced while constructing a [`ValidatedJobSubmission`] from its compressed
@@ -21,6 +22,18 @@ pub enum JobSubmissionError {
     /// The number of positional job inputs does not match the number of graph inputs.
     #[error("task graph input size mismatch: expected {expected}, got {actual}")]
     TaskGraphInputSizeMismatch { expected: usize, actual: usize },
+
+    /// A termination task's input count does not match its descriptor.
+    #[error("termination task {task_id:?} input size mismatch: expected {expected}, got {actual}")]
+    TerminationTaskInputSizeMismatch {
+        task_id: TaskId,
+        expected: usize,
+        actual: usize,
+    },
+
+    /// Inputs were supplied for an absent termination task.
+    #[error("termination task {task_id:?} has inputs but no descriptor")]
+    TerminationTaskNotFound { task_id: TaskId },
 }
 
 /// A validated wrapper around a task graph, its corresponding job inputs, and the compressed
@@ -32,6 +45,7 @@ pub enum JobSubmissionError {
 /// * The task graph contains at least one task.
 /// * The number of positional job inputs matches the number of graph inputs expected by the task
 ///   graph.
+/// * Each termination input list matches its descriptor, or is empty when the task is absent.
 ///
 /// The compressed serializations are stored alongside the decoded forms so that the database can
 /// persist them without recompressing. They are expected to be in the same format the database
@@ -67,6 +81,9 @@ impl ValidatedJobSubmission {
     /// * [`JobSubmissionError::TaskGraphEmpty`] if the task graph contains no tasks.
     /// * [`JobSubmissionError::TaskGraphInputSizeMismatch`] if the number of positional inputs does
     ///   not match the number of graph inputs.
+    /// * [`JobSubmissionError::TerminationTaskInputSizeMismatch`] if termination inputs do not
+    ///   match the descriptor's input count.
+    /// * [`JobSubmissionError::TerminationTaskNotFound`] if inputs have no termination descriptor.
     pub fn create(
         compressed_serialized_task_graph: Vec<u8>,
         compressed_serialized_job_inputs: Vec<u8>,
@@ -87,6 +104,32 @@ impl ValidatedJobSubmission {
                 expected: expected_num_inputs,
                 actual: actual_num_inputs,
             });
+        }
+        for (task_id, descriptor, actual) in [
+            (
+                TaskId::Commit,
+                task_graph.get_commit_task_descriptor(),
+                task_graph_input.get_commit_task_inputs().len(),
+            ),
+            (
+                TaskId::Cleanup,
+                task_graph.get_cleanup_task_descriptor(),
+                task_graph_input.get_cleanup_task_inputs().len(),
+            ),
+        ] {
+            match descriptor {
+                Some(descriptor) if descriptor.inputs.len() != actual => {
+                    return Err(JobSubmissionError::TerminationTaskInputSizeMismatch {
+                        task_id,
+                        expected: descriptor.inputs.len(),
+                        actual,
+                    });
+                }
+                None if actual != 0 => {
+                    return Err(JobSubmissionError::TerminationTaskNotFound { task_id });
+                }
+                _ => {}
+            }
         }
         Ok(Self {
             task_graph,
@@ -325,6 +368,81 @@ mod tests {
             validated_task_graph_input, task_graph_input,
             "task graph input should be preserved"
         );
+        Ok(())
+    }
+    #[test]
+    fn termination_input_counts_are_validated() -> anyhow::Result<()> {
+        for task_id in [TaskId::Commit, TaskId::Cleanup] {
+            for (descriptor_count, supplied_count) in [(0, 1), (1, 0), (1, 2), (1, 1)] {
+                let descriptor = spider_core::task::TerminationTaskDescriptor {
+                    tdl_context: TdlContext {
+                        package: "test_pkg".to_owned(),
+                        task_func: "finalize".to_owned(),
+                    },
+                    execution_policy: None,
+                    inputs: vec![
+                        DataTypeDescriptor::Value(ValueTypeDescriptor::bytes());
+                        descriptor_count
+                    ],
+                };
+                let (commit, cleanup) = if task_id == TaskId::Commit {
+                    (Some(descriptor), None)
+                } else {
+                    (None, Some(descriptor))
+                };
+                let mut graph = SubmittedTaskGraph::new(commit, cleanup)?;
+                graph.insert_task(TaskDescriptor {
+                    tdl_context: TdlContext {
+                        package: "test_pkg".to_owned(),
+                        task_func: "normal".to_owned(),
+                    },
+                    execution_policy: None,
+                    inputs: vec![],
+                    outputs: vec![],
+                    input_sources: None,
+                })?;
+                let mut builder = TaskGraphInputBuilder::new();
+                for _ in 0..supplied_count {
+                    if task_id == TaskId::Commit {
+                        builder.append_commit_task_input(&42)?;
+                    } else {
+                        builder.append_cleanup_task_input(&42)?;
+                    }
+                }
+                let result = ValidatedJobSubmission::create(
+                    compress_task_graph(&graph),
+                    compress_job_inputs(&builder.build()),
+                );
+                if descriptor_count == supplied_count {
+                    assert!(result.is_ok());
+                } else {
+                    assert!(
+                        matches!(result, Err(JobSubmissionError::TerminationTaskInputSizeMismatch { task_id: actual_task, expected, actual }) if actual_task == task_id && expected == descriptor_count && actual == supplied_count)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inputs_for_absent_termination_tasks_are_rejected() -> anyhow::Result<()> {
+        for task_id in [TaskId::Commit, TaskId::Cleanup] {
+            let graph = create_single_task_graph(0);
+            let mut builder = TaskGraphInputBuilder::new();
+            if task_id == TaskId::Commit {
+                builder.append_commit_task_input(&42)?;
+            } else {
+                builder.append_cleanup_task_input(&42)?;
+            }
+            let result = ValidatedJobSubmission::create(
+                compress_task_graph(&graph),
+                compress_job_inputs(&builder.build()),
+            );
+            assert!(
+                matches!(result, Err(JobSubmissionError::TerminationTaskNotFound { task_id: actual }) if actual == task_id)
+            );
+        }
         Ok(())
     }
 }

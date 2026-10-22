@@ -140,8 +140,8 @@ impl<
                 (num_tasks, task_graph)
             }
             JobState::CommitReady => {
-                let Some(commit_task_descriptor) =
-                    submission.task_graph().get_commit_task_descriptor()
+                let (submitted_graph, inputs) = submission.into_parts();
+                let Some(commit_task_descriptor) = submitted_graph.get_commit_task_descriptor()
                 else {
                     return Err(InternalError::InvalidRecoverableJobContext(String::from(
                         "commit-ready job doesn't have a commit task specified",
@@ -156,21 +156,23 @@ impl<
                 };
                 let task_graph = TaskGraph::recover_from_commit_ready(
                     commit_task_descriptor,
-                    submission.task_graph().get_cleanup_task_descriptor(),
+                    submitted_graph.get_cleanup_task_descriptor(),
                     outputs,
+                    inputs,
                 );
                 (0, task_graph)
             }
             JobState::CleanupReady => {
-                let Some(cleanup_task_descriptor) =
-                    submission.task_graph().get_cleanup_task_descriptor()
+                let (submitted_graph, inputs) = submission.into_parts();
+                let Some(cleanup_task_descriptor) = submitted_graph.get_cleanup_task_descriptor()
                 else {
                     return Err(InternalError::InvalidRecoverableJobContext(String::from(
                         "cleanup-ready job doesn't have a cleanup task specified",
                     ))
                     .into());
                 };
-                let task_graph = TaskGraph::recover_from_cleanup_ready(cleanup_task_descriptor);
+                let task_graph =
+                    TaskGraph::recover_from_cleanup_ready(cleanup_task_descriptor, inputs);
                 (0, task_graph)
             }
             other => {
@@ -732,34 +734,30 @@ impl<
         let task_instance_id = job
             .task_instance_pool_connector
             .get_next_available_task_instance_id();
-        let (tdl_context, timeout_policy) =
-            commit_tcb.register_task_instance(task_instance_id).await?;
+        let mut context = commit_tcb.register_task_instance(task_instance_id).await?;
         let registration = TaskInstanceMetadata {
             resource_group_id: jcb.owner_id,
             job_id: jcb.id,
             task_id: TaskId::Commit,
             task_instance_id,
             execution_manager_id,
-            soft_timeout_ddl: SystemTime::now()
-                .checked_add(Duration::from_millis(timeout_policy.soft_timeout_ms)),
+            soft_timeout_ddl: SystemTime::now().checked_add(Duration::from_millis(
+                context.timeout_policy.soft_timeout_ms,
+            )),
         };
         job.task_instance_pool_connector
             .register_termination_task_instance(commit_tcb.clone(), registration)
             .await?;
 
         let task_graph_outputs = job.task_graph.read_output_payloads().await?;
-        let serialized_task_io =
+        let serialized_task_graph_outputs =
             SerializedTaskOutputs::serialize_with_size_hint(&task_graph_outputs)
                 .map_err(InternalError::TaskOutputs)?
                 .to_raw();
 
         drop(job);
-        Ok(ExecutionContext {
-            task_instance_id,
-            tdl_context,
-            timeout_policy,
-            serialized_task_io,
-        })
+        context.serialized_task_graph_outputs = Some(serialized_task_graph_outputs);
+        Ok(context)
     }
 
     /// Creates a task instance for the cleanup task and registers it in the task instance pool.
@@ -794,28 +792,23 @@ impl<
         let task_instance_id = job
             .task_instance_pool_connector
             .get_next_available_task_instance_id();
-        let (tdl_context, timeout_policy) =
-            cleanup_tcb.register_task_instance(task_instance_id).await?;
+        let context = cleanup_tcb.register_task_instance(task_instance_id).await?;
         let registration = TaskInstanceMetadata {
             resource_group_id: jcb.owner_id,
             job_id: jcb.id,
             task_id: TaskId::Cleanup,
             task_instance_id,
             execution_manager_id,
-            soft_timeout_ddl: SystemTime::now()
-                .checked_add(Duration::from_millis(timeout_policy.soft_timeout_ms)),
+            soft_timeout_ddl: SystemTime::now().checked_add(Duration::from_millis(
+                context.timeout_policy.soft_timeout_ms,
+            )),
         };
         job.task_instance_pool_connector
             .register_termination_task_instance(cleanup_tcb.clone(), registration)
             .await?;
 
         drop(job);
-        Ok(ExecutionContext {
-            task_instance_id,
-            tdl_context,
-            timeout_policy,
-            serialized_task_io: Vec::new(),
-        })
+        Ok(context)
     }
 }
 

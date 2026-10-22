@@ -108,7 +108,8 @@ message ExecutionContext {
   uint64 task_instance_id = 1;
   TdlContext tdl_context = 2;
   TimeoutPolicy timeout_policy = 3;
-  bytes serialized_task_io = 4;
+  bytes serialized_task_inputs = 4;
+  optional bytes serialized_task_graph_outputs = 5;
 }
 
 message TdlContext {

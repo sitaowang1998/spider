@@ -11,6 +11,7 @@ use spider_core::task::TerminationTaskDescriptor;
 use spider_core::task::TimeoutPolicy;
 use spider_core::types::id::TaskInstanceId;
 use spider_core::types::io::ExecutionContext;
+use spider_core::types::io::TaskGraphInput;
 use spider_core::types::io::TaskInputsSerializer;
 use spider_core::types::io::TaskOutput;
 use tokio::sync::RwLock;
@@ -63,11 +64,11 @@ impl TaskGraph {
             .map(|_| SharedRw::new(RwLock::new(ValuePayload::default())))
             .collect();
         let task_graph_input_indices = submitted_task_graph.get_task_graph_input_indices();
-        let task_graph_input_slots = task_graph_input
-            .into_positional_inputs(|payload| SharedRw::new(RwLock::new(Some(payload))));
+        let task_graph_input_slots =
+            task_graph_input.into_inputs(|payload| SharedRw::new(RwLock::new(Some(payload))));
         for (deps_index, input_slot) in task_graph_input_indices
             .into_iter()
-            .zip(task_graph_input_slots)
+            .zip(task_graph_input_slots.positional_inputs)
         {
             let dataflow_dep = dataflow_dep_buffer.get_mut(deps_index).ok_or_else(|| {
                 InternalError::TaskGraphCorrupted(
@@ -114,11 +115,21 @@ impl TaskGraph {
 
         let commit_task = submitted_task_graph
             .get_commit_task_descriptor()
-            .map(SharedTerminationTaskControlBlock::create);
+            .map(|descriptor| {
+                SharedTerminationTaskControlBlock::create(
+                    descriptor,
+                    task_graph_input_slots.commit_task_inputs,
+                )
+            });
 
         let cleanup_task = submitted_task_graph
             .get_cleanup_task_descriptor()
-            .map(SharedTerminationTaskControlBlock::create);
+            .map(|descriptor| {
+                SharedTerminationTaskControlBlock::create(
+                    descriptor,
+                    task_graph_input_slots.cleanup_task_inputs,
+                )
+            });
 
         Ok(Self {
             tasks,
@@ -133,12 +144,14 @@ impl TaskGraph {
     /// # Returns
     ///
     /// The task graph with task outputs, the commit task, and the cleanup task (if any) recovered,
-    /// while the underlying task graph is initialized to empty.
+    /// including their submitted inputs, while the underlying task graph is initialized to empty.
     pub(super) fn recover_from_commit_ready(
         commit_task_descriptor: &TerminationTaskDescriptor,
         cleanup_task_descriptor: Option<&TerminationTaskDescriptor>,
         outputs: Vec<TaskOutput>,
+        inputs: TaskGraphInput,
     ) -> Self {
+        let inputs = inputs.into_inputs(|payload| SharedRw::new(RwLock::new(Some(payload))));
         let outputs = outputs
             .into_iter()
             .map(|output_payload| Reader::new(SharedRw::new(RwLock::new(Some(output_payload)))))
@@ -148,8 +161,11 @@ impl TaskGraph {
             outputs,
             commit_task: Some(SharedTerminationTaskControlBlock::create(
                 commit_task_descriptor,
+                inputs.commit_task_inputs,
             )),
-            cleanup_task: cleanup_task_descriptor.map(SharedTerminationTaskControlBlock::create),
+            cleanup_task: cleanup_task_descriptor.map(|descriptor| {
+                SharedTerminationTaskControlBlock::create(descriptor, inputs.cleanup_task_inputs)
+            }),
         }
     }
 
@@ -157,17 +173,20 @@ impl TaskGraph {
     ///
     /// # Returns
     ///
-    /// The task graph with the cleanup task recovered, while the underlying task graph and the
-    /// outputs are initialized to empty.
+    /// The task graph with the cleanup task and its submitted inputs recovered, while the
+    /// underlying task graph and the outputs are initialized to empty.
     pub(super) fn recover_from_cleanup_ready(
         cleanup_task_descriptor: &TerminationTaskDescriptor,
+        inputs: TaskGraphInput,
     ) -> Self {
+        let inputs = inputs.into_inputs(|payload| SharedRw::new(RwLock::new(Some(payload))));
         Self {
             tasks: vec![],
             outputs: vec![],
             commit_task: None,
             cleanup_task: Some(SharedTerminationTaskControlBlock::create(
                 cleanup_task_descriptor,
+                inputs.cleanup_task_inputs,
             )),
         }
     }
@@ -304,7 +323,8 @@ impl SharedTaskControlBlock {
                 task_instance_id: instance_id,
                 tdl_context: tcb.base.tdl_context.clone(),
                 timeout_policy: tcb.base.timeout_policy.clone(),
-                serialized_task_io: tcb.fetch_inputs().await?,
+                serialized_task_inputs: tcb.fetch_inputs().await?,
+                serialized_task_graph_outputs: None,
             })
         };
         result.map_err(CacheError::from)
@@ -560,26 +580,34 @@ impl SharedTerminationTaskControlBlock {
     ///
     /// # Returns
     ///
-    /// A tuple on success, containing:
-    ///
-    /// * The TDL context of the termination task.
-    /// * The timeout policy of the termination task.
+    /// The execution context containing the task's submitted input frame on success.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
     /// * Forwards [`TaskControlBlockBase::register_task_instance`]'s return values on failure.
+    /// * Forwards [`InputReader::read_as_task_input`]'s return values on failure.
+    /// * Forwards [`TaskInputsSerializer::append`]'s return values on failure.
     pub async fn register_task_instance(
         &self,
         instance_id: TaskInstanceId,
-    ) -> Result<(TdlContext, TimeoutPolicy), CacheError> {
+    ) -> Result<ExecutionContext, CacheError> {
         let mut tcb = self.inner.lock().await;
+        let mut serializer = TaskInputsSerializer::new();
+        for reader in &tcb.inputs {
+            serializer
+                .append(reader.read_as_task_input().await?)
+                .map_err(InternalError::from)?;
+        }
         tcb.base.register_task_instance(instance_id)?;
-        Ok((
-            tcb.base.tdl_context.clone(),
-            tcb.base.timeout_policy.clone(),
-        ))
+        Ok(ExecutionContext {
+            task_instance_id: instance_id,
+            tdl_context: tcb.base.tdl_context.clone(),
+            timeout_policy: tcb.base.timeout_policy.clone(),
+            serialized_task_inputs: serializer.release(),
+            serialized_task_graph_outputs: None,
+        })
     }
 
     /// Marks a task instance as succeeded.
@@ -654,12 +682,19 @@ impl SharedTerminationTaskControlBlock {
     /// # Returns
     ///
     /// A newly created instance of [`SharedTerminationTaskControlBlock`] on success.
-    fn create(termination_task_descriptor: &TerminationTaskDescriptor) -> Self {
+    fn create(
+        termination_task_descriptor: &TerminationTaskDescriptor,
+        inputs: Vec<SharedRw<ValuePayload>>,
+    ) -> Self {
         let execution_policy = termination_task_descriptor
             .execution_policy
             .clone()
             .unwrap_or_default();
         let tcb = TerminationTaskControlBlock {
+            inputs: inputs
+                .into_iter()
+                .map(|slot| InputReader::Value(Reader::new(slot)))
+                .collect(),
             base: TaskControlBlockBase {
                 state: TaskState::Ready,
                 tdl_context: termination_task_descriptor.tdl_context.clone(),
@@ -1001,6 +1036,7 @@ impl TaskControlBlock {
 /// to ensure that concurrent operations on the same task are properly serialized.
 struct TerminationTaskControlBlock {
     base: TaskControlBlockBase,
+    inputs: Vec<InputReader>,
 }
 
 #[cfg(test)]
@@ -1201,6 +1237,7 @@ mod tests {
                     package: "test_pkg".to_owned(),
                     task_func: "test_commit_fn".to_owned(),
                 },
+                inputs: vec![],
                 execution_policy: Some(ExecutionPolicy {
                     max_num_retry,
                     max_num_instances,
@@ -1373,7 +1410,7 @@ mod tests {
             .iter()
             .map(|v| TaskInput::ValuePayload(v.clone()))
             .collect();
-        let actual_inputs = deserialize_task_inputs(&ctx.serialized_task_io);
+        let actual_inputs = deserialize_task_inputs(&ctx.serialized_task_inputs);
         assert_eq!(actual_inputs, expected, "task {task_index} inputs mismatch");
         let outputs = compute_outputs(&actual_inputs);
         tcb.succeed_task_instance(id, outputs)
@@ -1404,7 +1441,7 @@ mod tests {
                 .iter()
                 .map(|v| TaskInput::ValuePayload(v.clone()))
                 .collect();
-            let actual_inputs = deserialize_task_inputs(&ctx.serialized_task_io);
+            let actual_inputs = deserialize_task_inputs(&ctx.serialized_task_inputs);
             assert_eq!(actual_inputs, expected, "task inputs mismatch");
             barrier.wait().await;
             let outputs = compute_outputs(&actual_inputs);
@@ -2021,5 +2058,116 @@ mod tests {
         tcb.succeed_task_instance(id_b, vec![vec![0u8; 4]])
             .await
             .expect("succeed B should work after A was force-removed");
+    }
+    #[tokio::test]
+    async fn termination_inputs_survive_finalization_and_retries() -> anyhow::Result<()> {
+        let descriptor = TerminationTaskDescriptor {
+            tdl_context: TdlContext {
+                package: "test_pkg".to_owned(),
+                task_func: "finalize".to_owned(),
+            },
+            execution_policy: Some(ExecutionPolicy {
+                max_num_retry: 2,
+                max_num_instances: 2,
+                ..ExecutionPolicy::default()
+            }),
+            inputs: vec![DataTypeDescriptor::Value(ValueTypeDescriptor::bytes())],
+        };
+        let mut submitted =
+            SubmittedTaskGraph::new(Some(descriptor.clone()), Some(descriptor.clone()))?;
+        submitted.insert_task(TaskDescriptor {
+            tdl_context: descriptor.tdl_context.clone(),
+            execution_policy: None,
+            inputs: descriptor.inputs.clone(),
+            outputs: vec![],
+            input_sources: None,
+        })?;
+        let mut builder = TaskGraphInputBuilder::new();
+        let payload = vec![17u8; 1024];
+        let shared = builder.create_shared_input_payload(&payload)?;
+        builder.append_shared_task_input(shared)?;
+        builder.append_shared_commit_task_input(shared)?;
+        builder.append_shared_cleanup_task_input(shared)?;
+        let inputs = builder.build();
+        let expected = vec![TaskInput::ValuePayload(rmp_serde::to_vec(&payload)?)];
+        let mut graph = TaskGraph::create(create_validated_submission(submitted, inputs)).await?;
+        let normal = graph
+            .get_task_control_block(0)
+            .expect("normal task should exist");
+        let ctx = normal.register_task_instance(next_instance_id()).await?;
+        assert_eq!(
+            deserialize_task_inputs(&ctx.serialized_task_inputs),
+            expected
+        );
+        drop(normal);
+        graph.finalize();
+        let commit = graph
+            .get_commit_task_control_block()
+            .expect("commit should exist");
+        let first = commit.register_task_instance(next_instance_id()).await?;
+        let concurrent = commit.register_task_instance(next_instance_id()).await?;
+        assert_eq!(
+            first.serialized_task_inputs,
+            concurrent.serialized_task_inputs
+        );
+        assert_eq!(
+            deserialize_task_inputs(&first.serialized_task_inputs),
+            expected
+        );
+        commit
+            .fail_task_instance(first.task_instance_id, "retry".to_owned())
+            .await?;
+        commit
+            .fail_task_instance(concurrent.task_instance_id, "retry".to_owned())
+            .await?;
+        let retry = commit.register_task_instance(next_instance_id()).await?;
+        assert_eq!(retry.serialized_task_inputs, first.serialized_task_inputs);
+        graph.cancel_non_terminal().await;
+        let cleanup = graph
+            .get_cleanup_task_control_block()
+            .expect("cleanup should exist");
+        let ctx = cleanup.register_task_instance(next_instance_id()).await?;
+        assert_eq!(
+            deserialize_task_inputs(&ctx.serialized_task_inputs),
+            expected
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn no_input_termination_task_has_valid_empty_input_frame() -> anyhow::Result<()> {
+        let tcb = build_termination_tcb(1, 1).await;
+        let ctx = tcb.register_task_instance(next_instance_id()).await?;
+        assert_eq!(deserialize_task_inputs(&ctx.serialized_task_inputs), vec![]);
+        assert_eq!(ctx.serialized_task_graph_outputs, None);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn invalid_termination_input_does_not_register_attempt() -> anyhow::Result<()> {
+        let descriptor = TerminationTaskDescriptor {
+            tdl_context: TdlContext {
+                package: "test_pkg".to_owned(),
+                task_func: "finalize".to_owned(),
+            },
+            execution_policy: None,
+            inputs: vec![DataTypeDescriptor::Value(ValueTypeDescriptor::bytes())],
+        };
+        let slot = SharedRw::new(RwLock::new(None));
+        let tcb = SharedTerminationTaskControlBlock::create(&descriptor, vec![slot.clone()]);
+        let id = next_instance_id();
+        assert!(matches!(
+            tcb.register_task_instance(id).await,
+            Err(CacheError::Internal(InternalError::TaskInputNotReady))
+        ));
+        {
+            let inner = tcb.inner.lock().await;
+            assert_eq!(inner.base.state, TaskState::Ready);
+            assert!(inner.base.instance_pool.is_empty());
+            drop(inner);
+        }
+        *slot.write().await = Some(rmp_serde::to_vec(&42)?);
+        let context = tcb.register_task_instance(id).await?;
+        assert_eq!(context.task_instance_id, id);
+        Ok(())
     }
 }

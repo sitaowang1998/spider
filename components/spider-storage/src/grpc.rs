@@ -632,7 +632,8 @@ impl<
                     soft_timeout_ms: execution_context.timeout_policy.soft_timeout_ms,
                     hard_timeout_ms: execution_context.timeout_policy.hard_timeout_ms,
                 }),
-                serialized_task_io: execution_context.serialized_task_io,
+                serialized_task_inputs: execution_context.serialized_task_inputs,
+                serialized_task_graph_outputs: execution_context.serialized_task_graph_outputs,
             }),
         }))
     }

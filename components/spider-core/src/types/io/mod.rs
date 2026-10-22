@@ -6,6 +6,7 @@ use spider_utils::wire::StreamDeserializer;
 use spider_utils::wire::WireError;
 use spider_utils::wire::WireFrameBuilder;
 use spider_utils::wire::{self};
+pub use task_graph_input::ResolvedTaskGraphInput;
 pub use task_graph_input::SharedInputId;
 pub use task_graph_input::SharedInputPayload;
 pub use task_graph_input::TaskGraphInput;
@@ -440,7 +441,8 @@ pub struct ExecutionContext {
     pub task_instance_id: TaskInstanceId,
     pub tdl_context: TdlContext,
     pub timeout_policy: TimeoutPolicy,
-    pub serialized_task_io: Vec<u8>,
+    pub serialized_task_inputs: Vec<u8>,
+    pub serialized_task_graph_outputs: Option<Vec<u8>>,
 }
 
 #[cfg(test)]

@@ -397,6 +397,10 @@ pub struct TerminationTaskDescriptor {
     /// Defaults to `None` for using the default execution policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_policy: Option<ExecutionPolicy>,
+
+    /// The data types of the task's positional inputs, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<DataTypeDescriptor>,
 }
 
 /// An in-memory representation of a directed acyclic graph (DAG) of tasks and their dependencies.
@@ -2497,6 +2501,7 @@ mod tests {
         // Invalid commit task execution policy
         assert_invalid_execution_policy(&TaskGraph::new(
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "commit_fn".to_string(),
@@ -2510,6 +2515,7 @@ mod tests {
         assert_invalid_execution_policy(&TaskGraph::new(
             None,
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "cleanup_fn".to_string(),
@@ -2525,6 +2531,7 @@ mod tests {
         // soft_timeout_ms < MIN_TIMEOUT_MS
         assert_invalid_timeout_policy(&TaskGraph::new(
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "commit_fn".to_string(),
@@ -2545,6 +2552,7 @@ mod tests {
         assert_invalid_timeout_policy(&TaskGraph::new(
             None,
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "cleanup_fn".to_string(),
@@ -2563,6 +2571,7 @@ mod tests {
         // hard_timeout_ms == soft_timeout_ms
         assert_invalid_timeout_policy(&TaskGraph::new(
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "commit_fn".to_string(),
@@ -2582,6 +2591,7 @@ mod tests {
         // hard_timeout_ms > MAX_TIMEOUT_MS
         assert_invalid_timeout_policy(&TaskGraph::new(
             Some(TerminationTaskDescriptor {
+                inputs: vec![],
                 tdl_context: TdlContext {
                     package: TEST_PACKAGE.to_string(),
                     task_func: "commit_fn".to_string(),

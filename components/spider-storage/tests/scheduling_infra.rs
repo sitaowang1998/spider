@@ -1074,9 +1074,13 @@ async fn process_commit<DbConnectorType: InternalJobOrchestration>(
         .jcb
         .create_task_instance(TaskId::Commit, ctx.execution_manager_id)
         .await?;
-    let task_graph_outputs =
-        SerializedTaskOutputs::deserialize_from_raw(&exec_ctx.serialized_task_io)
-            .expect("commit task execution context should carry decodable task-graph outputs");
+    let task_graph_outputs = SerializedTaskOutputs::deserialize_from_raw(
+        exec_ctx
+            .serialized_task_graph_outputs
+            .as_ref()
+            .expect("commit outputs should be present"),
+    )
+    .expect("commit task execution context should carry decodable task-graph outputs");
     assert!(
         !task_graph_outputs.is_empty(),
         "task-graph outputs should not be empty"

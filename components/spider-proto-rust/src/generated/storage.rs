@@ -86,7 +86,11 @@ pub struct ExecutionContext {
     #[prost(message, optional, tag = "3")]
     pub timeout_policy: ::core::option::Option<TimeoutPolicy>,
     #[prost(bytes = "vec", tag = "4")]
-    pub serialized_task_io: ::prost::alloc::vec::Vec<u8>,
+    pub serialized_task_inputs: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub serialized_task_graph_outputs: ::core::option::Option<
+        ::prost::alloc::vec::Vec<u8>,
+    >,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TdlContext {
